@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "udevmon"
+version = "0.1.0"
+description = "Run user-defined actions when USB devices or removable filesystems appear or disappear"
+requires-python = ">=3.11"
+dependencies = ["pyudev", "PyGObject"]
+
+[project.scripts]
+udevmon = "udevmon.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

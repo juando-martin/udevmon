@@ -1,0 +1,71 @@
+"""Normalized data model shared by every source, the engine and the CLI."""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+from typing import Mapping
+
+CONNECTED = "connected"
+DISCONNECTED = "disconnected"
+MOUNTED = "mounted"
+UNMOUNTED = "unmounted"
+
+# kind -> property keys that are always available to placeholders for it
+_USB_KEYS = frozenset({
+    "vendor_id", "product_id", "serial", "vendor", "model", "port_path",
+    "devnode", "syspath", "subsystem", "devtype",
+})
+_FS_KEYS = frozenset({
+    "fs_uuid", "fs_label", "fs_type", "part_uuid", "devnode",
+    "drive_vendor", "drive_model", "drive_serial",
+})
+_COMMON = frozenset({"event", "asset"})
+
+KNOWN_KEYS: dict[str, frozenset[str]] = {
+    CONNECTED: _USB_KEYS | _COMMON,
+    DISCONNECTED: _USB_KEYS | _COMMON,
+    MOUNTED: _FS_KEYS | {"mountpoint"} | _COMMON,
+    UNMOUNTED: _FS_KEYS | {"mountpoint"} | _COMMON,
+}
+VALID_KINDS = frozenset(KNOWN_KEYS)
+
+
+@dataclass(frozen=True)
+class Device:
+    source: str                     # "udev" | "udisks"
+    key: str                        # stable while present (syspath / object path)
+    props: Mapping[str, str]
+
+    @property
+    def is_filesystem(self) -> bool:
+        return self.source == "udisks"
+
+
+@dataclass(frozen=True)
+class Event:
+    kind: str
+    device: Device
+    time: float = field(default_factory=time.time)
+
+    @property
+    def props(self) -> dict[str, str]:
+        return {**self.device.props, "event": self.kind}
+
+
+def describe(device: Device) -> str:
+    """One-line human description of a device."""
+    p = device.props
+    if device.is_filesystem:
+        name = p.get("fs_label") or p.get("fs_uuid") or p.get("devnode", "?")
+        out = f"Filesystem {name}"
+        if p.get("fs_type"):
+            out += f" ({p['fs_type']})"
+        if p.get("devnode"):
+            out += f" on {p['devnode']}"
+        if p.get("mountpoint"):
+            out += f" at {p['mountpoint']}"
+        return out
+    name = " ".join(x for x in (p.get("vendor"), p.get("model")) if x) or "USB device"
+    ids = ":".join(x for x in (p.get("vendor_id"), p.get("product_id")) if x)
+    return f"USB {name}" + (f" [{ids}]" if ids else "")
