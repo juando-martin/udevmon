@@ -20,7 +20,6 @@ unprivileged user.
 
 - No TUI/GUI (the config format and CLI are designed so one can be added).
 - No root component, no udev rules installed (optional later, see §12).
-- No replay of devices already present when the daemon starts.
 - No control socket between CLI and daemon (reload is by `SIGHUP`).
 - No Bluetooth / network / display sources yet (extension points exist, see §11).
 
@@ -69,10 +68,21 @@ Event kinds (extensible registry):
 | `disconnected` | udev   | it was removed (props come from a cache)          |
 | `mounted`      | udisks | a filesystem gained a mount point                 |
 | `unmounted`    | udisks | it lost its mount point, or its device vanished   |
+| `startup`      | both   | the device was already present when the daemon started |
+| `shutdown`     | both   | the device is still present when the daemon exits |
 
 Removal events carry the properties cached when the device appeared, so
-serial/UUID matching works on unplug. Devices present at daemon start are
-used only to prime caches; they fire nothing.
+serial/UUID matching works on unplug.
+
+`startup` and `shutdown` are the "already there" counterparts: once the sources
+are attached, the daemon emits one `startup` event per present USB device and
+filesystem (mounted or not, system ones included); on `SIGTERM`/`SIGINT` it emits
+one `shutdown` event per device still present, then waits for those actions to
+finish before exiting. They are ordinary kinds, so `on = ["startup", "connected"]`
+means "whenever this device becomes known to me". Placeholders for these kinds are
+the union of USB and filesystem keys; a missing one (e.g. `{mountpoint}` for an
+unmounted filesystem) skips that action. `shutdown` actions do **not** run if the
+daemon is killed (`SIGKILL`), crashes, or the machine loses power.
 
 ### 4.2 Normalized properties
 
@@ -169,8 +179,9 @@ Rules:
 - Every action references an existing asset; `on` values must be known kinds.
 - `run` is **never passed through a shell**. Use `["sh", "-c", "…"]` explicitly
   if a shell is wanted. A leading `~` in each argument is expanded.
-- Placeholders are `{name}` (`{{`/`}}` escape braces). Only simple names are
-  allowed. `check` verifies each placeholder exists for the action's event kinds.
+- Placeholders are `{lower_snake_name}`; `{{`/`}}` produce literal braces. Any other
+  brace use is left untouched, so shell text such as `${1:-x}`, `${HOME}` or
+  `awk '{print $1}'` needs no escaping. `check` verifies each placeholder exists for the action's event kinds.
   At run time, an action whose placeholder is missing is **skipped with an
   error**, never run with an empty value (protects against e.g. `rm {mountpoint}/x`).
 - Actions run with environment `UDEVMON_EVENT`, `UDEVMON_ASSET`, and
@@ -185,10 +196,12 @@ Rules:
 
 - Single instance (`flock` on `$XDG_RUNTIME_DIR/udevmon.lock`, which also
   stores the PID).
-- Starts sources, primes caches silently, then loops.
+- Starts sources, primes caches, emits `startup` events for devices already present
+  (udisks ones once it attaches), then loops.
 - `SIGHUP`: re-read config; on error keep the old config and log. Changes to
   `udev_filters` need a restart (logged).
-- `SIGTERM`/`SIGINT`: stop cleanly.
+- `SIGTERM`/`SIGINT`: emit `shutdown` events, wait for those actions (bounded by each
+  action's `timeout`), stop cleanly.
 - For each event: match all assets → for each matched asset the actions whose
   `on` includes the kind → debounce per `(asset, kind)` → one job per event
   runs its actions **sequentially in config order**; different events run in
@@ -206,7 +219,8 @@ Rules:
 
 ```
 udevmon run [--dry-run] [-v]      run the daemon
-udevmon scan [--no-prompt]        scan mode (below)
+udevmon scan [--no-prompt] [--present]
+                                  scan mode (below)
 udevmon devices                   list present USB devices and mounted filesystems,
                                   with match strength and known asset names
 udevmon assets list|show|add|remove
@@ -230,13 +244,17 @@ Global: `--config PATH`, `-v`.
    config. Repeat, Enter to continue scanning, `q` to quit.
 5. `--no-prompt` (also automatic when stdin is not a TTY) only prints events.
 
+6. `--present` also offers devices and filesystems that are **already present** when
+   the scan starts (printed as `present`, one line each, and included in the naming
+   list). Without it, scan only reports changes. System filesystems are omitted.
+
 Scan and the daemon are independent listeners and can run at the same time.
 
 ### 8.2 Service
 
 `service install` writes `~/.config/systemd/user/udevmon.service`
 (`Type=simple`, `Restart=on-failure`, `ExecStart=<this program> run`,
-`ExecReload=… reload`, `MemoryMax=100M`), then `systemctl --user daemon-reload`;
+`ExecReload=… reload`, `MemoryMax=100M`, `TimeoutStopSec=120` so `shutdown` actions can finish), then `systemctl --user daemon-reload`;
 `--now` also runs `enable --now`. Hardening options that would confine
 actions (`NoNewPrivileges`, `ProtectSystem`…) are deliberately not set, since
 actions are user scripts.

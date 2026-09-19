@@ -10,6 +10,8 @@ CONNECTED = "connected"
 DISCONNECTED = "disconnected"
 MOUNTED = "mounted"
 UNMOUNTED = "unmounted"
+STARTUP = "startup"          # device already present when the daemon started
+SHUTDOWN = "shutdown"        # device still present when the daemon exits
 
 # kind -> property keys that are always available to placeholders for it
 _USB_KEYS = frozenset({
@@ -27,6 +29,9 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
     DISCONNECTED: _USB_KEYS | _COMMON,
     MOUNTED: _FS_KEYS | {"mountpoint"} | _COMMON,
     UNMOUNTED: _FS_KEYS | {"mountpoint"} | _COMMON,
+    # present devices may be USB or filesystems; a missing key skips the action at run time
+    STARTUP: _USB_KEYS | _FS_KEYS | {"mountpoint"} | _COMMON,
+    SHUTDOWN: _USB_KEYS | _FS_KEYS | {"mountpoint"} | _COMMON,
 }
 VALID_KINDS = frozenset(KNOWN_KEYS)
 

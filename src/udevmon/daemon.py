@@ -11,7 +11,7 @@ from pathlib import Path
 from . import config as cfgmod
 from .actions import ActionRunner
 from .engine import Engine
-from .events import Event
+from .events import SHUTDOWN, Event
 from .sources.udev import UdevSource
 from .sources.udisks import UdisksSource
 
@@ -57,6 +57,15 @@ class Daemon:
         except Exception:
             log.exception("error dispatching %s", event.kind)
 
+    def fire_shutdown(self) -> None:
+        """Emit a ``shutdown`` event for every device still present."""
+        for s in self.sources:
+            try:
+                for device in s.present():
+                    self.engine.handle(Event(SHUTDOWN, device))
+            except Exception:
+                log.exception("error firing shutdown events")
+
     def reload(self) -> bool:
         try:
             new = cfgmod.load(self.config_path)
@@ -89,7 +98,8 @@ class Daemon:
                         (signal.SIGTERM, lambda: loop.quit() or False),
                         (signal.SIGINT, lambda: loop.quit() or False)):
             GLib.unix_signal_add(GLib.PRIORITY_HIGH, sig, cb)
-        self.sources = [UdevSource(self.cfg.settings.udev_filters), UdisksSource()]
+        self.sources = [UdevSource(self.cfg.settings.udev_filters, announce_present=True),
+                        UdisksSource(announce_present=True)]
         for s in self.sources:
             s.start(self._emit)
         log.info("udevmon running: %d asset(s), %d action(s)%s", len(self.cfg.assets),
@@ -97,9 +107,10 @@ class Daemon:
         try:
             loop.run()
         finally:
+            self.fire_shutdown()
             for s in self.sources:
                 s.stop()
-            self.runner.shutdown()
+            self.runner.shutdown(wait=True)      # let shutdown actions finish
             log.info("udevmon stopped")
         return 0
 

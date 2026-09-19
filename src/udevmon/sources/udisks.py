@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Callable
 
-from ..events import MOUNTED, UNMOUNTED, Device, Event
+from ..events import MOUNTED, STARTUP, UNMOUNTED, Device, Event
 
 log = logging.getLogger("udevmon.udisks")
 
@@ -132,7 +132,10 @@ class UdisksTracker:
 class UdisksSource:
     name = "udisks"
 
-    def __init__(self):
+    def __init__(self, announce_present=False, include_system=True):
+        self.announce_present = announce_present
+        self.include_system = include_system
+        self._announced = False
         self.tracker = UdisksTracker()
         self._emit: Callable[[Event], None] | None = None
         self._conn = None
@@ -146,6 +149,10 @@ class UdisksSource:
                              "GetManagedObjects", None, GLib.VariantType("(a{oa{sa{sv}}})"),
                              Gio.DBusCallFlags.NONE, 5000, None)
         return res.unpack()[0]
+
+    def present(self) -> list[Device]:
+        """Filesystems currently known to be present."""
+        return self.tracker.filesystems(self.include_system)
 
     def snapshot(self, include_system: bool = False) -> list[Device]:
         from gi.repository import Gio
@@ -195,6 +202,10 @@ class UdisksSource:
             log.exception("could not read udisks2 state")
             return
         log.info("udisks2 source attached (%d objects)", len(self.tracker.objects))
+        if self.announce_present and not self._announced:
+            self._announced = True
+            for dev in self.present():
+                self._emit(Event(STARTUP, dev))
 
     def _vanished(self, conn, name) -> None:
         log.info("udisks2 not available; filesystem events paused until it appears")

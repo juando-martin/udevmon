@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Callable, Mapping
 
-from ..events import CONNECTED, DISCONNECTED, Device, Event
+from ..events import CONNECTED, DISCONNECTED, STARTUP, Device, Event
 
 log = logging.getLogger("udevmon.udev")
 
@@ -56,8 +56,9 @@ def _device_props(dev) -> dict[str, str]:
 class UdevSource:
     name = "udev"
 
-    def __init__(self, filters=("usb/usb_device",)):
+    def __init__(self, filters=("usb/usb_device",), announce_present=False):
         self.filters = parse_filters(filters)
+        self.announce_present = announce_present
         self._cache: dict[str, Device] = {}
         self._emit: Callable[[Event], None] | None = None
         self._monitor = None
@@ -75,6 +76,10 @@ class UdevSource:
             merged = {**(cached.props if cached else {}), **props}
             return Event(DISCONNECTED, Device(self.name, key, merged))
         return None
+
+    def present(self) -> list[Device]:
+        """Devices currently known to be present."""
+        return list(self._cache.values())
 
     # -- system glue ---------------------------------------------------------
     def _context(self):
@@ -107,6 +112,9 @@ class UdevSource:
                                            GLib.IO_IN, self._readable)
         log.info("udev source watching %s", ", ".join(
             f"{s}/{d}" if d else s for s, d in self.filters))
+        if self.announce_present:
+            for d in self.present():
+                emit(Event(STARTUP, d))
 
     def _readable(self, fd, condition) -> bool:
         while True:

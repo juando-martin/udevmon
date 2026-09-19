@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import re
 import shlex
-import string
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,28 +57,30 @@ class Config:
     warnings: list[str] = field(default_factory=list)
 
 
+# Only {lower_snake_name} is a placeholder. "{{" / "}}" are literal braces, and anything
+# else (shell ${1:-x}, ${HOME}, awk '{print $1}', a "$"-prefixed {name}) is left alone.
+_TOKEN = re.compile(r"\{\{|\}\}|(?<!\$)\{([a-z_][a-z0-9_]*)\}")
+
+
 def placeholders(arg: str) -> list[str]:
-    """Names used in ``arg``; raises ValueError for unsupported syntax."""
-    names = []
-    for _, field_name, spec, conv in string.Formatter().parse(arg):
-        if field_name is None:
-            continue
-        if spec or conv or not re.fullmatch(r"[a-z_][a-z0-9_]*", field_name):
-            raise ValueError(f"unsupported placeholder syntax in {arg!r}")
-        names.append(field_name)
-    return names
+    """Placeholder names used in ``arg``."""
+    return [m.group(1) for m in _TOKEN.finditer(arg) if m.group(1)]
 
 
 def expand(argv, props) -> list[str]:
     """Expand ``~`` and ``{name}`` placeholders; KeyError if one is missing."""
+    def fill(m):
+        if m.group(1):
+            return props[m.group(1)]       # single pass: values are never re-scanned
+        return m.group(0)[0]
+
     out = []
     for arg in argv:
         arg = os.path.expanduser(arg)
-        names = placeholders(arg)
-        missing = [n for n in names if n not in props]
+        missing = [n for n in placeholders(arg) if n not in props]
         if missing:
             raise KeyError(", ".join(missing))
-        out.append(arg.format_map(props) if names or "{{" in arg or "}}" in arg else arg)
+        out.append(_TOKEN.sub(fill, arg))
     return out
 
 

@@ -62,7 +62,6 @@ class ParseTests(unittest.TestCase):
         self.assertIn("'on' must", self._bad(base + 'on=["boom"]\nrun=["true"]'))
         self.assertIn("not available", self._bad(base + 'on=["connected"]\nrun=["x","{mountpoint}"]'))
         self.assertIn("unknown key", self._bad(base + 'on=["connected"]\nrun=["x"]\nrunn=1'))
-        self.assertIn("unsupported placeholder", self._bad(base + 'on=["connected"]\nrun=["{a.b}"]'))
         self.assertIn("non-empty table", self._bad('[assets.a]\nmatch={}'))
         self.assertIn("invalid name", self._bad('[assets."a b"]\nmatch={x="1"}'))
 
@@ -87,6 +86,12 @@ class ExpandTests(unittest.TestCase):
     def test_missing_placeholder_raises(self):
         with self.assertRaises(KeyError):
             C.expand(["{mountpoint}"], {})
+
+    def test_shell_braces_are_literal(self):
+        argv = ["sh", "-c", "echo ${1:-none} ${HOME} ${mountpoint}; awk '{print $1}' {mountpoint}"]
+        self.assertEqual(C.expand(argv, {"mountpoint": "/m"})[2],
+                         "echo ${1:-none} ${HOME} ${mountpoint}; awk '{print $1}' /m")
+        self.assertEqual(C.placeholders(argv[2]), ["mountpoint"])
 
     def test_value_with_braces_not_reinterpreted(self):
         self.assertEqual(C.expand(["{x}"], {"x": "{y}"}), ["{y}"])

@@ -47,7 +47,8 @@ def cmd_run(args):
 
 def cmd_scan(args):
     from .scan import Scanner
-    return Scanner(args.config, prompt=not args.no_prompt and sys.stdin.isatty()).run()
+    return Scanner(args.config, prompt=not args.no_prompt and sys.stdin.isatty(),
+                   present=args.present).run()
 
 
 def cmd_devices(args):
@@ -186,6 +187,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("scan", help="watch events and name devices")
     s.add_argument("--no-prompt", action="store_true", help="only print events")
+    s.add_argument("--present", action="store_true",
+                   help="also offer devices and filesystems that are already present")
     s.set_defaults(fn=cmd_scan)
 
     s = sub.add_parser("devices", help="list present USB devices and filesystems")

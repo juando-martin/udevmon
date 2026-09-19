@@ -91,4 +91,4 @@ class ActionRunner:
                 log.exception("action %r crashed", action.name)
 
     def shutdown(self, wait=False):
-        self._pool.shutdown(wait=wait, cancel_futures=True)
+        self._pool.shutdown(wait=wait, cancel_futures=not wait)

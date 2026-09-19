@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import config as cfgmod
 from . import configedit
-from .events import Device, Event, describe
+from .events import STARTUP, Device, Event, describe
 from .matching import (MEDIUM, STRONG, build_match, default_match_keys, matches, strength,
                        strength_note)
 from .sources.udev import UdevSource
@@ -28,9 +28,10 @@ def format_props(device: Device) -> str:
 
 
 class Scanner:
-    def __init__(self, config_path: Path, prompt: bool):
+    def __init__(self, config_path: Path, prompt: bool, present: bool = False):
         self.config_path = config_path
         self.prompt = prompt
+        self.present = present
         self.pending: dict[str, Device] = {}
         self._timer = None
 
@@ -38,12 +39,16 @@ class Scanner:
         from gi.repository import GLib
         d = event.device
         stamp = time.strftime("%H:%M:%S", time.localtime(event.time))
-        print(f"[{stamp}] {event.kind:<12} {describe(d)}")
-        print(f"           {format_props(d)}")
         keys = default_match_keys(d)
+        level = strength(build_match(d, keys)) if keys else None
+        if event.kind == STARTUP:                 # already-present device: keep it compact
+            print(f"[{stamp}] present      {describe(d)}" + (f"  ({level})" if level else ""))
+        else:
+            print(f"[{stamp}] {event.kind:<12} {describe(d)}")
+            print(f"           {format_props(d)}")
+            if keys:
+                print(f"           suggested match: {', '.join(keys)}  ({level})")
         if keys:
-            level = strength(build_match(d, keys))
-            print(f"           suggested match: {', '.join(keys)}  ({level})")
             self.pending[f"{d.source}:{d.key}"] = d
         sys.stdout.flush()
         if self._timer is not None:
@@ -123,10 +128,12 @@ class Scanner:
             return 1
         self.loop = GLib.MainLoop()
         GLib.unix_signal_add(GLib.PRIORITY_HIGH, 2, lambda: self.loop.quit() or False)
-        sources = [UdevSource(cfg.settings.udev_filters), UdisksSource()]
+        sources = [UdevSource(cfg.settings.udev_filters, announce_present=self.present),
+                   UdisksSource(announce_present=self.present, include_system=False)]
         for s in sources:
             s.start(self._emit)
-        print("Scanning. Plug or unplug a device, or mount/unmount a filesystem."
+        print("Scanning" + (" (including devices already present)" if self.present else "")
+              + ". Plug or unplug a device, or mount/unmount a filesystem."
               + (" Ctrl+C to quit." if not self.prompt else " After a pause you'll be asked to name it."))
         try:
             self.loop.run()

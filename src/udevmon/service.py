@@ -20,6 +20,7 @@ ExecReload={exe} reload
 Restart=on-failure
 RestartSec=3
 MemoryMax=100M
+TimeoutStopSec=120
 
 [Install]
 WantedBy=default.target
