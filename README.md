@@ -696,3 +696,5 @@ Running from the source tree needs the dependencies installed too, `tomlkit`
 included (`pip install --user tomlkit`, or `apt install python3-tomlkit`).
 
 `SPECIFICATIONS.md` describes the design, data model and behaviour in detail.
+`CHANGELOG.md` records what changed in each version; add a line under
+"Unreleased" with any change a user would notice.
