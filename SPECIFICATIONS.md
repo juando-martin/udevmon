@@ -407,6 +407,13 @@ udevmon reload                          SIGHUP the running daemon
 udevmon service install [--now] [--dest DIR]
                                         write the systemd user unit
                                         (and optionally enable it)
+udevmon service uninstall [--dest DIR]
+                                        stop, disable, remove the unit
+udevmon completion bash                 print the bash completion script
+udevmon completion install [--dest FILE]
+                                        install it for the user (§8.2)
+udevmon completion uninstall [--dest FILE]
+                                        remove the installed script
 ```
 ```
 
@@ -443,7 +450,41 @@ Global: `--config PATH`, `-v`.
 
 Scan and the daemon are independent listeners and can run at the same time.
 
-### 8.2 Service
+### 8.2 Shell completion
+
+`udevmon completion bash` prints a bash script; `udevmon completion install
+[--dest FILE]` writes it to `$XDG_DATA_HOME/bash-completion/completions/udevmon`
+(default `~/.local/share/...`), which bash-completion loads on demand.
+
+The script is a few lines that call a hidden helper, `udevmon _complete CWORD
+WORD...` (not listed in `--help`), with bash's `COMP_WORDS`. The helper
+(`completion.py`) reads the real argparse parser, so completion follows the
+CLI automatically, and prints a mode line followed by candidates:
+
+- `words`: offer the candidates; `nospace`: the same, without a trailing space
+  (`key=`); `files` / `dirs`: let bash complete paths.
+
+`udevmon completion uninstall [--dest FILE]` removes that file. It refuses a file
+that does not start with the script's header line, and does nothing (exit 0) when
+the file is absent.
+
+What it completes:
+
+- commands, sub-commands and option names, from the parser;
+- device, tag and action names, read from the config given by `--config` (or
+  the default one): `devices show|remove|tag`, `devices untag NAME` (the
+  device's explicit tags), `tags show` (all tags), `tags remove` (declared
+  `[tags.X]` only), `actions remove`, `actions add --device|--tag`;
+- event kinds as a comma-separated list, without repeating one already typed;
+- `--match` keys with a trailing `=` (rules omit the volatile keys of §4.2);
+- paths for `--config` and `--dest`; after `--` in `actions add`, files.
+
+Bash splits `a=b` into `a`, `=`, `b`; the helper rejoins them. Nothing is
+offered for the value half of `key=value`. Any error (unreadable or unsafe
+config, bad arguments) yields no candidates and no output, and the helper
+always exits 0. It imports neither `gi` nor `pyudev`.
+
+### 8.3 Service
 
 `service install` writes `~/.config/systemd/user/udevmon.service`
 (`Type=simple`, `Restart=on-failure`, `ExecStart=<this program> run`,
@@ -451,6 +492,14 @@ Scan and the daemon are independent listeners and can run at the same time.
 `--now` also runs `enable --now`. Hardening options that would confine
 actions (`NoNewPrivileges`, `ProtectSystem`…) are deliberately not set, since
 actions are user scripts.
+
+`service uninstall` runs `systemctl --user disable --now udevmon.service` (so the
+daemon stops and its `shutdown` actions run), deletes the unit file, then runs
+`daemon-reload`. With `--dest DIR` it only deletes `DIR/udevmon.service` and never
+calls `systemctl`, mirroring `install --dest`. It removes only a file that contains
+`udevmon` and an `ExecStart=` line, otherwise it reports the file and exits 1; a
+missing unit is reported and exits 0, and a missing `systemctl` is ignored. The
+config is never touched.
 
 ## 9. Resource expectations
 
@@ -499,11 +548,12 @@ No disk I/O apart from reading the config.
 pyproject.toml
 setup.py                          version from git (§13.1)
 src/udevmon/{__init__,__main__,cli,config,configedit,events,matching,
-             engine,actions,daemon,scan,service,_scm}.py
+             engine,actions,daemon,scan,service,completion,_scm}.py
 src/udevmon/sources/{__init__,udev,udisks}.py
 tests/…   (unittest)
 ```
 
+`completion.py` holds the shell completion (§8.2).
 `matching.py` holds device matching, tag rules, strength and the resolver
 (§5.5); `config.py` the loader, validation, warnings and notes.
 
@@ -529,7 +579,10 @@ Tests build throwaway repositories for each case above. The outputs were also
 compared with the real setuptools-scm 10.2.3 on 19 repository states and were
 identical.
 
-Automated tests cover: config parsing/validation (including the error, warning
+Automated tests cover: service and completion uninstall (never touching the real
+systemd), shell completion (engine, helper protocol, the real
+bash function, and a guard that fails when a command, positional argument or
+value option of the CLI is not covered by the completion tables), config parsing/validation (including the error, warning
 and note rules of §6), matching and strength, tag rules and the resolver, the
 named/unnamed gate and `allow_unnamed`, placeholder expansion and safety, action
 runner (incl. timeout), debounce, config edit/rollback (including tag edits), the

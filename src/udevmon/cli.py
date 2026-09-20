@@ -244,6 +244,63 @@ def cmd_check(args):
     return 0
 
 
+def cmd_service_uninstall(args):
+    from .service import uninstall
+    state, unit = uninstall(args.dest)
+    if state == "removed":
+        print(f"Removed {unit}" if args.dest else f"Stopped and removed {unit}")
+    elif state == "absent":
+        print(f"Nothing to remove: {unit} does not exist.")
+    else:
+        print(f"error: {unit} does not look like a udevmon unit; not removing it.",
+              file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_completion_uninstall(args):
+    from .completion import HEADER, default_install_path
+    dest = args.dest or default_install_path()
+    if not dest.exists():
+        print(f"Nothing to remove: {dest} does not exist.")
+        return 0
+    if not dest.read_text(errors="replace").startswith(HEADER):
+        print(f"error: {dest} is not a udevmon completion script; not removing it.",
+              file=sys.stderr)
+        return 1
+    dest.unlink()
+    print(f"Removed {dest}")
+    return 0
+
+
+def cmd_completion_bash(args):
+    from .completion import SCRIPT
+    sys.stdout.write(SCRIPT)
+    return 0
+
+
+def cmd_completion_install(args):
+    from .completion import SCRIPT, default_install_path
+    dest = args.dest or default_install_path()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(SCRIPT)
+    print(f"Wrote {dest}")
+    if args.dest is None:
+        print("Open a new terminal (or run: source " + str(dest) + ") to use it.")
+    return 0
+
+
+def _complete_words(args: list[str]) -> int:
+    """Hidden helper for the shell function: `udevmon _complete CWORD WORD...`."""
+    from .completion import complete
+    try:
+        mode, candidates = complete(build_parser(), args[1:], int(args[0]))
+    except Exception:                    # a broken completion must stay invisible
+        return 0
+    print("\n".join([mode, *candidates]))
+    return 0
+
+
 def cmd_reload(args):
     from .daemon import reload_running
     if reload_running():
@@ -341,12 +398,28 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("--now", action="store_true", help="also enable and start it")
     x.add_argument("--dest", type=Path, help="write the unit here instead (no systemctl)")
     x.set_defaults(fn=cmd_service_install)
+    x = sv.add_parser("uninstall", help="stop, disable and remove the service")
+    x.add_argument("--dest", type=Path, help="remove the unit from here instead (no systemctl)")
+    x.set_defaults(fn=cmd_service_uninstall)
+
+    co = sub.add_parser("completion", help="bash tab completion").add_subparsers(
+        dest="sub", required=True)
+    x = co.add_parser("bash", help="print the bash completion script")
+    x.set_defaults(fn=cmd_completion_bash)
+    x = co.add_parser("install", help="install it for your user (no root)")
+    x.add_argument("--dest", type=Path, help="write the script here instead")
+    x.set_defaults(fn=cmd_completion_install)
+    x = co.add_parser("uninstall", help="remove the installed script")
+    x.add_argument("--dest", type=Path, help="remove this file instead")
+    x.set_defaults(fn=cmd_completion_uninstall)
     return p
 
 
 def main(argv=None) -> int:
-    parser = build_parser()
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["_complete"]:        # not a documented command: see completion.py
+        return _complete_words(argv[1:])
+    parser = build_parser()
     tail: list[str] = []
     if "--" in argv:                     # everything after -- is a command, verbatim
         i = argv.index("--")

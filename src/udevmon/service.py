@@ -35,11 +35,43 @@ def _exe(config: Path | None) -> str:
     return " ".join(shlex.quote(p) for p in parts)
 
 
+def unit_dir() -> Path:
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return Path(base) / "systemd" / "user"
+
+
+def _systemctl(*args: str) -> None:
+    try:
+        subprocess.run(["systemctl", "--user", *args], check=False)
+    except OSError:                      # no systemctl here: nothing to tell
+        pass
+
+
+def uninstall(dest: Path | None) -> tuple[str, Path]:
+    """Stop, disable and remove the unit; returns ("removed" | "absent" | "foreign", path).
+
+    With ``dest`` only the file is removed (no systemctl), mirroring ``install``.
+    A file that does not look like udevmon's own unit is never deleted.
+    """
+    real = dest is None
+    unit = (dest or unit_dir()) / "udevmon.service"
+    if not unit.exists():
+        return "absent", unit
+    text = unit.read_text(errors="replace")
+    if "udevmon" not in text or "ExecStart=" not in text:
+        return "foreign", unit
+    if real:                             # needs the unit file, so before removing it
+        _systemctl("disable", "--now", "udevmon.service")
+    unit.unlink()
+    if real:
+        _systemctl("daemon-reload")
+    return "removed", unit
+
+
 def install(dest: Path | None, now: bool, config: Path | None = None) -> Path:
     real = dest is None
     if dest is None:
-        dest = Path(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")) \
-            / "systemd" / "user"
+        dest = unit_dir()
     dest.mkdir(parents=True, exist_ok=True)
     unit = dest / "udevmon.service"
     unit.write_text(UNIT.format(exe=_exe(config)))

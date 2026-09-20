@@ -61,8 +61,63 @@ udevmon --version
 Without installing, you can also run it straight from the source tree:
 `PYTHONPATH=src python3 -m udevmon ...`.
 
-To uninstall: `pip uninstall udevmon` (plus removing
-`~/.config/udevmon/` if you no longer want your configuration).
+To remove it again, see [Uninstalling](#uninstalling) below.
+
+### Tab completion (bash)
+
+```
+udevmon completion install
+```
+
+writes the script to `~/.local/share/bash-completion/completions/udevmon`
+(no root needed). Open a new terminal and press TAB. That location is loaded
+automatically when the `bash-completion` package is installed, which is the
+default on Ubuntu, Debian and Mint. Without it, put this in `~/.bashrc`
+instead:
+
+```
+source <(udevmon completion bash)
+```
+
+It completes commands, sub-commands and options, and it reads your config
+for the names that belong in each place:
+
+- device names for `devices show|remove|tag|untag` and `--device`;
+- tag names for `devices tag`, `--tag`; on `devices untag` only the tags that
+  device really has, and on `tags remove` only declared tag rules;
+- action names for `actions remove`;
+- event names as a list (`connected,dis` becomes `connected,disconnected`);
+- property names for `--match` (rules leave out the ones that change from
+  plug to plug), file names for `--config`, folders for `service install
+  --dest`.
+
+If you pass `--config PATH`, the names come from that file. A missing,
+invalid or unsafe config just means no names, never an error message. Each
+TAB runs udevmon once (about 50 ms) and doesn't touch udev or D-Bus. It works
+for the `udevmon` command, not for `python3 -m udevmon`.
+
+### Uninstalling
+
+Remove the extras first, then the package:
+
+```
+udevmon service uninstall       # stop the daemon, remove the unit
+udevmon completion uninstall    # remove the tab-completion script
+pip uninstall udevmon
+```
+
+- `service uninstall` runs `systemctl --user disable --now`, so the daemon
+  stops cleanly (its `shutdown` actions run), then deletes the unit file and
+  reloads systemd.
+- Both commands only delete files udevmon wrote itself. A `udevmon.service`
+  or completion file that doesn't look like udevmon's is left alone and
+  reported, and both commands are safe to run again.
+- With `--dest` they only remove that file and never call `systemctl`,
+  mirroring `install --dest`.
+- Your configuration in `~/.config/udevmon/` (and its `.bak`) is never
+  touched. Delete it yourself if you no longer want it.
+- `pip uninstall` alone leaves the unit file and the completion script
+  behind, which is why they come first.
 
 ### The version number
 
@@ -444,6 +499,9 @@ udevmon check                           validate the config
 udevmon run [--dry-run]                 run the daemon in the foreground
 udevmon reload                          make the running daemon reload
 udevmon service install [--now]         install the systemd user service
+udevmon service uninstall               stop and remove it
+udevmon completion bash | install | uninstall
+                                         bash tab completion
 ```
 ```
 
