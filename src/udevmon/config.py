@@ -5,12 +5,16 @@ from __future__ import annotations
 import os
 import re
 import shlex
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .events import KNOWN_KEYS, VALID_KINDS
-from .matching import WEAK, strength
+from .events import KNOWN_KEYS, TRUSTED_PLACEHOLDERS, VALID_KINDS, VOLATILE_KEYS
+from .matching import STRONG, WEAK, strength
+
+try:
+    import tomllib
+except ModuleNotFoundError:                 # Python < 3.11: same parser, packaged as tomli
+    import tomli as tomllib
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
@@ -28,18 +32,34 @@ def default_config_path() -> Path:
 
 @dataclass(frozen=True)
 class Device:
+    """A named thing (spec 5): a name, how to recognise it, and its explicit tags."""
     name: str
     match: dict[str, str]
+    description: str = ""
+    tags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Tag:
+    """A label for a set of things. ``match`` (a rule) may be empty: explicit-only tag."""
+    name: str
+    match: dict[str, tuple[str, ...]] = field(default_factory=dict)
     description: str = ""
 
 
 @dataclass(frozen=True)
 class Action:
     name: str
-    device: str
+    devices: tuple[str, ...]        # exactly one of devices / tags is non-empty
+    tags: tuple[str, ...]
     on: tuple[str, ...]
     run: tuple[str, ...]
     timeout: float = 60.0
+    allow_unnamed: bool | None = None   # tag actions only; None = not stated (behaves as False)
+
+    @property
+    def targets(self) -> tuple[str, ...]:
+        return self.devices or self.tags
 
 
 @dataclass(frozen=True)
@@ -53,8 +73,14 @@ class Settings:
 class Config:
     settings: Settings = field(default_factory=Settings)
     devices: dict[str, Device] = field(default_factory=dict)
+    tags: dict[str, Tag] = field(default_factory=dict)
     actions: list[Action] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    def all_tag_names(self) -> set[str]:
+        """Every tag that exists: declared, or carried by a device."""
+        return set(self.tags) | {t for d in self.devices.values() for t in d.tags}
 
 
 # Only {lower_snake_name} is a placeholder. "{{" / "}}" are literal braces, and anything
@@ -84,10 +110,25 @@ def expand(argv, props) -> list[str]:
     return out
 
 
-_TOP = {"daemon", "devices", "actions"}
+_TOP = {"daemon", "devices", "tags", "actions"}
 _DAEMON = {"debounce", "udev_filters", "max_workers"}
-_DEVICE = {"description", "match"}
-_ACTION = {"name", "device", "on", "run", "timeout"}
+_DEVICE = {"description", "match", "tags"}
+_TAG = {"description", "match"}
+_ACTION = {"name", "device", "tag", "on", "run", "timeout", "allow_unnamed"}
+
+
+def _names(value, where: str, problems: list[str]) -> tuple[str, ...] | None:
+    """A name or a non-empty list of names -> tuple, or None (problem recorded)."""
+    items = [value] if isinstance(value, str) else value
+    if not (isinstance(items, list) and items
+            and all(isinstance(v, str) and NAME_RE.match(v) for v in items)):
+        problems.append(f"{where}: must be a name or a non-empty list of names")
+        return None
+    return tuple(dict.fromkeys(items))          # de-duplicate, keep order
+
+
+def _scalar_str(v) -> str | None:
+    return str(v) if isinstance(v, (str, int)) and not isinstance(v, bool) else None
 
 
 def parse(data: dict) -> Config:
@@ -115,6 +156,7 @@ def parse(data: dict) -> Config:
     except (TypeError, ValueError):
         problems.append("[daemon]: invalid debounce/udev_filters/max_workers")
 
+    # ---- devices
     for name, a in (data.get("devices") or {}).items():
         where = f"[devices.{name}]"
         if not NAME_RE.match(name):
@@ -128,15 +170,55 @@ def parse(data: dict) -> Config:
         if not isinstance(m, dict) or not m:
             problems.append(f"{where}: 'match' must be a non-empty table")
             continue
-        if not all(isinstance(v, (str, int)) and not isinstance(v, bool) for v in m.values()):
+        match = {str(k): _scalar_str(v) for k, v in m.items()}
+        if any(v is None for v in match.values()):
             problems.append(f"{where}: match values must be strings")
             continue
-        match = {str(k): str(v) for k, v in m.items()}
-        cfg.devices[name] = Device(name, match, str(a.get("description", "")))
+        tags: tuple[str, ...] = ()
+        if "tags" in a:
+            tags = _names(a["tags"], f"{where}: 'tags'", problems) or ()
+        cfg.devices[name] = Device(name, match, str(a.get("description", "")), tags)
         if strength(match) == WEAK:
             cfg.warnings.append(f"device {name!r}: weak match {match} (matches every "
                                 "device/filesystem with these values)")
+        volatile = sorted(set(match) & VOLATILE_KEYS)
+        if volatile:
+            cfg.warnings.append(f"device {name!r}: match uses volatile key(s) {volatile} "
+                                "that change between plugs")
 
+    # ---- tags (rules)
+    for name, t in (data.get("tags") or {}).items():
+        where = f"[tags.{name}]"
+        if not NAME_RE.match(name):
+            problems.append(f"{where}: invalid name")
+            continue
+        if not isinstance(t, dict):
+            problems.append(f"{where}: must be a table")
+            continue
+        unknown(where, t, _TAG)
+        rule: dict[str, tuple[str, ...]] = {}
+        ok = True
+        m = t.get("match", {})
+        if not isinstance(m, dict):
+            problems.append(f"{where}: 'match' must be a table")
+            continue
+        for key, value in m.items():
+            values = value if isinstance(value, list) else [value]
+            strs = [_scalar_str(v) for v in values]
+            if not values or any(v is None for v in strs):
+                problems.append(f"{where}: match value for {key!r} must be a string or a "
+                                "non-empty list of strings")
+                ok = False
+            elif key in VOLATILE_KEYS:
+                problems.append(f"{where}: key {key!r} changes between plugs and cannot be "
+                                "used in a rule")
+                ok = False
+            else:
+                rule[str(key)] = tuple(strs)
+        if ok:
+            cfg.tags[name] = Tag(name, rule, str(t.get("description", "")))
+
+    # ---- actions
     seen: set[str] = set()
     for i, a in enumerate(data.get("actions") or [], 1):
         where = f"[[actions]] #{i}"
@@ -144,11 +226,23 @@ def parse(data: dict) -> Config:
             problems.append(f"{where}: must be a table")
             continue
         unknown(where, a, _ACTION)
-        device = a.get("device")
-        if device not in cfg.devices:
-            problems.append(f"{where}: unknown device {device!r}")
+        if ("device" in a) == ("tag" in a):
+            problems.append(f"{where}: needs exactly one of 'device' or 'tag'")
             continue
-        name = a.get("name") or f"{device}-{i}"
+        devices = tags = ()
+        if "device" in a:
+            devices = _names(a["device"], f"{where}: 'device'", problems)
+            if devices is None:
+                continue
+            unknown_devs = [n for n in devices if n not in cfg.devices]
+            if unknown_devs:
+                problems.append(f"{where}: unknown device(s) {unknown_devs}")
+                continue
+        else:
+            tags = _names(a["tag"], f"{where}: 'tag'", problems)
+            if tags is None:
+                continue
+        name = a.get("name") or f"{(devices or tags)[0]}-{i}"
         where = f"action {name!r}"
         if not isinstance(name, str) or not NAME_RE.match(name):
             problems.append(f"{where}: invalid name")
@@ -157,6 +251,14 @@ def parse(data: dict) -> Config:
             problems.append(f"{where}: duplicate name")
             continue
         seen.add(name)
+        allow = a.get("allow_unnamed")
+        if "allow_unnamed" in a:
+            if devices:
+                problems.append(f"{where}: 'allow_unnamed' only applies to actions that use 'tag'")
+                continue
+            if not isinstance(allow, bool):
+                problems.append(f"{where}: 'allow_unnamed' must be true or false")
+                continue
         on = a.get("on")
         on = (on,) if isinstance(on, str) else tuple(on or ())
         bad = [k for k in on if k not in VALID_KINDS]
@@ -174,8 +276,11 @@ def parse(data: dict) -> Config:
         except ValueError as e:
             problems.append(f"{where}: {e}")
             continue
+        if "tag" in names and not tags:
+            problems.append(f"{where}: placeholder '{{tag}}' is only available for actions that "
+                            "use 'tag'")
         for kind in on:
-            missing = names - KNOWN_KEYS[kind]
+            missing = names - KNOWN_KEYS[kind] - {"device", "tag"}
             if missing:
                 problems.append(f"{where}: placeholder(s) {sorted(missing)} not available "
                                 f"for event {kind!r}")
@@ -186,11 +291,48 @@ def parse(data: dict) -> Config:
         except (TypeError, ValueError):
             problems.append(f"{where}: invalid timeout")
             continue
-        cfg.actions.append(Action(name, device, on, tuple(run), timeout))
+        cfg.actions.append(Action(name, devices, tags, on, tuple(run), timeout, allow))
 
     if problems:
         raise ConfigError(problems)
+    _advise(cfg)
     return cfg
+
+
+def _advise(cfg: Config) -> None:
+    """Warnings and notes that do not stop the config from loading (spec 6.2)."""
+    carried = {t for d in cfg.devices.values() for t in d.tags}
+    used = {t for a in cfg.actions for t in a.tags}
+    for a in cfg.actions:
+        if not a.tags:
+            continue
+        for t in a.tags:
+            rule = cfg.tags[t].match if t in cfg.tags else {}
+            if t not in carried and not rule:
+                cfg.warnings.append(f"action {a.name!r}: tag {t!r} is carried by no device and "
+                                    "has no rule, so the action never runs")
+        rule_tags = [t for t in a.tags if t in cfg.tags and cfg.tags[t].match]
+        names = {n for arg in a.run for n in placeholders(arg)}
+        if a.allow_unnamed is None and rule_tags:
+            cfg.notes.append(f"action {a.name!r}: tag {', '.join(rule_tags)} has a rule, so "
+                             "things you have not named can match it; this action runs only "
+                             "for named devices. Set allow_unnamed = true or false to choose.")
+        if a.allow_unnamed:
+            if "device" in names:
+                cfg.warnings.append(f"action {a.name!r}: uses {{device}}, which does not exist "
+                                    "for unnamed things; it is skipped for them")
+            hw = sorted(names - TRUSTED_PLACEHOLDERS)
+            if hw:
+                cfg.warnings.append(f"action {a.name!r}: allow_unnamed is true and it uses "
+                                    f"hardware-supplied value(s) {hw} that the maker of an "
+                                    "unvetted device controls")
+            for t in rule_tags:
+                if strength(cfg.tags[t].match) != STRONG:
+                    cfg.notes.append(f"action {a.name!r}: tag {t!r} has a rule that is not "
+                                     "strong; any hardware presenting these properties can "
+                                     "trigger this action")
+    for t in sorted(carried - used):
+        cfg.notes.append(f"tag {t!r} is set on devices but no action uses it")
 
 
 def check_permissions(path: Path) -> None:

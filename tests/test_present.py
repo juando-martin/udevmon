@@ -7,7 +7,7 @@ from udevmon.events import SHUTDOWN, STARTUP, Endpoint
 from udevmon.sources import udev as U
 from udevmon.sources import udisks as D
 from tests.test_engine_actions import FakeRunner
-from tests.test_sources import FS, P, managed
+from tests.test_sources import P, managed
 
 
 class PresentKindsTests(unittest.TestCase):

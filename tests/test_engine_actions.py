@@ -13,7 +13,7 @@ class FakeRunner:
         self.calls = []
 
     def submit(self, event, jobs):
-        self.calls.append((event.kind, [(a.name, device) for a, device in jobs]))
+        self.calls.append((event.kind, [(a.name, device) for a, device, _tag in jobs]))
 
 
 def cfg(text_dict):
@@ -67,7 +67,7 @@ class RunActionTests(unittest.TestCase):
         self.dir = Path(self.tmp.name)
 
     def action(self, run, timeout=10):
-        return C.Action("t", "a", ("mounted",), tuple(run), timeout)
+        return C.Action("t", ("a",), (), ("mounted",), tuple(run), timeout)
 
     def event(self, **props):
         return Event(MOUNTED, Endpoint("udisks", "k", props))

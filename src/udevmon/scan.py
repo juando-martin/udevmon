@@ -1,4 +1,4 @@
-"""Scan mode: watch events live and let the user name devices as devices."""
+"""Scan mode: watch events live and let the user name things as devices."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 from . import config as cfgmod
 from . import configedit
 from .events import STARTUP, Endpoint, Event, describe
-from .matching import (MEDIUM, STRONG, build_match, default_match_keys, matches, strength,
+from .matching import (STRONG, build_match, default_match_keys, resolve, strength,
                        strength_note)
 from .sources.udev import UdevSource
 from .sources.udisks import UdisksSource
@@ -18,8 +18,11 @@ QUIET_MS = 2000
 SKIP_KEYS = ("syspath", "subsystem", "devtype")
 
 
-def known_devices(cfg: cfgmod.Config, endpoint: Endpoint) -> list[str]:
-    return [a.name for a in cfg.devices.values() if matches(a.match, endpoint.props)]
+def status_text(cfg: cfgmod.Config, endpoint: Endpoint) -> str:
+    """'device: NAME  tags: a, b' for named things, 'unnamed  tags: ...' otherwise."""
+    res = resolve(cfg, endpoint.props)
+    who = f"device: {', '.join(d.name for d in res.named)}" if res.named else "unnamed"
+    return who + (f"  tags: {', '.join(res.tags)}" if res.tags else "")
 
 
 def format_props(endpoint: Endpoint) -> str:
@@ -35,16 +38,24 @@ class Scanner:
         self.pending: dict[str, Endpoint] = {}
         self._timer = None
 
+    def _config(self) -> cfgmod.Config:
+        try:
+            return cfgmod.load(self.config_path)
+        except cfgmod.ConfigError:
+            return cfgmod.Config()
+
     def _emit(self, event: Event) -> None:
         from gi.repository import GLib
         d = event.endpoint
         stamp = time.strftime("%H:%M:%S", time.localtime(event.time))
         keys = default_match_keys(d)
         level = strength(build_match(d, keys)) if keys else None
-        if event.kind == STARTUP:                 # already-present device: keep it compact
-            print(f"[{stamp}] present      {describe(d)}" + (f"  ({level})" if level else ""))
+        status = status_text(self._config(), d)
+        if event.kind == STARTUP:                 # already-present thing: keep it compact
+            print(f"[{stamp}] present      {describe(d)}" + (f"  ({level})" if level else "")
+                  + f"   {status}")
         else:
-            print(f"[{stamp}] {event.kind:<12} {describe(d)}")
+            print(f"[{stamp}] {event.kind:<12} {describe(d)}   {status}")
             print(f"           {format_props(d)}")
             if keys:
                 print(f"           suggested match: {', '.join(keys)}  ({level})")
@@ -69,23 +80,26 @@ class Scanner:
         endpoints = list(self.pending.values())
         self.pending.clear()
         while endpoints:
-            cfg = cfgmod.load(self.config_path)
+            cfg = self._config()
             print("\nDetected:")
             for i, d in enumerate(endpoints, 1):
-                known = known_devices(cfg, d)
-                note = f"  (already device: {', '.join(known)})" if known else ""
-                print(f"  [{i}] {describe(d)}{note}")
-            ans = input("Number to name, Enter to keep scanning, q to quit: ").strip().lower()
+                print(f"  [{i}] {describe(d)}   {status_text(cfg, d)}")
+            ans = input("Number(s) to name (e.g. 2 or 1,2), Enter to keep scanning, "
+                        "q to quit: ").strip().lower()
             if ans == "q":
                 self.loop.quit()
                 return
             if not ans:
                 return
-            if not ans.isdigit() or not 1 <= int(ans) <= len(endpoints):
+            try:
+                picks = list(dict.fromkeys(int(x) for x in ans.replace(" ", "").split(",")))
+            except ValueError:
+                picks = []
+            if not picks or not all(1 <= n <= len(endpoints) for n in picks):
                 print("Not a valid choice.")
                 continue
-            if self._name_endpoint(endpoints[int(ans) - 1]):
-                endpoints.pop(int(ans) - 1)
+            named = [n for n in picks if self._name_endpoint(endpoints[n - 1])]
+            endpoints = [e for i, e in enumerate(endpoints, 1) if i not in named]
         print("Waiting for more events (Ctrl+C to quit)...")
 
     def _name_endpoint(self, endpoint: Endpoint) -> bool:
@@ -108,15 +122,22 @@ class Scanner:
         if level != STRONG:
             if input("Save anyway? [y/N] ").strip().lower() != "y":
                 return False
-        desc = describe(endpoint)
+        existing = sorted(self._config().all_tag_names())
+        hint = f" [existing: {', '.join(existing)}]" if existing else ""
+        raw = input(f"Tags, comma-separated{hint} (Enter for none): ").strip()
+        tags = [t.strip() for t in raw.split(",") if t.strip()]
+        if not all(cfgmod.NAME_RE.match(t) for t in tags):
+            print("Tag names may contain only letters, digits, _ . -; nothing saved.")
+            return False
         try:
-            configedit.add_device(self.config_path, name, match, desc)
+            configedit.add_device(self.config_path, name, match, describe(endpoint), tags)
         except cfgmod.ConfigError as e:
             print(f"Could not save: {e}")
             return False
         print(f"Saved device {name!r} to {self.config_path}")
-        print(f"Add an action with e.g.:\n  udevmon actions add {name} "
-              f"{'mounted' if endpoint.is_filesystem else 'connected'} -- notify-send 'hello'")
+        print("Add an action with e.g.:\n  udevmon actions add --device "
+              f"{name} {'mounted' if endpoint.is_filesystem else 'connected'} "
+              "-- notify-send 'hello'")
         return True
 
     def run(self) -> int:

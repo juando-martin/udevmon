@@ -22,7 +22,7 @@ _FS_KEYS = frozenset({
     "fs_uuid", "fs_label", "fs_type", "part_uuid", "devnode",
     "drive_vendor", "drive_model", "drive_serial",
 })
-_COMMON = frozenset({"event", "device"})
+_COMMON = frozenset({"event"})   # "device"/"tag" depend on the action; see config
 
 KNOWN_KEYS: dict[str, frozenset[str]] = {
     CONNECTED: _USB_KEYS | _COMMON,
@@ -34,6 +34,18 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
     SHUTDOWN: _USB_KEYS | _FS_KEYS | {"mountpoint"} | _COMMON,
 }
 VALID_KINDS = frozenset(KNOWN_KEYS)
+
+# Properties that change per plug / per event; useless (and misleading) in match rules.
+VOLATILE_KEYS = frozenset({
+    "mountpoint", "devnode", "syspath", "event", "device", "tag",
+    "udev_devname", "udev_devpath", "udev_busnum", "udev_devnum", "udev_seqnum",
+    "udev_usec_initialized",
+})
+
+# Placeholders whose values do not come from the (possibly hostile) hardware itself.
+TRUSTED_PLACEHOLDERS = frozenset({
+    "event", "tag", "device", "devnode", "syspath", "port_path", "subsystem", "devtype",
+})
 
 
 @dataclass(frozen=True)

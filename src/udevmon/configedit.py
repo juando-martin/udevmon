@@ -19,21 +19,46 @@ def _key(k: str) -> str:
     return k if re.fullmatch(r"[A-Za-z0-9_-]+", k) else _s(k)
 
 
-def render_device(name, match, description="") -> str:
+def _list(items) -> str:
+    return "[" + ", ".join(_s(i) for i in items) + "]"
+
+
+def _name_or_list(items) -> str:
+    return _s(items[0]) if len(items) == 1 else _list(items)
+
+
+def render_device(name, match, description="", tags=()) -> str:
     lines = [f"[devices.{name}]"]
     if description:
         lines.append(f"description = {_s(description)}")
     inner = ", ".join(f"{_key(k)} = {_s(v)}" for k, v in match.items())
     lines.append(f"match = {{ {inner} }}")
+    if tags:
+        lines.append(f"tags = {_list(tags)}")
     return "\n".join(lines) + "\n"
 
 
-def render_action(name, device, on, run, timeout=None) -> str:
-    lines = ["[[actions]]", f"name = {_s(name)}", f"device = {_s(device)}",
-             "on = [" + ", ".join(_s(k) for k in on) + "]",
-             "run = [" + ", ".join(_s(a) for a in run) + "]"]
+def render_tag(name, match, description="") -> str:
+    """``match`` maps key -> str | list[str]."""
+    lines = [f"[tags.{name}]"]
+    if description:
+        lines.append(f"description = {_s(description)}")
+    if match:
+        inner = ", ".join(f"{_key(k)} = {_name_or_list(v) if not isinstance(v, str) else _s(v)}"
+                          for k, v in match.items())
+        lines.append(f"match = {{ {inner} }}")
+    return "\n".join(lines) + "\n"
+
+
+def render_action(name, devices, tags, on, run, timeout=None, allow_unnamed=None) -> str:
+    lines = ["[[actions]]", f"name = {_s(name)}"]
+    lines.append(f"device = {_name_or_list(devices)}" if devices
+                 else f"tag = {_name_or_list(tags)}")
+    lines += [f"on = {_list(on)}", f"run = {_list(run)}"]
     if timeout is not None:
         lines.append(f"timeout = {timeout:g}")
+    if allow_unnamed is not None:
+        lines.append(f"allow_unnamed = {'true' if allow_unnamed else 'false'}")
     return "\n".join(lines) + "\n"
 
 
@@ -67,27 +92,41 @@ def _append(path: Path, block: str) -> str:
     return (old + "\n\n" if old else "") + block
 
 
-def add_device(path: Path, name, match, description="") -> None:
+def _check_name(kind: str, name: str) -> None:
     if not cfgmod.NAME_RE.match(name):
-        raise cfgmod.ConfigError([f"invalid device name {name!r} (use letters, digits, _ . -)"])
+        raise cfgmod.ConfigError([f"invalid {kind} name {name!r} (use letters, digits, _ . -)"])
+
+
+def add_device(path: Path, name, match, description="", tags=()) -> None:
+    _check_name("device", name)
+    for t in tags:
+        _check_name("tag", t)
     existing = cfgmod.load(path)
     if name in existing.devices:
         raise cfgmod.ConfigError([f"device {name!r} already exists"])
-    _edit(path, _append(path, render_device(name, match, description)),
+    _edit(path, _append(path, render_device(name, match, description, list(dict.fromkeys(tags)))),
           lambda c: c.devices[name])
 
 
-def add_action(path: Path, name, device, on, run, timeout=None) -> str:
+def add_tag(path: Path, name, match, description="") -> None:
+    _check_name("tag", name)
+    existing = cfgmod.load(path)
+    if name in existing.tags:
+        raise cfgmod.ConfigError([f"tag {name!r} already declared"])
+    _edit(path, _append(path, render_tag(name, match, description)), lambda c: c.tags[name])
+
+
+def add_action(path: Path, name, devices, tags, on, run, timeout=None, allow_unnamed=None) -> str:
     existing = cfgmod.load(path)
     if not name:
-        base = f"{device}-{'-'.join(on)}"
+        base = f"{(devices or tags)[0]}-{'-'.join(on)}"
         name, n = base, 2
         taken = {a.name for a in existing.actions}
         while name in taken:
             name, n = f"{base}-{n}", n + 1
     elif name in {a.name for a in existing.actions}:
         raise cfgmod.ConfigError([f"action {name!r} already exists"])
-    _edit(path, _append(path, render_action(name, device, on, run, timeout)),
+    _edit(path, _append(path, render_action(name, devices, tags, on, run, timeout, allow_unnamed)),
           lambda c: [a for a in c.actions if a.name == name][0])
     return name
 
@@ -115,7 +154,7 @@ def remove_device(path: Path, name: str) -> None:
     cfg = cfgmod.load(path, must_exist=True)
     if name not in cfg.devices:
         raise cfgmod.ConfigError([f"no such device {name!r}"])
-    users = [a.name for a in cfg.actions if a.device == name]
+    users = [a.name for a in cfg.actions if name in a.devices]
     if users:
         raise cfgmod.ConfigError([f"device {name!r} is used by action(s): {', '.join(users)}"])
     text = path.read_text()
@@ -127,6 +166,64 @@ def remove_device(path: Path, name: str) -> None:
         if name in c.devices:
             raise cfgmod.ConfigError([f"removal of {name!r} did not take effect"])
     _edit(path, new, verify)
+
+
+def remove_tag(path: Path, name: str) -> None:
+    """Remove a declared ``[tags.NAME]`` block (explicit tags on devices are untouched)."""
+    cfg = cfgmod.load(path, must_exist=True)
+    if name not in cfg.tags:
+        raise cfgmod.ConfigError([f"no declared tag {name!r} (tags set only on devices have "
+                                  "no block; use `devices untag`)"])
+    users = [a.name for a in cfg.actions if name in a.tags]
+    if users:
+        raise cfgmod.ConfigError([f"tag {name!r} is used by action(s): {', '.join(users)}"])
+    new = _remove_block(path.read_text(), rf"\[tags\.(?:{re.escape(name)}|\"{re.escape(name)}\")\]\s*$")
+    if new is None:
+        raise cfgmod.ConfigError([f"could not locate [tags.{name}] block to remove"])
+
+    def verify(c):
+        if name in c.tags:
+            raise cfgmod.ConfigError([f"removal of {name!r} did not take effect"])
+    _edit(path, new, verify)
+
+
+def set_device_tags(path: Path, name: str, add=(), remove=()) -> None:
+    """Add/remove explicit tags on a device by editing its single ``tags = [...]`` line."""
+    cfg = cfgmod.load(path, must_exist=True)
+    device = cfg.devices.get(name)
+    if device is None:
+        raise cfgmod.ConfigError([f"no such device {name!r}"])
+    for t in add:
+        _check_name("tag", t)
+    missing = [t for t in remove if t not in device.tags]
+    if missing:
+        raise cfgmod.ConfigError([f"device {name!r} has no explicit tag(s) {missing} "
+                                  "(tags that come from a rule cannot be removed here)"])
+    new_tags = [t for t in device.tags if t not in remove]
+    new_tags += [t for t in dict.fromkeys(add) if t not in new_tags]
+
+    lines = path.read_text().splitlines(keepends=True)
+    header = re.compile(rf"\[devices\.(?:{re.escape(name)}|\"{re.escape(name)}\")\]\s*$")
+    start = next((i for i, l in enumerate(lines) if header.match(l)), None)
+    if start is None:
+        raise cfgmod.ConfigError([f"could not locate [devices.{name}] block"])
+    end = next((j for j in range(start + 1, len(lines)) if lines[j].startswith("[")), len(lines))
+    idx = next((i for i in range(start + 1, end) if re.match(r"\s*tags\s*=", lines[i])), None)
+    if idx is not None and not re.match(r"\s*tags\s*=\s*\[.*\]\s*(#.*)?$", lines[idx]):
+        raise cfgmod.ConfigError([f"the tags of {name!r} span several lines; edit the file by hand"])
+    new_line = f"tags = {_list(new_tags)}\n"
+    if idx is not None:
+        lines[idx:idx + 1] = [new_line] if new_tags else []
+    elif new_tags:
+        last = max(i for i in range(start, end) if lines[i].strip())
+        if not lines[last].endswith("\n"):
+            lines[last] += "\n"
+        lines.insert(last + 1, new_line)
+
+    def verify(c):
+        if list(c.devices[name].tags) != new_tags:
+            raise cfgmod.ConfigError([f"tag edit on {name!r} did not take effect"])
+    _edit(path, "".join(lines), verify)
 
 
 def remove_action(path: Path, name: str) -> None:

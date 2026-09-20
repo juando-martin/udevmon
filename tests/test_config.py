@@ -52,7 +52,7 @@ class ParseTests(unittest.TestCase):
 
     def _bad(self, text):
         with self.assertRaises(C.ConfigError) as cm:
-            C.parse(__import__("tomllib").loads(text))
+            C.parse(C.tomllib.loads(text))
         return "; ".join(cm.exception.problems)
 
     def test_validation_errors(self):
@@ -66,7 +66,7 @@ class ParseTests(unittest.TestCase):
         self.assertIn("invalid name", self._bad('[devices."a b"]\nmatch={x="1"}'))
 
     def test_run_string_is_shlex_split(self):
-        cfg = C.parse(__import__("tomllib").loads(
+        cfg = C.parse(C.tomllib.loads(
             '[devices.a]\nmatch={serial="S1x"}\n[[actions]]\ndevice="a"\non="connected"\n'
             'run="notify-send \'hello world\'"'))
         self.assertEqual(cfg.actions[0].run, ("notify-send", "hello world"))
@@ -124,9 +124,9 @@ class EditTests(unittest.TestCase):
         self.assertEqual(self.path.read_text(), before)
 
     def test_add_and_remove_action(self):
-        name = E.add_action(self.path, None, "disk", ["unmounted"], ["echo", "{mountpoint}"], 5)
+        name = E.add_action(self.path, None, ["disk"], [], ["unmounted"], ["echo", "{mountpoint}"], 5)
         self.assertEqual(name, "disk-unmounted")
-        name2 = E.add_action(self.path, None, "disk", ["unmounted"], ["true"])
+        name2 = E.add_action(self.path, None, ["disk"], [], ["unmounted"], ["true"])
         self.assertEqual(name2, "disk-unmounted-2")
         E.remove_action(self.path, "disk-unmounted")
         names = [a.name for a in C.load(self.path).actions]
@@ -144,7 +144,7 @@ class EditTests(unittest.TestCase):
     def test_invalid_action_rolls_back(self):
         before = self.path.read_text()
         with self.assertRaises(C.ConfigError):
-            E.add_action(self.path, "bad", "disk", ["connected"], ["x", "{mountpoint}"])
+            E.add_action(self.path, "bad", ["disk"], [], ["connected"], ["x", "{mountpoint}"])
         self.assertEqual(self.path.read_text(), before)
 
 

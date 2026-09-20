@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from dataclasses import dataclass, field
+from typing import Any, Mapping
 
 from .events import Endpoint
 
@@ -23,26 +24,44 @@ def is_suspicious_serial(serial: str) -> bool:
     return len(set(s)) == 1
 
 
-def matches(match: Mapping[str, str], props: Mapping[str, str]) -> bool:
-    """True when every pair in ``match`` equals the property (case-insensitive)."""
+def _scalar(value) -> str | None:
+    """The single value of ``value``, or None for a real list (a list can match many things)."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (tuple, list)) and len(value) == 1:
+        return str(value[0])
+    return None
+
+
+def _wanted(value) -> list[str]:
+    return [value] if isinstance(value, str) else [str(v) for v in value]
+
+
+def matches(match: Mapping[str, Any], props: Mapping[str, str]) -> bool:
+    """True when every pair in ``match`` matches the property (case-insensitive).
+
+    A value is a string (equals) or a list/tuple of strings (equals any of them).
+    """
     if not match:
         return False
     for key, want in match.items():
         got = props.get(key)
-        if got is None or got.casefold() != str(want).casefold():
+        if got is None or got.casefold() not in {w.casefold() for w in _wanted(want)}:
             return False
     return True
 
 
-def strength(match: Mapping[str, str]) -> str:
+def strength(match: Mapping[str, Any]) -> str:
+    """Strength of a device match or tag rule; list values never count as identity/location."""
+    scalars = {k: v for k, v in ((k, _scalar(v)) for k, v in match.items()) if v is not None}
     for key in _IDENTITY_KEYS:
-        value = match.get(key)
+        value = scalars.get(key)
         if value is None:
             continue
         if key in ("serial", "drive_serial") and is_suspicious_serial(value):
             continue
         return STRONG
-    if {"vendor_id", "product_id", "port_path"} <= set(match):
+    if {"vendor_id", "product_id", "port_path"} <= set(scalars):
         return MEDIUM
     return WEAK
 
@@ -74,3 +93,29 @@ def default_match_keys(endpoint: Endpoint) -> list[str]:
 
 def build_match(endpoint: Endpoint, keys: list[str]) -> dict[str, str]:
     return {k: endpoint.props[k] for k in keys if endpoint.props.get(k)}
+
+
+@dataclass
+class Resolution:
+    """What an endpoint is, in terms of the configuration (spec 5.5)."""
+    named: list = field(default_factory=list)   # config Devices matching, in file order
+    tags: list[str] = field(default_factory=list)  # explicit tags, then matching rule tags
+
+    @property
+    def is_named(self) -> bool:
+        return bool(self.named)
+
+
+def resolve(cfg, props: Mapping[str, str]) -> Resolution:
+    """Find the named devices and tags that apply to an endpoint with ``props``."""
+    res = Resolution()
+    for device in cfg.devices.values():
+        if matches(device.match, props):
+            res.named.append(device)
+            for tag in device.tags:
+                if tag not in res.tags:
+                    res.tags.append(tag)
+    for tag in cfg.tags.values():
+        if tag.match and tag.name not in res.tags and matches(tag.match, props):
+            res.tags.append(tag.name)
+    return res

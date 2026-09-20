@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "udevmon"
-version = "0.1.0"
+dynamic = ["version"]              # from git, see setup.py
 description = "Run user-defined actions when USB devices or removable filesystems appear or disappear"
-requires-python = ">=3.11"
-dependencies = ["pyudev", "PyGObject"]
+requires-python = ">=3.10"
+dependencies = ["pyudev", "PyGObject", "tomli>=1.1; python_version < '3.11'"]
 
 [project.scripts]
 udevmon = "udevmon.cli:main"

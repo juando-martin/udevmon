@@ -1,6 +1,5 @@
 import contextlib
 import io
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,7 +25,7 @@ class CliTests(unittest.TestCase):
 
     def test_full_flow(self):
         self.assertEqual(self.run_cli("devices", "add", "disk", "--match", "fs_uuid=U1")[0], 0)
-        rc, out, _ = self.run_cli("actions", "add", "disk", "mounted,unmounted",
+        rc, out, _ = self.run_cli("actions", "add", "--device", "disk", "mounted,unmounted",
                                   "--name", "log", "--timeout", "5", "--",
                                   "sh", "-c", "echo $1", "sh", "{mountpoint}")
         self.assertEqual(rc, 0, out)
@@ -42,8 +41,8 @@ class CliTests(unittest.TestCase):
 
     def test_actions_add_requires_command_and_valid_events(self):
         self.run_cli("devices", "add", "disk", "--match", "fs_uuid=U1")
-        self.assertNotEqual(self.run_cli("actions", "add", "disk", "mounted")[0], 0)
-        self.assertNotEqual(self.run_cli("actions", "add", "disk", "bogus", "--", "true")[0], 0)
+        self.assertNotEqual(self.run_cli("actions", "add", "--device", "disk", "mounted")[0], 0)
+        self.assertNotEqual(self.run_cli("actions", "add", "--device", "disk", "bogus", "--", "true")[0], 0)
 
     def test_check_reports_bad_config(self):
         self.cfg.write_text('[devices.a]\nmatch = {}\n')

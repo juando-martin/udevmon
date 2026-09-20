@@ -21,19 +21,20 @@ udevmon listens to two sources, both available to unprivileged users:
 
 Concepts:
 
-| Term | Meaning |
-|---|---|
-| **device** | A name you give to a physical USB device or a filesystem, plus the properties that identify it (e.g. `fs_uuid = "3F2A-91BC"`). Devices are what you attach actions to. |
-| **event** | Something that happened to a device: `connected`, `disconnected`, `mounted`, `unmounted`, `startup`, `shutdown`. |
-| **action** | A command to run when a given event happens to a given device. |
+- **device**: A name you give to a physical USB device or a filesystem, plus the properties that identify it (e.g. `fs_uuid = "3F2A-91BC"`). Devices are what you attach actions to.
+- **event**: Something that happened to a device: `connected`, `disconnected`, `mounted`, `unmounted`, `startup`, `shutdown`.
+- **tag**: A label for a group of devices, so one action can cover several of them. A tag can be set on devices by hand, or selected automatically by a rule on properties (see [Tags](#tags-one-action-for-several-devices)).
+- **action**: A command to run when a given event happens to a given device (or to any device with a given tag).
 
 ## Requirements
 
 - Linux with systemd and udisks2 (standard on GNOME/KDE/Cinnamon desktops)
-- Python 3.11 or newer
+- Python 3.10 or newer (Ubuntu 22.04 and later, Debian 12 and later)
 - Python packages `pyudev` and `PyGObject`. On Debian/Ubuntu/Mint these are
   the system packages `python3-pyudev` and `python3-gi`, which are usually
   already installed.
+- On Python 3.10 only: the `tomli` package (system package `python3-tomli`),
+  which `pip` pulls in automatically when you install udevmon.
 
 ## Installation
 
@@ -62,6 +63,42 @@ Without installing, you can also run it straight from the source tree:
 
 To uninstall: `pip uninstall udevmon` (plus removing
 `~/.config/udevmon/` if you no longer want your configuration).
+
+### The version number
+
+`udevmon --version` prints a version taken from git, in the same format as
+[setuptools-scm](https://setuptools-scm.readthedocs.io/), for example
+`0.1.dev6+gebbca8fea.d20260920`:
+
+- `0.1.dev6`: 6 commits and no release tag yet. Once you tag a commit (say
+  `git tag v0.2.0`), that commit reads `0.2.0`, and later commits read
+  `0.2.1.dev3` (3 commits after the tag).
+- `+gebbca8fea`: the commit the build came from (`g` plus 9 hex digits).
+- `.d20260920`: tracked files had uncommitted changes; the date is the
+  build date. Untracked files don't count.
+
+From a source checkout the version is asked from git each time. A copy that
+was installed carries the version of the commit it was built from. Without
+git the version comes from the source tarball's metadata, else it reads
+`0.0.0+unknown`; the install never fails because of it.
+
+### Copying it to another machine
+
+Build a wheel once, where the source is:
+
+```
+pip wheel . --no-deps -w dist/
+```
+
+then copy the `.whl` file to the other machine and install it there. That
+machine needs neither the source nor git:
+
+```
+pip install --user --break-system-packages udevmon-*.whl
+```
+
+Add `--no-deps` if it has no network access and already has `python3-pyudev`
+and `python3-gi` (and, on Python 3.10, `python3-tomli`) installed.
 
 ## Quick start
 
@@ -96,12 +133,16 @@ To also offer devices that are *already* plugged in, use `udevmon scan --present
 **2. Attach an action**
 
 ```
-udevmon actions add backup-disk mounted -- notify-send "Backup disk ready" "{mountpoint}"
-udevmon actions add backup-disk mounted --name run-backup --timeout 600 -- ~/bin/backup.sh "{mountpoint}"
+udevmon actions add --device backup-disk mounted -- \
+  notify-send "Backup disk ready" "{mountpoint}"
+udevmon actions add --device backup-disk mounted \
+  --name run-backup --timeout 600 -- ~/bin/backup.sh "{mountpoint}"
 ```
 
-The format is `actions add DEVICE EVENT[,EVENT...] [--name NAME] [--timeout SECONDS] -- COMMAND [ARGS...]`.
+The format is
+`actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT...] [--name NAME] [--timeout SECONDS] [--allow-unnamed | --named-only] -- COMMAND [ARGS...]`.
 Options go **before** the `--`; everything after it is the command, verbatim.
+`--device` and `--tag` can be repeated to target several devices or tags.
 
 **3. Run the daemon**
 
@@ -125,7 +166,7 @@ it. From then on it starts with your login session. Useful commands:
 
 ```
 systemctl --user status udevmon
-journalctl --user -u udevmon -f        # follow the log (including action output)
+journalctl --user -u udevmon -f        # follow the log and action output
 udevmon reload                         # re-read the config after editing it
 systemctl --user restart udevmon
 ```
@@ -134,14 +175,12 @@ To only write the unit without enabling it, leave out `--now`.
 
 ## Events
 
-| Event | Fires when | Available details |
-|---|---|---|
-| `connected` | a USB device is plugged in | USB properties |
-| `disconnected` | a USB device is unplugged | USB properties |
-| `mounted` | a filesystem is mounted | filesystem properties, `mountpoint` |
-| `unmounted` | a filesystem is unmounted, or its device disappears while mounted | filesystem properties, `mountpoint` |
-| `startup` | the device was **already present** when udevmon started | USB or filesystem properties |
-| `shutdown` | the device is **still present** when udevmon exits | USB or filesystem properties |
+- `connected` — a USB device is plugged in (USB properties).
+- `disconnected` — a USB device is unplugged (USB properties).
+- `mounted` — a filesystem is mounted (filesystem properties, `mountpoint`).
+- `unmounted` — a filesystem is unmounted, or its device disappears while mounted (filesystem properties, `mountpoint`).
+- `startup` — the device was **already present** when udevmon started (USB or filesystem properties).
+- `shutdown` — the device is **still present** when udevmon exits (USB or filesystem properties).
 
 Notes:
 
@@ -161,25 +200,21 @@ Notes:
 
 USB devices:
 
-| Property | Example | Notes |
-|---|---|---|
-| `vendor_id`, `product_id` | `0781`, `5567` | lowercase hex |
-| `serial` | `4C530001230815112433` | best identifier, when the device has one |
-| `vendor`, `model` | `SanDisk`, `Cruzer Blade` | human-readable |
-| `port_path` | `3-1.2` | the physical port/hub position |
-| `devnode`, `syspath` | `/dev/bus/usb/003/007` | |
-| `udev_<name>` | `udev_id_input_keyboard` | every raw udev property, lowercased |
+- `vendor_id`, `product_id` — e.g. `0781`, `5567`; lowercase hex.
+- `serial` — e.g. `4C530001230815112433`; best identifier, when the device has one.
+- `vendor`, `model` — e.g. `SanDisk`, `Cruzer Blade`; human-readable.
+- `port_path` — e.g. `3-1.2`; the physical port/hub position.
+- `devnode`, `syspath` — e.g. `/dev/bus/usb/003/007`.
+- `udev_<name>` — e.g. `udev_id_input_keyboard`; every raw udev property, lowercased.
 
 Filesystems:
 
-| Property | Example | Notes |
-|---|---|---|
-| `fs_uuid` | `3F2A-91BC` | best identifier |
-| `part_uuid` | `2b5c...` | partition UUID (GPT disks) |
-| `fs_label`, `fs_type` | `BACKUP`, `ext4` | labels are not unique |
-| `devnode` | `/dev/sdb1` | |
-| `mountpoint` | `/media/me/BACKUP` | only on mounted/unmounted (and mounted startup/shutdown) events |
-| `drive_vendor`, `drive_model`, `drive_serial` | | of the physical drive holding it |
+- `fs_uuid` — e.g. `3F2A-91BC`; best identifier.
+- `part_uuid` — e.g. `2b5c...`; partition UUID (GPT disks).
+- `fs_label`, `fs_type` — e.g. `BACKUP`, `ext4`; labels are not unique.
+- `devnode` — e.g. `/dev/sdb1`.
+- `mountpoint` — e.g. `/media/me/BACKUP`; only on mounted/unmounted (and mounted startup/shutdown) events.
+- `drive_vendor`, `drive_model`, `drive_serial` — of the physical drive holding it.
 
 `udevmon present` lists everything currently present with these values, and
 how strongly each could be matched.
@@ -196,8 +231,102 @@ When you create a device, udevmon tells you how precisely it identifies things:
 - **weak**: anything else, for example a filesystem label or just the model.
   Matches every device with those values.
 
-Some cheap devices report fake serials (`0000000`, `A1B2C3D4E590`, ...). udevmon
+Some cheap devices report fake serials (`0000000`, `1234567890`, ...). udevmon
 treats those as weak. Prefer strong matches for anything that runs a script.
+
+## Tags: one action for several devices
+
+There are three ways to point one action at more than one device:
+
+**1. A list of devices**
+
+```
+udevmon actions add --device yubikey --device card-reader \
+  connected,disconnected -- notify-send "{device} {event}"
+```
+
+**2. Tags set on devices.** A tag is a label; give it to as many devices as you like and
+target the label:
+
+```
+udevmon devices tag backup-disk backup
+udevmon devices tag second-disk backup
+udevmon actions add --tag backup mounted -- \
+  ~/bin/backup.sh "{mountpoint}" "{device}"
+```
+
+(`devices add ... --tag backup` sets a tag when creating a device.)
+Adding a third drive later is one command (`udevmon devices tag third-disk backup`);
+the action doesn't change. A device can carry several tags, and an action can list
+several tags (it runs if the thing has any of them). `udevmon devices untag NAME TAG`
+removes one. Tags you set this way need no declaration.
+
+**3. Tag rules.** A rule selects things by their properties, so you don't have to name
+each one. A value can be a list, meaning "any of":
+
+```
+udevmon tags add storage --match fs_type=ext4 --match fs_type=exfat
+```
+
+which is this in the config file:
+
+```toml
+[tags.storage]
+match = { fs_type = ["ext4", "exfat"] }
+```
+
+Rules can use any property from the [list above](#properties-you-can-match-on-and-use-in-commands)
+except ones that change from plug to plug (`mountpoint`, `devnode`, `syspath`, and a few
+raw udev ones); `udevmon check` rejects those. `udevmon tags list` and `udevmon tags show NAME`
+show what each tag contains and which actions use it.
+
+### Named and unnamed things
+
+A rule can select things you never named, for example any ext4 drive someone plugs in.
+That is useful, but it is also exactly what "BadUSB" attacks rely on: the properties a
+rule looks at (filesystem type, vendor ID, label) are chosen by whoever built the device.
+So udevmon separates two cases:
+
+- a **named device** (it matches one of your `[devices.*]`), whether it got the tag explicitly or through a rule: every action on the tag.
+- **unnamed** (matches a rule only): only actions with `allow_unnamed = true`.
+
+Naming a device is you vouching for it. An action must opt in before it may run for
+hardware you haven't vetted:
+
+```toml
+[[actions]]
+tag = "storage"
+on = ["mounted"]
+allow_unnamed = true              # also runs for drives I never named
+run = ["notify-send", "Drive mounted"]
+
+[[actions]]
+tag = "storage"
+on = ["mounted"]
+allow_unnamed = false             # named devices only (the default)
+run = ["~/bin/backup.sh", "{mountpoint}"]
+```
+
+On the command line: `--allow-unnamed` or `--named-only` on `actions add --tag ...`.
+
+Things to know:
+
+- `allow_unnamed` only *widens* who may trigger an action. A named device is never
+  restricted by it.
+- If you leave it out, the action behaves as `false`, and `udevmon check` prints a note
+  for actions on rule tags so you make the choice on purpose.
+- Keep `allow_unnamed = true` actions harmless (notifications, logging). They run on
+  hardware whose labels, model names and serial numbers are chosen by its maker, so
+  don't let them read or run anything from the device. `check` warns when such an
+  action uses those values in its command, or uses `{device}` (which doesn't exist
+  for unnamed things).
+- Trust belongs to each thing, not to the whole stick: a stick appears as a USB device
+  *and* as a filesystem. If you named only the filesystem, its USB device is still
+  unnamed. In `scan` you can pick both entries at once (`1,2`) to name them together.
+- `startup` and `shutdown` follow the same rules, so an allowed action on a broad rule
+  fires once for every matching thing that is present, including system filesystems.
+- `udevmon present` shows, for everything plugged in now, whether it is named and which
+  tags it has, which is the quickest way to check a rule.
 
 ## Configuration file
 
@@ -211,29 +340,52 @@ editing by hand, run `udevmon check`, then `udevmon reload`.
 
 ```toml
 [daemon]                       # every setting here is optional
-debounce = 1.0                 # seconds; repeated (device, event) pairs are ignored
-max_workers = 4                # actions from different events can run in parallel
+debounce = 1.0                 # ignore repeats within N seconds
+max_workers = 4                # max events handled in parallel
 udev_filters = ["usb/usb_device"]
 
 [devices.backup-disk]
 description = "Weekly backup drive"
 match = { fs_uuid = "3F2A-91BC" }
+tags = ["backup", "storage"]   # optional explicit tags
 
 [devices.yubikey]
 match = { vendor_id = "1050", product_id = "0407", serial = "A1B2C3D4E5" }
 
-[[actions]]
+[devices.card-reader]
+match = { vendor_id = "2ce3", product_id = "9563", port_path = "3-3" }
+
+[tags.storage]                 # a rule tag: things selected by properties
+description = "Filesystems I care about"
+match = { fs_type = ["ext4", "exfat"] }    # a list means "any of"
+
+[[actions]]                    # one device
 name = "run-backup"            # optional
-device = "backup-disk"
+device = "backup-disk"         # a name, or a list of names
 on = ["mounted"]               # one event or a list
 run = ["~/bin/backup.sh", "{mountpoint}"]
-timeout = 600                  # seconds before the action is killed (default 60)
+timeout = 600                  # kill after N seconds (default 60)
 
-[[actions]]
-device = "yubikey"
+[[actions]]                    # several devices
+device = ["yubikey", "card-reader"]
 on = ["connected", "disconnected"]
-run = ["notify-send", "YubiKey {event}"]
+run = ["notify-send", "{device} {event}"]
+
+[[actions]]                    # a tag, including things I never named
+tag = "storage"                # a name, or a list (any of)
+on = ["mounted"]
+allow_unnamed = true
+run = ["notify-send", "Drive mounted ({tag})"]
+
+[[actions]]                    # a tag, named devices only
+tag = "backup"
+on = ["mounted"]
+allow_unnamed = false
+run = ["~/bin/backup.sh", "{mountpoint}", "{device}"]
 ```
+
+An action has exactly one of `device` or `tag`. Tag names, device names and action names
+use letters, digits, `_`, `.` and `-`.
 
 ### How commands are run
 
@@ -243,7 +395,8 @@ run = ["notify-send", "YubiKey {event}"]
   `run = ["sh", "-c", "cd \"$1\" && ls | wc -l >> ~/count.log", "sh", "{mountpoint}"]`
 - A leading `~` in an argument is expanded to your home directory.
 - `{name}` is replaced by a property value: `{mountpoint}`, `{serial}`,
-  `{fs_uuid}`, `{devnode}`, and so on, plus `{event}` and `{device}`. Values
+  `{fs_uuid}`, `{devnode}`, and so on, plus `{event}`, `{device}` (the name of the device
+  that applies; not available for unnamed things) and `{tag}` (tag actions only). Values
   are always passed as a single argument, so spaces or shell characters in a
   mount point can't break out of the command.
 - Only `{lowercase_names}` are placeholders. Other braces (`${HOME}`,
@@ -253,8 +406,8 @@ run = ["notify-send", "YubiKey {event}"]
   missing at run time, the action is **skipped** with an error rather than
   run with an empty value.
 - The same information is available as environment variables:
-  `UDEVMON_EVENT`, `UDEVMON_DEVICE`, and `UDEVMON_<PROPERTY>` (for example
-  `UDEVMON_MOUNTPOINT`, `UDEVMON_SERIAL`).
+  `UDEVMON_EVENT`, `UDEVMON_DEVICE` (when the thing is named), `UDEVMON_TAG` (tag actions),
+  and `UDEVMON_<PROPERTY>` (for example `UDEVMON_MOUNTPOINT`, `UDEVMON_SERIAL`).
 - Commands run as you, with your home directory as working directory and no
   standard input. Their output goes to the log.
 - Several actions for one event run one after another, in file order.
@@ -265,14 +418,25 @@ run = ["notify-send", "YubiKey {event}"]
 ## Command reference
 
 ```
-udevmon scan [--present] [--no-prompt]   watch events and name devices
-udevmon present [--all]                  list USB devices and filesystems that are present now
-udevmon devices list | show NAME | add NAME --match KEY=VALUE ... | remove NAME
-udevmon actions list | add ... | remove NAME
-udevmon check                            validate the config
-udevmon run [--dry-run]                  run the daemon in the foreground
-udevmon reload                           tell the running daemon to reload its config
-udevmon service install [--now]          install (and optionally start) the systemd user service
+```
+udevmon scan [--present] [--no-prompt]  watch events and name things
+udevmon present [--all]                 list what is plugged in now
+udevmon devices list | show NAME | remove NAME
+udevmon devices add NAME --match KEY=VALUE ...
+                    [--tag TAG ...] [--description TEXT]
+udevmon devices tag NAME TAG...         add explicit tags to a device
+udevmon devices untag NAME TAG...
+udevmon tags list | show NAME | remove NAME
+udevmon tags add NAME [--match KEY=VALUE ...] [--description TEXT]
+udevmon actions list | remove NAME
+udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT...]
+                    [--name NAME] [--timeout S]
+                    [--allow-unnamed | --named-only] -- COMMAND...
+udevmon check                           validate the config
+udevmon run [--dry-run]                 run the daemon in the foreground
+udevmon reload                          make the running daemon reload
+udevmon service install [--now]         install the systemd user service
+```
 ```
 
 Global options, placed before the subcommand: `--config PATH`, `-v` (debug logging).
@@ -280,10 +444,14 @@ Global options, placed before the subcommand: `--config PATH`, `-v` (debug loggi
 Manual device creation, without scanning:
 
 ```
-udevmon devices add my-key --match vendor_id=1050 --match product_id=0407 --match serial=A1B2C3D4E5
+udevmon devices add my-key --match vendor_id=1050 \
+  --match product_id=0407 --match serial=A1B2C3D4E5
 ```
 
-A device can't be removed while actions still use it; remove those first.
+A device can't be removed while an action lists it by name, and a declared tag (`[tags.X]`)
+can't be removed while an action uses it; remove those actions first. Repeating `--match` with
+the same key on `tags add` builds a list (`--match fs_type=ext4 --match fs_type=exfat`);
+on `devices add` a repeated key is an error, since a device match is exact.
 Actions created by hand without a `name` can't be removed through the CLI
 (edit the file instead).
 
@@ -292,7 +460,8 @@ Actions created by hand without a `name` can't be removed through the CLI
 Notify when a specific USB stick is plugged in or removed:
 
 ```
-udevmon actions add my-stick connected,disconnected -- notify-send "USB stick {event}"
+udevmon actions add --device my-stick connected,disconnected -- \
+  notify-send "USB stick {event}"
 ```
 
 Run a backup when the backup drive is mounted, and safely unmount afterwards:
@@ -302,7 +471,8 @@ Run a backup when the backup drive is mounted, and safely unmount afterwards:
 name = "backup"
 device = "backup-disk"
 on = ["mounted"]
-run = ["sh", "-c", "rsync -a ~/Documents/ \"$1/Documents/\" && udisksctl unmount -b \"$2\"",
+run = ["sh", "-c",
+       'rsync -a ~/Documents/ "$1/Documents/" && udisksctl unmount -b "$2"',
        "sh", "{mountpoint}", "{devnode}"]
 timeout = 3600
 ```
@@ -310,14 +480,27 @@ timeout = 3600
 Lock the screen when a security key is removed:
 
 ```
-udevmon actions add my-key disconnected -- loginctl lock-session
+udevmon actions add --device my-key disconnected -- loginctl lock-session
 ```
 
 Do something with a drive that is already connected when you log in *and*
 when it is plugged in later:
 
 ```
-udevmon actions add backup-disk startup,mounted -- ~/bin/sync-check.sh
+udevmon actions add --device backup-disk startup,mounted -- \
+  ~/bin/sync-check.sh
+```
+
+Get a notification for any ext4/exfat drive that is mounted, and run the backup
+only for the drives you named and tagged `backup`:
+
+```
+udevmon tags add storage --match fs_type=ext4 --match fs_type=exfat
+udevmon actions add --tag storage mounted --allow-unnamed -- \
+  notify-send "Drive mounted: {tag}"
+udevmon devices tag backup-disk backup
+udevmon actions add --tag backup mounted --named-only -- \
+  ~/bin/backup.sh "{mountpoint}"
 ```
 
 ## Security notes
@@ -331,7 +514,9 @@ classic attack vector ("BadUSB"). udevmon helps by:
 - never running commands through a shell and never splicing device values
   into a command line;
 - refusing to load a config file that is not owned by you or is writable by
-  group/others, since that file decides what gets executed.
+  group/others, since that file decides what gets executed;
+- running actions for hardware you haven't named only when the action says
+  `allow_unnamed = true` (see [Named and unnamed things](#named-and-unnamed-things)).
 
 Keep scripts triggered by removable devices short, and don't run actions that
 trust the *contents* of the device without care.
@@ -339,10 +524,15 @@ trust the *contents* of the device without care.
 ## Troubleshooting
 
 - **Nothing happens when I plug the device in.** Run `udevmon -v run` in a
-  terminal and plug it in. Look for `no device matched`, which means the
+  terminal and plug it in. Look for `nothing matched`, which means the
   properties differ from what you saved. Compare with `udevmon present` or
   `udevmon scan`. Remember that a stick appears as both a USB device and a
   filesystem, and a device matches only one of those.
+- **A tag action doesn't run for a drive I plugged in.** Check `udevmon present`: it
+  shows whether the thing is `unnamed` or a named `device:` and which `tags:` it has. An
+  unnamed thing runs only actions with `allow_unnamed = true`; a thing with no tags
+  matches no tag action at all. `udevmon -v run` logs why an action was skipped, and
+  `udevmon check` explains the notes about `allow_unnamed`.
 - **Filesystem events never fire.** Check that udisks2 is running
   (`systemctl status udisks2`) and that the drive is mounted through it (for
   example by your desktop's automounter or `udisksctl mount`). Mounts done
@@ -369,6 +559,8 @@ trust the *contents* of the device without care.
   the daemon watch other kinds of udev devices, matched through the
   `udev_<name>` properties, but this is experimental and only the default
   USB filter has been tested.
+- Tags mean "any of" only, a named device can't be excluded from a rule tag, and rule
+  values are exact strings or lists of them (no wildcards). Narrow the rule instead.
 - No GUI or TUI yet; configuration is the TOML file plus the CLI.
 
 ## Development
