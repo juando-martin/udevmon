@@ -325,18 +325,68 @@ def set_action_enabled(path: Path, names, enabled: bool) -> list[str]:
     return changed
 
 
-def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
-                       on=None, timeout: float | None = None) -> None:
-    """Change an action's ``allow_unnamed``, events or timeout.
+def _retarget(kind: str, what: str, current, add, remove, action: str) -> list[str]:
+    """The new list of targets (``kind`` is "device" or "tag"); ConfigError if it cannot be."""
+    add, remove = _unique(add), _unique(remove)
+    both = [n for n in add if n in remove]
+    if both:
+        raise cfgmod.ConfigError([f"{both} is in both --add-{kind} and --remove-{kind}"])
+    missing = [n for n in remove if n not in current]
+    if missing:
+        raise cfgmod.ConfigError([f"action {action!r} has no {kind}(s) {missing} "
+                                  f"(it targets {what}: {', '.join(current)})"])
+    new = [n for n in current if n not in remove]
+    new += [n for n in add if n not in new]
+    if not new:
+        raise cfgmod.ConfigError([f"that would leave action {action!r} with no {kind}s; "
+                                  f"remove the action instead (`actions remove {action}`)"])
+    return new
 
-    ``unnamed`` is "allow", "named-only" or "default" (back to not stated).
+
+def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
+                       on=None, timeout: float | None = None,
+                       add_devices=(), remove_devices=(), add_tags=(), remove_tags=()):
+    """Change an action's ``allow_unnamed``, events, timeout or targets.
+
+    ``unnamed`` is "allow", "named-only" or "default" (back to not stated). An action
+    targets devices or tags, never both, and keeps at least one. Returns the new list of
+    targets when they were changed, else None.
     """
     cfg = cfgmod.load(path, must_exist=True)
-    if name not in {a.name for a in cfg.actions}:
+    action = next((a for a in cfg.actions if a.name == name), None)
+    if action is None:
         raise cfgmod.ConfigError([f"no such action {name!r}"])
-    if unnamed is None and on is None and timeout is None:
+    device_edit, tag_edit = bool(add_devices or remove_devices), bool(add_tags or remove_tags)
+    if unnamed is None and on is None and timeout is None and not (device_edit or tag_edit):
         raise cfgmod.ConfigError(["nothing to change: give --allow-unnamed, --named-only, "
-                                  "--default-unnamed, --on or --timeout"])
+                                  "--default-unnamed, --on, --timeout, --add-device, "
+                                  "--remove-device, --add-tag or --remove-tag"])
+    key = None
+    targets = None
+    if device_edit and tag_edit:
+        raise cfgmod.ConfigError(["an action targets devices or tags, not both"])
+    if device_edit or tag_edit:
+        key = "device" if device_edit else "tag"
+        other = "tag" if device_edit else "device"
+        if (action.tags if device_edit else action.devices):
+            raise cfgmod.ConfigError([
+                f"action {name!r} targets {other}s, so it cannot take {key}s. Use "
+                f"--add-{other}/--remove-{other}, or remove the action and add it again"])
+        current = list(action.devices if device_edit else action.tags)
+        for n in (add_devices if device_edit else add_tags):
+            _check_name(key, n)
+        if device_edit:
+            unknown = [n for n in _unique(add_devices) if n not in cfg.devices]
+            if unknown:
+                raise cfgmod.ConfigError([f"no such device(s): {', '.join(map(repr, unknown))}"])
+        targets = _retarget(key, f"{key}s", current,
+                            add_devices if device_edit else add_tags,
+                            remove_devices if device_edit else remove_tags, name)
+        if targets == current:
+            targets = None                                  # already as asked: no edit
+            key = None
+            if unnamed is None and on is None and timeout is None:
+                return None
 
     def change(doc):
         _, item = _find_action(doc, name, "change")
@@ -353,15 +403,32 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
             item["on"] = array
         if timeout is not None:
             item["timeout"] = int(timeout) if float(timeout).is_integer() else float(timeout)
+        if key is not None:
+            current_value = item.get(key)
+            if hasattr(current_value, "append") and hasattr(current_value, "remove"):
+                for n in [n for n in current_value if n not in targets]:
+                    current_value.remove(n)                 # in place: keeps how it is laid out
+                for n in targets:
+                    if n not in current_value:
+                        current_value.append(n)
+            elif len(targets) == 1:
+                item[key] = targets[0]                      # a single name stays a plain string
+            else:
+                array = _tomlkit().array()
+                for n in targets:
+                    array.append(n)
+                item[key] = array
 
     def verify(c):
         a = next(x for x in c.actions if x.name == name)
         want_unnamed = {"allow": True, "named-only": False, "default": None}.get(unnamed, a.allow_unnamed)
         if (a.allow_unnamed != want_unnamed
                 or (on is not None and a.on != tuple(on))
-                or (timeout is not None and a.timeout != float(timeout))):
+                or (timeout is not None and a.timeout != float(timeout))
+                or (key is not None and list(a.targets) != targets)):
             raise cfgmod.ConfigError([f"the change to {name!r} did not take effect"])
     _edit(path, _edited(path, change), verify)
+    return targets
 
 
 def set_device_fields(path: Path, name: str, *, match=None, description=None) -> None:

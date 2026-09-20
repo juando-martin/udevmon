@@ -299,9 +299,18 @@ def cmd_actions_set(args):
     if args.timeout is not None and args.timeout <= 0:
         print("error: --timeout must be greater than 0", file=sys.stderr)
         return 1
-    _guard(configedit.set_action_options, args.config, args.name,
-           unnamed=args.unnamed, on=on, timeout=args.timeout)
+    targets = _guard(configedit.set_action_options, args.config, args.name,
+                     unnamed=args.unnamed, on=on, timeout=args.timeout,
+                     add_devices=args.add_device, remove_devices=args.remove_device,
+                     add_tags=args.add_tag, remove_tags=args.remove_tag)
+    retargeted = any((args.add_device, args.remove_device, args.add_tag, args.remove_tag))
+    if retargeted and targets is None and (args.unnamed, args.on, args.timeout) == (None,) * 3:
+        print(f"Action {args.name!r} already targets that; nothing changed.")
+        return 0
     print(f"Updated action {args.name!r}.")
+    if targets is not None:
+        kind = "devices" if (args.add_device or args.remove_device) else "tags"
+        print(f"  It now targets {kind}: {', '.join(targets)}.")
     return 0
 
 
@@ -645,7 +654,7 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("names", nargs="+", metavar="NAME"); x.set_defaults(fn=cmd_actions_disable)
     x = a.add_parser("enable", help="let disabled actions run again", parents=[edits])
     x.add_argument("names", nargs="+", metavar="NAME"); x.set_defaults(fn=cmd_actions_enable)
-    x = a.add_parser("set", help="change an action's allow_unnamed, events or timeout",
+    x = a.add_parser("set", help="change an action's targets, events, timeout or allow_unnamed",
                      parents=[edits])
     x.add_argument("name")
     grp = x.add_mutually_exclusive_group()
@@ -657,6 +666,11 @@ def build_parser() -> argparse.ArgumentParser:
                      help="clear the setting (named devices only, `check` will note it)")
     x.add_argument("--on", metavar="EVENTS", help="replace the events (comma-separated)")
     x.add_argument("--timeout", type=float, metavar="SECONDS")
+    for verb, past in (("add", "to"), ("remove", "from")):
+        for kind in ("device", "tag"):
+            x.add_argument(f"--{verb}-{kind}", dest=f"{verb}_{kind}", action="append", default=[],
+                           metavar="NAME", help=f"{verb} a {kind} {past} the action's targets "
+                                                "(repeatable)")
     x.set_defaults(fn=cmd_actions_set, unnamed=None)
 
     s = sub.add_parser("explain", help="show what would run for a thing (present or simulated)")

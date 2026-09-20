@@ -44,11 +44,20 @@ to the version and date, and start a new empty **Unreleased** above it.
 - **`actions set NAME`** changes `allow_unnamed` (`--allow-unnamed`, `--named-only`,
   `--default-unnamed` to clear it), the events (`--on`) or the `--timeout` of an
   action without removing and re-adding it.
+- **Retargeting actions:** `actions set NAME` also takes `--add-device`,
+  `--remove-device`, `--add-tag` and `--remove-tag` (repeatable) to change which
+  devices or tags an action applies to. Comments and layout are kept; removing a
+  target the action lacks, or its last target, is refused.
 - **`scan` can ignore things:** answer `i3` (or `i1,3`) instead of a number to save
   them as ignored devices, without asking for tags.
 - `devices list`, `devices show`, `actions list`, `present`, `scan` and `explain`
   mark what is switched off; `explain` says why an action was skipped (disabled
   action, disabled device) and `check` notes it.
+- **Manual pages:** `udevmon(1)` for every command and option, and
+  `udevmon.toml(5)` for the configuration file, the events, the properties and
+  how commands are run. They are installed by `pip` (under `share/man`) and can
+  be read from a checkout with `man -l man/udevmon.1`. A test fails when a
+  command, option, config key, event or property is missing from them.
 
 ### Fixed
 
@@ -56,12 +65,15 @@ to the version and date, and start a new empty **Unreleased** above it.
   the file was rejected. They are now written quoted (`[devices."usb.1"]`).
 - **Clearer reasons** when an edit cannot proceed: the message names the entry it could
   not find, and says how to give an unnamed action a name so it can be changed.
+- **Documentation:** the README described property matching as exact; values are
+  compared without regard to capitals (`fs_label = "backup"` matches `BACKUP`).
 
 ### Internal
 
 - **`tools/usb-test.py`**, a guided real-hardware test: it asks you to plug a
   stick in, pull it out and plug it in again, and checks events, status, pause,
-  the unnamed gate and surprise removal (16 checks) on a throwaway config.
+  the unnamed gate and surprise removal (16 checks) on a throwaway config. The
+  `removed` event and `surprise` value were confirmed on a real stick with it.
 - The test suite no longer leaves temporary folders behind: it works in one
   per-run folder that is removed on exit, and a test guards this.
 

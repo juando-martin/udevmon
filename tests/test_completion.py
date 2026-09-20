@@ -167,7 +167,8 @@ class EngineTests(unittest.TestCase):
                          ["connected,disconnected"])
         self.assertEqual(set(self.words("udevmon actions set log --")),
                          {"--allow-unnamed", "--named-only", "--default-unnamed", "--on",
-                          "--timeout", "--no-reload", "--help"})
+                          "--timeout", "--no-reload", "--help", "--add-device",
+                          "--remove-device", "--add-tag", "--remove-tag"})
         self.assertEqual(self.words("udevmon actions set log --timeout "), [])   # free text
         self.assertIn("--no-reload", self.words("udevmon devices ignore --"))
 

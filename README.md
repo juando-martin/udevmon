@@ -102,6 +102,21 @@ invalid or unsafe config just means no names, never an error message. Each
 TAB runs udevmon once (about 50 ms) and doesn't touch udev or D-Bus. It works
 for the `udevmon` command, not for `python3 -m udevmon`.
 
+### Manual pages
+
+`pip install` also installs two manual pages, `udevmon(1)` (every command and
+option) and `udevmon.toml(5)` (every key of the configuration file, the events,
+the properties and how commands are run):
+
+```
+man udevmon
+man udevmon.toml
+```
+
+For a user install they go to `~/.local/share/man`, which `man` finds when
+`~/.local/bin` is on your `PATH`. From a source checkout, read them without
+installing: `man -l man/udevmon.1` and `man -l man/udevmon.toml.5`.
+
 ### Uninstalling
 
 Remove the extras first, then the package:
@@ -302,6 +317,10 @@ Filesystems:
 `udevmon present` lists everything currently present with these values, and
 how strongly each could be matched.
 
+Values are compared without regard to capitals (`fs_label = "backup"` matches a
+drive labelled `BACKUP`), but otherwise exactly: no wildcards, and a thing that
+lacks the property never matches.
+
 ### Match strength
 
 When you create a device, udevmon tells you how precisely it identifies things:
@@ -486,7 +505,19 @@ udevmon actions set backup --on mounted,startup
 udevmon actions set notify --allow-unnamed
 udevmon actions set notify --named-only
 udevmon actions set notify --default-unnamed   # clear it: not stated
+udevmon actions set notify --add-device card --remove-device stick
+udevmon actions set archive --add-tag backup
 ```
+
+`--add-device`, `--remove-device`, `--add-tag` and `--remove-tag` change what the
+action targets, and can be repeated and combined with the other options. An
+action targets devices or tags, never both, so the device options work on
+actions that use `device` and the tag options on actions that use `tag`. A
+device you add must exist; a tag needs no declaration. Removing something the
+action does not target is an error, and so is removing its last target (use
+`actions remove` for that). Adding what is already there changes nothing. A
+single name stays a plain string, a list is edited in place, and comments and
+layout are kept.
 
 `--default-unnamed` removes the `allow_unnamed` line; the action then behaves as
 named-only, and `check` notes it again if its tag has a rule. `--allow-unnamed`
@@ -532,7 +563,7 @@ Limits: a device written with dotted keys under `[devices]` instead of its own
 `name` line has to be given one first (edit the file).
 
 **`devices set`** replaces a device's whole match (`--match`, repeated for
-several keys; a device match takes exact values) and/or its `--description`
+several keys; a device match takes single values, capitals ignored) and/or its `--description`
 (empty removes it). A comment after the old `match` line is kept.
 
 Names may contain letters, digits, `_`, `.` and `-`. A name with a dot is written
@@ -568,7 +599,8 @@ The file is `~/.config/udevmon/config.toml` (respects `$XDG_CONFIG_HOME`). Use
 `--config PATH` to use a different one; note that `--config` goes *before* the
 subcommand: `udevmon --config my.toml run`.
 
-You can edit it by hand or through the CLI. CLI edits keep your comments and
+`man udevmon.toml` is the full reference for the file. You can edit it by hand
+or through the CLI. CLI edits keep your comments and
 formatting, and save the previous version as `config.toml.bak`.
 
 - **CLI edits reload the daemon for you.** After `devices add`, `actions
@@ -681,6 +713,8 @@ udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT...]
                     [--allow-unnamed | --named-only] -- COMMAND...
 udevmon actions set NAME [--allow-unnamed | --named-only
                           | --default-unnamed] [--on EVENTS] [--timeout S]
+                    [--add-device NAME ...] [--remove-device NAME ...]
+                    [--add-tag NAME ...] [--remove-tag NAME ...]
 udevmon actions disable | enable NAME...
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
                                         what would run (see above)
@@ -694,6 +728,8 @@ udevmon service uninstall               stop and remove it
 udevmon completion bash | install | uninstall
                                          bash tab completion
 ```
+
+`man udevmon` describes each command and option in full.
 
 Global options, placed before the subcommand: `--config PATH`, `-v` (debug logging).
 The editing commands (`devices`, `tags`, `actions`: add, remove, tag, untag)
@@ -845,7 +881,7 @@ trust the *contents* of the device without care.
   `udev_<name>` properties, but this is experimental and only the default
   USB filter has been tested.
 - Tags mean "any of" only, a named device can't be excluded from a rule tag, and rule
-  values are exact strings or lists of them (no wildcards). Narrow the rule instead.
+  values are strings (capitals ignored) or lists of them (no wildcards). Narrow the rule instead.
 - No GUI or TUI yet; configuration is the TOML file plus the CLI.
 
 ## Development

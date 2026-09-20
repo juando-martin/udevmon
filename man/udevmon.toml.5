@@ -1,0 +1,679 @@
+.\" Manual page for the udevmon configuration file. Keep it in step with
+.\" src/udevmon/config.py: tests/test_manpages.py fails when a key is missing.
+.TH UDEVMON.TOML 5 "2026-09-21" "udevmon" "File Formats"
+.SH NAME
+udevmon.toml \- configuration file of udevmon
+.SH DESCRIPTION
+The configuration of
+.BR udevmon (1)
+is a TOML file, by default
+.IR ~/.config/udevmon/config.toml
+(under
+.B $XDG_CONFIG_HOME
+if that is set; the
+.B \-\-config
+option chooses another file).
+It says which devices you care about, and which commands to run when something
+happens to them.
+.PP
+You can edit the file by hand or with the
+.B devices
+.RB , " tags"
+and
+.B actions
+commands of
+.BR udevmon (1),
+which keep your comments and formatting and save the previous version as
+.IR config.toml.bak .
+After a hand edit run
+.B udevmon check
+to validate it and
+.B udevmon reload
+to make a running daemon read it.
+The editing commands reload the daemon themselves.
+.PP
+udevmon refuses to load a file that is not owned by you or that is writable by
+group or others, because the file decides what gets executed.
+Fix it with
+.BR "chmod go\-w" .
+The daemon starts with an empty configuration when the file does not exist;
+.B udevmon check
+reports it as an error.
+.PP
+The file has four kinds of table:
+.TP
+.B [daemon]
+Optional settings.
+.TP
+.B [devices.NAME]
+Named devices.
+.TP
+.B [tags.NAME]
+Tags that select things by a rule.
+.TP
+.B [[actions]]
+The commands to run.
+.PP
+Unknown keys, at any level, are errors, so a mistyped key never goes unnoticed.
+Names of devices, tags and actions use only letters, digits,
+.BR _ ,
+.B .
+and
+.BR \- .
+A name with a dot must be quoted in a header:
+.BR [devices."usb.1"] .
+.SH "[daemon]"
+Every key is optional.
+.TP
+.B debounce
+Number of seconds, default
+.BR 1.0 .
+Events of the same kind for the same device that repeat within this time are
+dropped.
+Must not be negative;
+.B 0
+turns it off.
+.TP
+.B max_workers
+Integer of at least 1, default
+.BR 4 .
+How many events are handled in parallel.
+Actions for one event run one after another.
+.TP
+.B udev_filters
+List of udev filters, default
+.BR ["usb/usb_device"] .
+Each entry is
+.IB subsystem /devtype
+or just a subsystem.
+Other filters (for example
+.BR "input" )
+are experimental and reach the device through its raw
+.BI udev_ name
+properties.
+Changing it needs a daemon restart, not a reload.
+.SH "[devices.NAME]"
+A device is a name for one thing: a USB device or a filesystem.
+.TP
+.B match
+Required, a non\-empty table of property names and exact values.
+Values are strings (numbers are accepted and taken as strings).
+A thing is this device when all the pairs are equal to its properties
+(capitals do not matter).
+See
+.BR PROPERTIES .
+.TP
+.B description
+Optional text.
+.TP
+.B tags
+Optional explicit tags: a name or a list of names.
+.TP
+.B status
+Optional.
+Left out, empty or
+.B "active"
+means the normal state.
+.B "disabled"
+stops the device's own actions (the ones that name it in
+.BR device ),
+while actions reached through its tags still run.
+.B "ignored"
+stops everything: no action runs for it, however it is reached.
+If a thing matches two devices and either is ignored, nothing runs.
+A disabled or ignored device still counts as named (see
+.BR "NAMED AND UNNAMED THINGS" ).
+.PP
+A device can also be written as a table with a sub\-table for the match
+.RB ( [devices.NAME.match] ).
+.SS "Match strength"
+.B udevmon check
+and the commands that create devices rate every match:
+.TP
+.B strong
+It includes a serial number or a UUID.
+It identifies exactly this device.
+.TP
+.B medium
+Vendor ID, product ID and physical port
+.RB ( port_path ).
+It matches any device of that model in that port.
+This is what you get for devices without a serial number.
+.TP
+.B weak
+Anything else, such as a filesystem label or only the model.
+It matches every device with those values, and a warning is printed.
+.PP
+Serials that are obviously fake
+.RB ( 0000000 ,
+.BR 1234567890 ,
+and similar) count as weak.
+A device match that uses a property which changes from plug to plug
+.RB ( mountpoint ,
+.BR devnode ,
+.BR syspath )
+also draws a warning.
+.SH "[tags.NAME]"
+A tag is a label that lets one action cover several devices.
+There are two ways to give things a tag.
+.PP
+By
+.BR tags
+on a device (the explicit way): the device lists it, and no declaration is
+needed.
+.PP
+By a rule, declared here.
+A rule selects things by their properties, so you do not have to name each
+one.
+.TP
+.B match
+A table of property names and values.
+A value can be a list, meaning \(lqany of\(rq.
+Every key must match, and capitals do not matter.
+Rules may use any property except those that change from plug to plug:
+.BR mountpoint ,
+.BR devnode ,
+.BR syspath ,
+.BR event ,
+.BR device ,
+.BR tag ,
+.BR surprise ,
+and the raw udev properties
+.BR udev_devname ,
+.BR udev_devpath ,
+.BR udev_busnum ,
+.BR udev_devnum ,
+.B udev_seqnum
+and
+.BR udev_usec_initialized .
+.TP
+.B description
+Optional text.
+.PP
+A tag without a
+.B match
+is valid, and contains only the devices that carry it explicitly.
+Tags mean \(lqany of\(rq only: an action on two tags runs if the thing has
+either.
+.PP
+.nf
+[tags.storage]
+match = { fs_type = ["ext4", "exfat"] }
+.fi
+.SH "[[actions]]"
+Each
+.B [[actions]]
+table is one action.
+.TP
+.B device
+The named device (or a list of names) the action applies to.
+Every name must exist.
+.TP
+.B tag
+The tag (or a list of tags) the action applies to; it runs if the thing has any
+of them.
+.PP
+An action has exactly one of
+.B device
+and
+.BR tag .
+.TP
+.B on
+Required: one event, or a list of events, from
+.BR connected ,
+.BR disconnected ,
+.BR mounted ,
+.BR unmounted ,
+.BR removed ,
+.B startup
+and
+.BR shutdown .
+See
+.BR EVENTS .
+.TP
+.B run
+Required: the command, as a list of arguments (or a string that is split
+shell\-style).
+See
+.BR "HOW COMMANDS ARE RUN" .
+.TP
+.B name
+Optional, unique.
+Without it the action is named after its first target and its position in the
+file (for example
+.BR backup\-disk\-2 ).
+The commands that change or remove an action need a name; give it one by hand.
+.TP
+.B timeout
+Seconds, greater than 0, default
+.BR 60 .
+An action that runs longer is terminated, together with any child processes it
+started.
+.TP
+.B allow_unnamed
+Boolean, only for actions that use
+.BR tag .
+Left out, it behaves as false.
+See
+.BR "NAMED AND UNNAMED THINGS" .
+.TP
+.B enabled
+Boolean, default true.
+.B "enabled = false"
+keeps the action in the file but it never runs.
+.SH EVENTS
+.TP
+.B connected
+A USB device was plugged in.
+.TP
+.B disconnected
+A USB device was unplugged.
+.TP
+.B mounted
+A filesystem was mounted.
+.TP
+.B unmounted
+A filesystem was unmounted, or its device disappeared while it was mounted.
+.TP
+.B removed
+A mounted filesystem vanished without being unmounted first: the stick was
+pulled out, or the drive failed.
+It comes right after
+.BR unmounted ,
+which fires too.
+.TP
+.B startup
+The device was already present when udevmon started.
+It fires for every matching device each time the daemon starts, including after
+a restart, but not after a reload.
+.TP
+.B shutdown
+The device is still present when udevmon stops normally.
+The daemon waits for these actions, up to each one's
+.BR timeout .
+They do not run after
+.B SIGKILL
+or a crash.
+.PP
+Pulling a mounted stick therefore produces
+.BR unmounted ,
+then
+.BR removed ,
+for its filesystem, and
+.B disconnected
+for the USB device, in any order relative to each other.
+A clean eject produces only
+.BR unmounted .
+The
+.B surprise
+property tells them apart.
+.PP
+While automation is paused
+.RB ( "udevmon pause" )
+nothing runs, including
+.B startup
+and
+.BR shutdown .
+.SH PROPERTIES
+Properties are used in
+.BR match ,
+in
+.B {placeholders}
+of a command and in
+.B UDEVMON_
+environment variables.
+.PP
+USB devices (events
+.BR connected ,
+.B disconnected
+and, for things that are USB devices,
+.B startup
+and
+.BR shutdown ):
+.TP
+.BR vendor_id ", " product_id
+Lowercase hexadecimal, for example
+.B 0781
+and
+.BR 5567 .
+.TP
+.B serial
+For example
+.BR 4C530001230815112433 .
+The best identifier, when the device has one.
+.TP
+.BR vendor ", " model
+Human\-readable names.
+.TP
+.B port_path
+The physical port position, for example
+.BR 3\-1.2 .
+.TP
+.BR devnode ", " syspath
+For example
+.IR /dev/bus/usb/003/007 .
+.TP
+.BR subsystem ", " devtype
+The udev subsystem and device type.
+.TP
+.BI udev_ name
+Every raw udev property, lowercased (for example
+.BR udev_id_input_keyboard ).
+.PP
+Filesystems (events
+.BR mounted ,
+.BR unmounted ,
+.BR removed ,
+and
+.B startup
+and
+.B shutdown
+for filesystems):
+.TP
+.B fs_uuid
+For example
+.BR 3F2A\-91BC .
+The best identifier.
+.TP
+.B part_uuid
+The partition UUID (GPT disks).
+.TP
+.BR fs_label ", " fs_type
+For example
+.B BACKUP
+and
+.BR ext4 .
+Labels are not unique.
+.TP
+.B devnode
+For example
+.IR /dev/sdb1 .
+.TP
+.B mountpoint
+For example
+.IR /media/me/BACKUP .
+Present on
+.BR mounted ,
+.BR unmounted ,
+.B removed
+and mounted
+.B startup
+and
+.B shutdown
+events.
+On
+.B removed
+the directory is gone; the value is only text.
+.TP
+.B surprise
+.B 1
+if the filesystem vanished while it was mounted,
+.B 0
+after a clean unmount.
+Present on
+.B unmounted
+and
+.BR removed .
+It can be used in commands but not in tag rules.
+.TP
+.BR drive_vendor ", " drive_model ", " drive_serial
+Those of the physical drive that holds the filesystem.
+.PP
+A property that is missing from a thing (a stick without a serial number, a
+filesystem without a label) simply does not match.
+.B udevmon present
+lists everything present with these values.
+.SH "NAMED AND UNNAMED THINGS"
+A tag rule can select things you never named, for example any ext4 drive that
+someone plugs in.
+That is useful, and it is what \(lqBadUSB\(rq attacks rely on, because the
+properties a rule looks at are chosen by whoever built the device.
+udevmon therefore separates two cases:
+.IP \(bu 3
+A
+.B named
+thing matches one of your
+.B [devices.*]
+tables.
+Every action on its tag runs, whether it got the tag explicitly or through a
+rule.
+.IP \(bu 3
+An
+.B unnamed
+thing matches a tag rule only.
+Only actions with
+.B "allow_unnamed = true"
+run for it.
+.PP
+Naming a device is you vouching for it, and an action has to opt in before it
+may run for hardware you have not vetted.
+.PP
+.nf
+[[actions]]
+tag = "storage"
+on = ["mounted"]
+allow_unnamed = true     # also runs for drives I never named
+run = ["notify\-send", "Drive mounted"]
+
+[[actions]]
+tag = "storage"
+on = ["mounted"]
+allow_unnamed = false    # named devices only (the default)
+run = ["~/bin/backup.sh", "{mountpoint}"]
+.fi
+.PP
+Points to know:
+.IP \(bu 3
+.B allow_unnamed
+only widens who may trigger an action; a named device is never restricted by
+it.
+.IP \(bu 3
+Left out, the action behaves as false, and
+.B udevmon check
+prints a note for actions on rule tags so that you choose on purpose.
+.IP \(bu 3
+Keep
+.B allow_unnamed
+actions harmless (notifications, logging): they run on hardware whose labels,
+model names and serial numbers are chosen by its maker, so do not let them read or
+run anything from it.
+.B check
+warns when such an action puts those values in its command, or uses
+.BR {device} ,
+which does not exist for unnamed things.
+.IP \(bu 3
+Trust belongs to each thing, not to the whole stick.
+A stick is a USB device and a filesystem; if you named only the filesystem,
+its USB device is still unnamed.
+.IP \(bu 3
+.B startup
+and
+.B shutdown
+follow the same rules, so an allowed action on a broad rule fires once for
+every matching thing that is present, including system filesystems.
+.SH "HOW COMMANDS ARE RUN"
+.IP \(bu 3
+.B run
+is never passed to a shell: there are no pipes, globbing or variable expansion in
+the command itself.
+If you need a shell, ask for one:
+.IP
+.nf
+run = ["sh", "\-c", 'cd "$1" && ls | wc \-l >> ~/count.log',
+       "sh", "{mountpoint}"]
+.fi
+.IP \(bu 3
+A leading
+.B ~
+in an argument is replaced by your home directory.
+.IP \(bu 3
+.BI { name }
+in an argument is replaced by the value of a property (see
+.BR PROPERTIES ),
+and also by
+.BR {event} ,
+.B {device}
+(the name of the named device; not available for unnamed things) and
+.B {tag}
+(tag actions only).
+The value is always one argument, so spaces or shell characters in a mount
+point cannot break out of the command.
+.IP \(bu 3
+Only
+.B {lowercase_names}
+are placeholders.
+Other braces
+.RB ( ${HOME} ,
+.BR "awk '{print $1}'" )
+are left alone.
+Write
+.B {{
+or
+.B }}
+for a literal brace.
+.IP \(bu 3
+If a placeholder is not available for the event (for example
+.B {mountpoint}
+on
+.BR connected ),
+.B udevmon check
+reports it.
+If it is missing at run time (for example
+.B {fs_label}
+on an unlabelled filesystem), the action is skipped with an error rather than
+run with an empty value.
+.IP \(bu 3
+The same information is in the environment:
+.BR UDEVMON_EVENT ,
+.B UDEVMON_DEVICE
+(when the thing is named),
+.B UDEVMON_TAG
+(tag actions) and
+.BI UDEVMON_ PROPERTY
+for every property, for example
+.BR UDEVMON_MOUNTPOINT ,
+.B UDEVMON_SERIAL
+and
+.BR UDEVMON_SURPRISE .
+Your own environment is passed on too.
+.IP \(bu 3
+Commands run as you, with your home directory as the working directory and no
+standard input.
+Their output goes to the log (the journal, under systemd).
+.IP \(bu 3
+Several actions for one event run one after another, in file order.
+A failing action does not stop the next.
+.IP \(bu 3
+The daemon looks for the program with its own
+.BR PATH ,
+which under systemd is often shorter than your shell's.
+Use full paths in
+.BR run .
+.SH VALIDATION
+.B udevmon check
+and the daemon load the file with the same rules.
+The file cannot be loaded (an
+.B error:
+and exit status 1, or
+.B "invalid config"
+in the log) when:
+.IP \(bu 3
+a key is unknown, a name is not made of letters, digits,
+.BR _ ,
+.B .
+and
+.BR \- ,
+or a name is used twice for actions;
+.IP \(bu 3
+a device has no
+.B match
+or a non\-string value, or a
+.B status
+other than the three allowed;
+.IP \(bu 3
+an action names a device that does not exist, has both or neither of
+.B device
+and
+.BR tag ,
+uses
+.B allow_unnamed
+with
+.BR device ,
+lists a bad event, has an empty
+.BR run ,
+an invalid
+.BR timeout ,
+or a placeholder that is not available for one of its events;
+.IP \(bu 3
+a tag rule uses a key that changes from plug to plug.
+.PP
+Problems that do not stop the file from loading are warnings and notes:
+weak matches, a tag that no device carries and that has no rule (so its action
+never runs), a program that cannot be found or run, disabled things, and
+choices about
+.BR allow_unnamed .
+When a reload finds an invalid file, the daemon logs the error and keeps its old
+configuration.
+.SH EXAMPLE
+.nf
+[daemon]                       # every setting is optional
+debounce = 1.0
+max_workers = 4
+udev_filters = ["usb/usb_device"]
+
+[devices.backup\-disk]
+description = "Weekly backup drive"
+match = { fs_uuid = "3F2A\-91BC" }
+tags = ["backup", "storage"]
+
+[devices.yubikey]
+match = { vendor_id = "1050", product_id = "0407", serial = "A1B2C3D4E5" }
+
+[devices.hub]
+match = { vendor_id = "1d6b", product_id = "0002", port_path = "usb1" }
+status = "ignored"             # nothing runs for it
+
+[tags.storage]                 # a rule tag
+description = "Filesystems I care about"
+match = { fs_type = ["ext4", "exfat"] }
+
+[[actions]]                    # one device
+name = "run\-backup"
+device = "backup\-disk"
+on = ["mounted"]
+run = ["~/bin/backup.sh", "{mountpoint}"]
+timeout = 600
+
+[[actions]]                    # several devices
+device = ["yubikey", "backup\-disk"]
+on = ["connected", "disconnected"]
+run = ["notify\-send", "{device} {event}"]
+
+[[actions]]                    # a tag, including unnamed things
+tag = "storage"
+on = ["mounted"]
+allow_unnamed = true
+run = ["notify\-send", "Drive mounted ({tag})"]
+
+[[actions]]                    # warn about a pulled drive
+device = "backup\-disk"
+on = ["removed"]
+run = ["notify\-send", "\-u", "critical", "Pulled without ejecting"]
+
+[[actions]]                    # act on the kind of unmount
+device = "backup\-disk"
+on = ["unmounted"]
+run = ["sh", "\-c",
+       'if [ "$1" = 1 ]; then echo pulled; else echo ejected; fi',
+       "sh", "{surprise}"]
+.fi
+.SH FILES
+.TP
+.I ~/.config/udevmon/config.toml
+The configuration.
+.TP
+.I ~/.config/udevmon/config.toml.bak
+The previous version, written by every editing command.
+.SH SEE ALSO
+.BR udevmon (1),
+.BR "TOML" " (https://toml.io)"

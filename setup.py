@@ -21,4 +21,10 @@ class build_py_with_version(build_py):
         _scm.write_version_file(Path(self.build_lib) / "udevmon" / "_version.py", VERSION)
 
 
-setup(version=VERSION, cmdclass={"build_py": build_py_with_version})
+setup(
+    version=VERSION,
+    cmdclass={"build_py": build_py_with_version},
+    # a user install puts these under ~/.local/share/man, where `man` looks
+    data_files=[("share/man/man1", ["man/udevmon.1"]),
+                ("share/man/man5", ["man/udevmon.toml.5"])],
+)

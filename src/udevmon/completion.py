@@ -59,7 +59,8 @@ FREE_SLOT_KINDS = {"new"}
 NO_COMPLETION = {("devices", "add"), ("tags", "add")}
 
 # Options that take a value: those completed by _option_value, and free text.
-OPTION_VALUE_DESTS = {"config", "dest", "device", "tag", "match", "prop", "on"}
+OPTION_VALUE_DESTS = {"config", "dest", "device", "tag", "match", "prop", "on",
+                      "add_device", "remove_device", "add_tag", "remove_tag"}
 FREE_TEXT_DESTS = {"name", "timeout", "description", "duration"}
 
 HEADER = "# bash completion for udevmon"   # marks a file as ours (uninstall checks it)
@@ -192,6 +193,16 @@ def _names(kind: str, cfg, positionals=()) -> list[str]:
     return []
 
 
+def _targets(kind: str, cfg, positionals=()) -> list[str]:
+    """The devices or tags an action targets: the named action's, else any action's."""
+    if cfg is None:
+        return []
+    actions = [a for a in cfg.actions if positionals and a.name == positionals[0]] \
+        or cfg.actions
+    names = [n for a in actions for n in (a.devices if kind == "device" else a.tags)]
+    return list(dict.fromkeys(names))
+
+
 def _events(cur: str) -> list[str]:
     """Event kinds, as a comma-separated list: connected,dis<TAB> -> connected,disconnected."""
     head, sep, last = cur.rpartition(",")
@@ -236,6 +247,11 @@ def _option_value(st: _State, cur: str):
     if dest in ("device", "tag"):
         cfg = _config(st.config)
         return WORDS, _startswith(_names("device" if dest == "device" else "tag", cfg), cur)
+    if dest in ("add_device", "add_tag"):
+        cfg = _config(st.config)
+        return WORDS, _startswith(_names(dest[4:], cfg), cur)
+    if dest in ("remove_device", "remove_tag"):
+        return WORDS, _startswith(_targets(dest[7:], _config(st.config), st.positionals), cur)
     if dest == "on":
         return WORDS, _events(cur)
     if dest in ("match", "prop"):

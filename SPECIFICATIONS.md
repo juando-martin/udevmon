@@ -503,6 +503,8 @@ udevmon actions disable|enable NAME...
 udevmon actions set NAME [--allow-unnamed | --named-only
                           | --default-unnamed]
                     [--on EVENTS] [--timeout SECONDS]
+                    [--add-device N ...] [--remove-device N ...]
+                    [--add-tag N ...] [--remove-tag N ...]
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
                                         what would run (§8.4)
 udevmon pause [--for DURATION]          stop every action (§8.5)

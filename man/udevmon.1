@@ -1,0 +1,680 @@
+.\" Manual page for the udevmon command. Keep it in step with the CLI:
+.\" tests/test_manpages.py fails when a command or option is missing here.
+.TH UDEVMON 1 "2026-09-21" "udevmon" "User Commands"
+.SH NAME
+udevmon \- run your own commands when USB devices and filesystems appear or go away
+.SH SYNOPSIS
+.B udevmon
+.RB [ \-\-config
+.IR PATH ]
+.RB [ \-v ]
+.I COMMAND
+.RI [ ARGUMENTS ]
+.br
+.B udevmon \-\-version
+.SH DESCRIPTION
+.B udevmon
+watches USB devices (through udev) and filesystem mounts (through udisks2 on
+the D\-Bus system bus) and runs commands that you define when something
+happens to them: a stick is plugged in, a filesystem is mounted, a drive is
+pulled out without being ejected, and so on.
+It runs entirely as a normal user and needs no root privileges.
+It is one event\-driven process: no polling, and no CPU use when idle.
+.PP
+The configuration is a TOML file, described in
+.BR udevmon.toml (5).
+You edit it by hand or with the commands below, which keep your comments and
+layout.
+.PP
+The concepts:
+.TP
+.B device
+A name you give to one physical USB device or filesystem, with the properties
+that identify it (for example a serial number or a filesystem UUID).
+.TP
+.B event
+What happened:
+.BR connected ,
+.BR disconnected ,
+.BR mounted ,
+.BR unmounted ,
+.BR removed ,
+.B startup
+or
+.BR shutdown .
+.TP
+.B tag
+A label that lets one action cover several devices.
+A tag is either set on devices or selected by a rule on properties.
+.TP
+.B action
+A command to run when an event happens to a device (or to anything with a
+tag).
+.PP
+A typical session: run
+.B udevmon scan
+and plug something in to name it, add an action with
+.BR "udevmon actions add" ,
+try it with
+.BR "udevmon run" ,
+then install the background service with
+.BR "udevmon service install \-\-now" .
+.SH GLOBAL OPTIONS
+Global options go before the command:
+.B udevmon \-\-config my.toml run
+(not after it).
+.TP
+.BI \-\-config " PATH"
+Use this configuration file instead of
+.IR ~/.config/udevmon/config.toml .
+.TP
+.BR \-v ", " \-\-verbose
+Debug logging.
+The daemon then logs why each event did or did not run an action.
+.TP
+.B \-\-version
+Print the version and exit.
+It is taken from git, in the format used by setuptools\-scm, for example
+.BR 0.2.1.dev3+g1a2b3c4d5 .
+.TP
+.BR \-h ", " \-\-help
+Show a short help text.
+Every command and sub\-command accepts it too.
+.SH COMMANDS
+.SS "Running"
+.TP
+.B udevmon run \fR[\fB\-\-dry\-run\fR]
+Run the daemon in the foreground.
+Only one daemon can run per user; a second one exits with
+.RB \(lq "udevmon is already running" \(rq.
+For things already present when it starts, it fires
+.B startup
+events; when it stops normally it fires
+.B shutdown
+events for what is still present, and waits for those actions to finish (up to
+each action's timeout).
+It starts with a line that shows the number of devices and actions, and
+.B [PAUSED]
+if automation is paused.
+.IP
+With
+.B \-\-dry\-run
+the daemon logs what it would run and runs nothing.
+.IP
+See
+.B SIGNALS
+for how to stop and reload it.
+.TP
+.B udevmon reload
+Ask the running daemon to re\-read its configuration.
+It exits with status 1 and the message
+.RB \(lq "udevmon is not running" \(rq
+if there is no daemon.
+Reloading does not fire
+.B startup
+actions again.
+.TP
+.B udevmon service install \fR[\fB\-\-now\fR] [\fB\-\-dest \fIDIR\fR]
+Write a systemd user unit,
+.IR ~/.config/systemd/user/udevmon.service .
+The unit runs
+.B udevmon run
+(with your
+.B \-\-config
+if you gave one), restarts on failure, and is wanted by
+.BR default.target ,
+so it starts with your login session.
+With
+.B \-\-now
+it also enables and starts the service.
+With
+.B \-\-dest
+it only writes the unit file into that directory and never calls
+.BR systemctl .
+.TP
+.B udevmon service uninstall \fR[\fB\-\-dest \fIDIR\fR]
+Stop and disable the service (so its
+.B shutdown
+actions run), delete the unit file and reload systemd.
+Only a file that looks like udevmon's own unit is deleted; anything else is
+reported and left alone.
+Safe to run again.
+With
+.B \-\-dest
+only that file is removed and
+.B systemctl
+is not called.
+Your configuration is never touched.
+.SS "Finding and naming things"
+.TP
+.B udevmon scan \fR[\fB\-\-present\fR] [\fB\-\-no\-prompt\fR]
+Watch events and offer to name what you see.
+Plug something in (or unplug it, or mount a filesystem).
+After a short pause udevmon lists what it saw and asks:
+.IP
+.nf
+Number(s) to name, iN to ignore, Enter = scan on, q = quit:
+.fi
+.IP
+Answer with numbers (\fB1,2\fR) to name several at once.
+For each one udevmon asks for a device name, the properties to match on (Enter
+accepts the suggestion and tells you how strong the match is) and tags.
+Answer
+.B i3
+(or
+.BR i1,3 )
+to save things as ignored devices instead, without asking for tags.
+Press Ctrl+C to leave; the answer
+.B q
+works only at the number prompt.
+.IP
+A physical stick usually shows up twice, as a USB device and as one or more
+filesystems.
+Name the USB device to react to it being plugged in, and the filesystem to
+react to it being mounted.
+.IP
+.B \-\-present
+also offers devices and filesystems that are already present.
+.B \-\-no\-prompt
+only prints the events.
+.TP
+.B udevmon present \fR[\fB\-\-all\fR]
+List the USB devices and filesystems that are present now, with their
+properties, how strongly each could be matched (strong, medium or weak), whether
+it is named, and which tags it has.
+System filesystems are left out unless
+.B \-\-all
+is given.
+.TP
+.B udevmon explain \fR[\fIEVENT\fR] [\fB\-\-device \fINAME\fR] [\fB\-\-prop \fIKEY=VALUE\fR ...] [\fB\-\-all\fR]
+Show what would run, without plugging anything in.
+It applies the same rules as the daemon (named or unnamed, tags,
+.BR allow_unnamed ,
+status, pause) and prints each command with its values filled in.
+For an action that would not run it says why.
+.IP
+With no options it examines everything present now.
+.I EVENT
+limits the output to one event.
+.B \-\-device
+simulates that named device;
+.B \-\-prop
+adds a property to the simulated thing and can be repeated, which lets you try
+an unnamed drive against a tag rule without owning one.
+Only the properties you give are known.
+Things that match no device and no tag are left out (a count says how many);
+.B \-\-all
+lists them and system filesystems too.
+.TP
+.B udevmon check
+Validate the configuration file.
+It prints
+.B error:
+lines and exits with status 1 for a file that cannot be used, and otherwise
+prints
+.B warning:
+lines (weak matches, a tag nothing uses, a program that is not found in
+.B PATH
+or not executable, a hardware\-supplied value in an
+.B allow_unnamed
+action), then
+.B note:
+lines, and ends with
+.BR "OK: N device(s), N tag rule(s), N action(s)" .
+.SS "Devices"
+.TP
+.B udevmon devices list
+List the named devices, with strength, match, tags, status and the number of
+actions that use each.
+.TP
+.B udevmon devices show \fINAME\fR
+Show one device: match, strength, status, tags and its actions.
+.TP
+.B udevmon devices add \fINAME\fR \fB\-\-match \fIKEY=VALUE\fR ... [\fB\-\-tag \fITAG\fR ...] [\fB\-\-description \fITEXT\fR]
+Add a device without scanning.
+.B \-\-match
+is required and can be repeated for several keys; a device match is exact, so
+repeating a key is an error.
+.B \-\-tag
+sets an explicit tag (repeatable).
+It prints a warning if the match is weak.
+.TP
+.B udevmon devices remove \fINAME\fR
+Remove a device.
+Refused while an action names it.
+.TP
+.B udevmon devices tag \fINAME TAG\fR...
+Add explicit tags to a device.
+.TP
+.B udevmon devices untag \fINAME TAG\fR...
+Remove explicit tags from a device.
+.TP
+.B udevmon devices set \fINAME\fR [\fB\-\-match \fIKEY=VALUE\fR ...] [\fB\-\-description \fITEXT\fR]
+Replace the device's whole match, and/or its description (an empty text
+removes it).
+A comment after the old
+.B match
+value is kept.
+.TP
+.B udevmon devices rename \fIOLD NEW\fR
+Rename a device everywhere it is used (see
+.BR RENAMING ).
+.TP
+.B udevmon devices disable \fINAME\fR...
+Turn off the device's own actions (the ones that name it).
+Actions that reach it through a tag still run.
+.TP
+.B udevmon devices ignore \fINAME\fR...
+Run nothing at all for the device, however an action would reach it.
+.TP
+.B udevmon devices enable \fINAME\fR...
+Back to normal: clears
+.B disabled
+or
+.BR ignored .
+.PP
+.BR disable ,
+.B ignore
+and
+.B enable
+take several names and change nothing unless all of them exist.
+A disabled or ignored device still counts as named, so it never falls back into
+the unnamed category.
+.SS "Tags"
+.TP
+.B udevmon tags list
+List the tags: declared rules and tags set on devices, with their members and
+the number of actions that use each.
+.TP
+.B udevmon tags show \fINAME\fR
+Show what a tag contains and which actions use it.
+.TP
+.B udevmon tags add \fINAME\fR [\fB\-\-match \fIKEY=VALUE\fR ...] [\fB\-\-description \fITEXT\fR]
+Declare a tag, optionally with a rule.
+Repeating a key builds a list meaning \(lqany of\(rq:
+.BR "\-\-match fs_type=ext4 \-\-match fs_type=exfat" .
+Rules cannot use properties that change from plug to plug
+.RB ( mountpoint ,
+.BR devnode ,
+.BR syspath ,
+.B surprise
+and a few raw udev ones).
+.TP
+.B udevmon tags remove \fINAME\fR
+Remove a declared tag.
+Refused while an action uses it.
+.TP
+.B udevmon tags rename \fIOLD NEW\fR
+Rename a tag wherever it is used.
+.SS "Actions"
+.TP
+.B udevmon actions list
+List the actions with their targets, events and command.
+.TP
+.B udevmon actions add (\-\-device \fINAME\fR ... | \-\-tag \fINAME\fR ...) \fIEVENT\fR[,\fIEVENT\fR...] [\fB\-\-name \fINAME\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR] \-\- \fICOMMAND\fR [\fIARG\fR...]
+Add an action.
+Options go before the
+.BR \-\- ;
+everything after it is the command, verbatim.
+.B \-\-device
+and
+.B \-\-tag
+can be repeated, and an action has devices or tags, never both.
+.I EVENT
+is one or more of
+.BR connected ,
+.BR disconnected ,
+.BR mounted ,
+.BR unmounted ,
+.BR removed ,
+.B startup
+and
+.BR shutdown ,
+separated by commas.
+The timeout defaults to 60 seconds.
+.B \-\-allow\-unnamed
+and
+.B \-\-named\-only
+(only with
+.BR \-\-tag )
+choose whether the action also runs for things that match a tag rule but that
+you never named.
+Without a name, the action is called after its first target and its position
+in the file (for example
+.BR backup\-disk\-2 ).
+.TP
+.B udevmon actions remove \fINAME\fR
+Remove an action.
+An action created by hand without a
+.B name
+line cannot be removed this way; edit the file.
+.TP
+.B udevmon actions set \fINAME\fR [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR | \fB\-\-default\-unnamed\fR] [\fB\-\-on \fIEVENTS\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-add\-device \fINAME\fR ...] [\fB\-\-remove\-device \fINAME\fR ...] [\fB\-\-add\-tag \fINAME\fR ...] [\fB\-\-remove\-tag \fINAME\fR ...]
+Change an action without removing and adding it again.
+.B \-\-on
+replaces the events (comma\-separated).
+.B \-\-default\-unnamed
+removes the
+.B allow_unnamed
+line, so the action behaves as named\-only and
+.B check
+notes it again if its tag has a rule.
+The three
+.B unnamed
+options apply only to actions that use a tag.
+.IP
+.BR \-\-add\-device ,
+.BR \-\-remove\-device ,
+.B \-\-add\-tag
+and
+.B \-\-remove\-tag
+change what the action targets.
+They can be repeated and combined with the other options.
+An action targets devices or tags, never both, so the device options work on
+actions that use
+.B device
+and the tag options on actions that use
+.BR tag .
+A device that is added must exist; a tag needs no declaration.
+Removing something the action does not target is an error, and so is removing
+its last target (use
+.B actions remove
+for that).
+Adding what is already there changes nothing.
+A single name stays a plain string, a list is edited in place, and comments and
+layout are kept.
+.TP
+.B udevmon actions disable \fINAME\fR...
+Stop actions from running without deleting them
+.RB ( "enabled = false" ).
+.TP
+.B udevmon actions enable \fINAME\fR...
+Let disabled actions run again.
+.TP
+.B udevmon actions rename \fIOLD NEW\fR
+Give an action a new name.
+.SS "Pausing"
+.TP
+.B udevmon pause \fR[\fB\-\-for \fIDURATION\fR]
+Stop every action without touching the configuration.
+.I DURATION
+is a number followed by a unit, or several of them:
+.BR 90s ,
+.BR 30m ,
+.BR 2h ,
+.BR 1d ,
+.BR 1h30m .
+Without it the pause lasts until
+.BR "udevmon resume" .
+While paused nothing runs, not even
+.B startup
+and
+.B shutdown
+actions; events during the pause are logged but not replayed afterwards.
+It works when no daemon is running, and applies once one starts.
+See
+.B FILES
+for where the pause is kept.
+.TP
+.B udevmon resume
+Let actions run again.
+.SS "Shell completion"
+.TP
+.B udevmon completion bash
+Print the bash completion script.
+For a one\-off use:
+.BR "source <(udevmon completion bash)" .
+.TP
+.B udevmon completion install \fR[\fB\-\-dest \fIFILE\fR]
+Write the script to
+.I ~/.local/share/bash\-completion/completions/udevmon
+(or under
+.BR $XDG_DATA_HOME ).
+Open a new terminal to use it.
+The location is loaded automatically when the
+.B bash\-completion
+package is installed.
+.TP
+.B udevmon completion uninstall \fR[\fB\-\-dest \fIFILE\fR]
+Remove the installed script, if it is udevmon's own.
+.PP
+Completion knows the commands, options and (from your configuration) device,
+tag and action names, event lists and
+.B \-\-match
+keys.
+It reads the file given with
+.B \-\-config
+if there is one, and a missing or unsafe file just means no names.
+Each TAB runs udevmon once and does not touch udev or D\-Bus.
+.SH EDITING COMMANDS
+The commands that change the configuration (the
+.BR devices ,
+.B tags
+and
+.B actions
+sub\-commands other than
+.B list
+and
+.BR show ,
+and
+.B scan
+when it saves a device) share these behaviours:
+.IP \(bu 3
+Existing entries are edited with the
+.B tomlkit
+library, so comments, layout and order are kept, and CRLF line endings stay.
+New entries are appended as text.
+The previous version of the file is saved as
+.IR config.toml.bak .
+.IP \(bu 3
+A running daemon that uses the same configuration file is told to reload, and
+the command prints
+.BR "Reloaded the running daemon." .
+A daemon that uses another file is left alone.
+.B \-\-no\-reload
+skips this.
+Commands that only add or remove entries do not need
+.BR tomlkit ;
+commands that change an existing entry do, and say how to install it if it is
+missing.
+.IP \(bu 3
+They say when automation is paused.
+.IP \(bu 3
+If the result cannot be written correctly the file is left as it was, and the
+message names what it could not find.
+.SS RENAMING
+.BR "devices rename" ,
+.B tags rename
+and
+.B actions rename
+change the name everywhere it is used: the table header and its sub\-tables,
+the
+.B device
+or
+.B tag
+of every action, and the
+.B tags
+of devices.
+Comments and layout are kept.
+Before writing, udevmon checks that the result is exactly the old
+configuration with only that name changed, in the same order; if not, nothing is
+written.
+The command reports what it updated, actions whose made\-up name changed, and
+the comments, descriptions and commands that still mention the old name, which
+it leaves alone.
+A device written with dotted keys under
+.B [devices]
+instead of its own table cannot be renamed, and an action without a
+.B name
+line has to be given one first.
+.SH SIGNALS
+.TP
+.B SIGHUP
+Reload the configuration (what
+.B udevmon reload
+sends).
+If the new file is invalid, the error is logged and the daemon keeps running
+with the old configuration.
+.TP
+.BR SIGTERM ", " SIGINT
+Stop normally: run the
+.B shutdown
+actions, wait for running actions to finish (up to their timeouts) and exit.
+.PP
+Shutdown actions do not run after
+.B SIGKILL
+or a crash, or if the machine loses power.
+.SH FILES
+.TP
+.I ~/.config/udevmon/config.toml
+The configuration.
+The directory is
+.B $XDG_CONFIG_HOME/udevmon
+if that variable is set.
+The file must be owned by you and not writable by group or others; udevmon
+refuses to load it otherwise (\c
+.BR "chmod go\-w" ).
+.TP
+.I ~/.config/udevmon/config.toml.bak
+The previous version, written by every editing command.
+.TP
+.I $XDG_RUNTIME_DIR/udevmon.lock
+Held by the running daemon.
+Line one is its process ID, line two the resolved path of its configuration.
+.TP
+.I $XDG_RUNTIME_DIR/udevmon.paused
+Exists while automation is paused.
+It is empty (until resumed) or holds the time the pause ends.
+It survives a daemon restart but not a logout or reboot.
+If
+.B XDG_RUNTIME_DIR
+is not set, these files are in
+.IR /tmp/udevmon\-UID .
+.TP
+.I ~/.config/systemd/user/udevmon.service
+The unit written by
+.BR "service install" .
+.TP
+.I ~/.local/share/bash\-completion/completions/udevmon
+The completion script written by
+.BR "completion install" .
+.SH ENVIRONMENT
+.TP
+.B XDG_CONFIG_HOME
+Base of the configuration and systemd unit directories.
+.TP
+.B XDG_DATA_HOME
+Base of the completion script directory.
+.TP
+.B XDG_RUNTIME_DIR
+Where the lock and pause files are kept.
+.PP
+Commands started by actions receive your environment plus
+.BR UDEVMON_EVENT ,
+.B UDEVMON_DEVICE
+(when the thing is named),
+.B UDEVMON_TAG
+(tag actions) and one
+.BI UDEVMON_ PROPERTY
+per property, for example
+.B UDEVMON_MOUNTPOINT
+and
+.BR UDEVMON_SURPRISE .
+See
+.BR udevmon.toml (5).
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+An error: an invalid or unsafe configuration, a name that does not exist, an
+edit that could not be made,
+.B reload
+with no daemon running, and so on.
+The message goes to standard error (for
+.BR check ,
+to standard output).
+.SH EXAMPLES
+Name a stick and react to it being mounted:
+.PP
+.nf
+udevmon scan
+udevmon actions add \-\-device backup\-disk mounted \e
+  \-\- notify\-send "Backup disk ready" "{mountpoint}"
+udevmon \-v run
+.fi
+.PP
+Run in the background:
+.PP
+.nf
+udevmon service install \-\-now
+journalctl \-\-user \-u udevmon \-f
+.fi
+.PP
+Warn when a drive is pulled out without being ejected:
+.PP
+.nf
+udevmon actions add \-\-device backup\-disk removed \e
+  \-\- notify\-send \-u critical "Pulled without ejecting" "{fs_label}"
+.fi
+.PP
+One action for every ext4 or exfat drive, and a backup only for the ones you
+named and tagged:
+.PP
+.nf
+udevmon tags add storage \-\-match fs_type=ext4 \-\-match fs_type=exfat
+udevmon actions add \-\-tag storage mounted \-\-allow\-unnamed \e
+  \-\- notify\-send "Drive mounted: {tag}"
+udevmon devices tag backup\-disk backup
+udevmon actions add \-\-tag backup mounted \-\-named\-only \e
+  \-\- ~/bin/backup.sh "{mountpoint}"
+.fi
+.PP
+See what would run for a simulated unnamed drive:
+.PP
+.nf
+udevmon explain mounted \-\-prop fs_type=ext4 \e
+  \-\-prop mountpoint=/media/x
+.fi
+.PP
+Stop everything for half an hour:
+.PP
+.nf
+udevmon pause \-\-for 30m
+.fi
+.SH SECURITY
+Running commands when hardware appears is convenient and a classic attack
+vector.
+udevmon never passes a command through a shell and passes each value as one
+argument, so a hostile label cannot break out of the command line.
+It refuses a configuration that is not yours or is writable by others, warns
+about weak matches, and runs actions for things you have not named only when the
+action sets
+.BR "allow_unnamed = true" .
+Prefer serial numbers and UUIDs, which anyone can imitate less easily than a
+vendor and product ID, and keep
+.B allow_unnamed
+actions harmless.
+See
+.BR udevmon.toml (5).
+.SH LIMITATIONS
+Events are seen only while your session is running and udevmon is started, and
+missed events are not replayed (apart from
+.BR startup ).
+Filesystem events come from udisks2, so mounts done with
+.B sudo mount
+are not seen.
+Only USB devices and udisks2 filesystems are supported out of the box; other
+udev filters are experimental.
+Tags mean \(lqany of\(rq only, and rule values are exact strings, with no
+wildcards.
+.SH BUGS
+None known beyond the limitations above.
+.SH SEE ALSO
+.BR udevmon.toml (5),
+.BR udev (7),
+.BR udisks (8),
+.BR udisksctl (1),
+.BR systemd.service (5),
+.BR systemctl (1)
