@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -333,6 +334,32 @@ def _advise(cfg: Config) -> None:
                                      "trigger this action")
     for t in sorted(carried - used):
         cfg.notes.append(f"tag {t!r} is set on devices but no action uses it")
+
+
+def command_problems(cfg: Config, path: str | None = None) -> list[str]:
+    """Actions whose program cannot be run, judged with PATH (default: this process's).
+
+    The daemon calls this with its own environment, which for a systemd service
+    is often shorter than a login shell's PATH.
+    """
+    problems = []
+    for a in cfg.actions:
+        prog = os.path.expanduser(a.run[0])
+        if "{" in prog:                          # decided at run time
+            continue
+        if "/" in prog:
+            if not os.path.exists(prog):
+                what = f"{prog!r} does not exist"
+            elif not (os.path.isfile(prog) and os.access(prog, os.X_OK)):
+                what = f"{prog!r} is not an executable file"
+            else:
+                continue
+        elif shutil.which(prog, path=path) is None:
+            what = f"{prog!r} was not found in PATH"
+        else:
+            continue
+        problems.append(f"action {a.name!r}: command {what}")
+    return problems
 
 
 def check_permissions(path: Path) -> None:

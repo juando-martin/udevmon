@@ -335,6 +335,11 @@ printed by `check` only. Neither changes the exit status.
   hardware-supplied values (anything other than `event`, `tag`, `devnode`,
   `syspath`, `port_path`, `subsystem`, `devtype`);
 - warning: a device `match` that uses a volatile key;
+- warning: an action whose program cannot be run (`run[0]`, with `~` expanded, is not
+  found in `PATH`, does not exist, or is not an executable file; skipped when it
+  contains a placeholder). This depends on the environment, so it is computed
+  by `config.command_problems()` and not stored in `Config.warnings`: `check`
+  uses the shell's `PATH`, the daemon logs it at start and on reload with its own;
 - note: an action on a tag with a rule (any of its tags) where `allow_unnamed` is absent — "runs only
   for named devices in tag X; set `allow_unnamed` to choose";
 - note: an `allow_unnamed = true` action on a tag whose rule is not strong — "any
@@ -344,11 +349,16 @@ printed by `check` only. Neither changes the exit status.
 ## 7. Daemon (`udevmon run`)
 
 - Single instance (`flock` on `$XDG_RUNTIME_DIR/udevmon.lock`, which also
-  stores the PID).
+  stores the PID on the first line and the resolved config path on the second).
 - Starts sources, primes caches, emits `startup` events for things already present
   (udisks ones once it attaches), then loops.
 - `SIGHUP`: re-read config; on error keep the old config and log. Changes to
-  `udev_filters` need a restart (logged).
+  `udev_filters` need a restart (logged). Warnings (§6.2) are logged again.
+- The editing CLI commands, and `scan` after saving a device, send `SIGHUP` to the
+  running daemon when its recorded config is the same file as theirs (compared
+  after resolving symlinks; a daemon whose config is unknown, from an older lock
+  file, is assumed to match). They print `Reloaded the running daemon.`
+  `--no-reload` skips it. A daemon running another config is left alone.
 - `SIGTERM`/`SIGINT`: emit `shutdown` events, wait for those actions (bounded by each
   action's `timeout`), stop cleanly.
 - For each event, in this order:
@@ -383,7 +393,6 @@ printed by `check` only. Neither changes the exit status.
 ## 8. CLI
 
 ```
-```
 udevmon run [--dry-run] [-v]            run the daemon
 udevmon scan [--no-prompt] [--present]  scan mode (below)
 udevmon present [--all]                 list what is present now, with
@@ -402,6 +411,8 @@ udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT ...]
                     [--name NAME] [--timeout SECONDS]
                     [--allow-unnamed | --named-only] -- COMMAND [ARG ...]
 udevmon actions remove NAME
+udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
+                                        what would run (§8.4)
 udevmon check                           validate: errors, warnings, notes
 udevmon reload                          SIGHUP the running daemon
 udevmon service install [--now] [--dest DIR]
@@ -415,9 +426,11 @@ udevmon completion install [--dest FILE]
 udevmon completion uninstall [--dest FILE]
                                         remove the installed script
 ```
-```
 
 Global: `--config PATH`, `-v`.
+
+The editing commands (`devices add|remove|tag|untag`, `tags add|remove`,
+`actions add|remove`) also take `--no-reload` (§7).
 
 - `--match KEY=VALUE` may be repeated. On `tags add`, repeating a key builds a
   list (`--match fs_type=ext4 --match fs_type=exfat` → `["ext4", "exfat"]`); on
@@ -501,6 +514,33 @@ calls `systemctl`, mirroring `install --dest`. It removes only a file that conta
 missing unit is reported and exits 0, and a missing `systemctl` is ignored. The
 config is never touched.
 
+### 8.4 Explain
+
+`udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]` reports what
+the daemon would do, without side effects. It uses the engine's `plan(event)`, which
+runs the same resolution and selection as the daemon (§5.5, §7 steps 1 and 2) but
+does not debounce or run anything, and also returns the actions the gate skipped
+with the reason.
+
+- **Without `--device`/`--prop`:** every USB device and filesystem present now (the
+  same snapshot as `present`; `--all` adds system filesystems). For each thing: a
+  header (description, `device:` or `unnamed`, `tags:`), then, for each event kind
+  that fits it (`connected`, `disconnected` for USB; `mounted`, `unmounted` for
+  filesystems; `startup` and `shutdown` for both), the actions that would run
+  (`runs 'NAME' (device X | tag T[, unnamed])`, followed by the command with its
+  placeholders expanded, or `cannot run here: {name} is not available`) and the
+  ones skipped (`skips 'NAME': reason`). Kinds with nothing to say are collapsed
+  into `nothing to run for: ...`. An `EVENT` argument limits the report to that kind
+  and to the things it applies to.
+- **Things that match no device and no tag** cannot trigger anything, so they are
+  omitted, with a count; `--all` lists them.
+- **With `--device NAME` and/or `--prop`:** a simulated thing whose properties are the
+  device's `match` keys plus the `--prop` pairs (a repeated key is an error). It is a
+  filesystem when `EVENT` is `mounted`/`unmounted`, a USB device for
+  `connected`/`disconnected`, else decided by whether it has filesystem properties.
+  Only the given properties are known, which the output says.
+- Exit status 0, or 1 for an unknown device or a malformed `--prop`.
+
 ## 9. Resource expectations
 
 Event-driven; idle CPU ≈ 0 with no timers. Resident memory ≈ 20–35 MB.
@@ -548,12 +588,12 @@ No disk I/O apart from reading the config.
 pyproject.toml
 setup.py                          version from git (§13.1)
 src/udevmon/{__init__,__main__,cli,config,configedit,events,matching,
-             engine,actions,daemon,scan,service,completion,_scm}.py
+             engine,actions,daemon,scan,service,completion,explain,_scm}.py
 src/udevmon/sources/{__init__,udev,udisks}.py
 tests/…   (unittest)
 ```
 
-`completion.py` holds the shell completion (§8.2).
+`completion.py` holds the shell completion (§8.2); `explain.py` the report of §8.4.
 `matching.py` holds device matching, tag rules, strength and the resolver
 (§5.5); `config.py` the loader, validation, warnings and notes.
 
@@ -579,7 +619,9 @@ Tests build throwaway repositories for each case above. The outputs were also
 compared with the real setuptools-scm 10.2.3 on 19 repository states and were
 identical.
 
-Automated tests cover: service and completion uninstall (never touching the real
+Automated tests cover: auto-reload and the lock file, the missing-program check,
+`explain` and the engine's `plan()`, the docs' renderability (balanced code fences,
+code lines that fit an 80-column glow), service and completion uninstall (never touching the real
 systemd), shell completion (engine, helper protocol, the real
 bash function, and a guard that fails when a command, positional argument or
 value option of the CLI is not covered by the completion tables), config parsing/validation (including the error, warning

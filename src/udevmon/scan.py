@@ -145,6 +145,9 @@ class Scanner:
             print(f"Could not save: {e}")
             return False
         print(f"Saved device {name!r} to {self.config_path}")
+        from .daemon import reload_running
+        if reload_running(self.config_path):
+            print("Reloaded the running daemon.")
         print("Add an action with e.g.:\n  udevmon actions add --device "
               f"{name} {'mounted' if endpoint.is_filesystem else 'connected'} "
               "-- notify-send 'hello'")

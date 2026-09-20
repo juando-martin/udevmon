@@ -36,16 +36,17 @@ POSITIONALS = {
     ("tags", "remove"): ["declared-tag"],
     ("actions", "remove"): ["action"],
     ("actions", "add"): ["events"],
+    ("explain",): ["event"],
 }
 
 # Every kind a positional slot above may use (tests check these tables against the CLI).
-SLOT_KINDS = {"device", "tag", "declared-tag", "action", "device-tag", "events"}
+SLOT_KINDS = {"device", "tag", "declared-tag", "action", "device-tag", "events", "event"}
 
 # Commands whose positional arguments are deliberately not completed (a new name).
 NO_COMPLETION = {("devices", "add"), ("tags", "add")}
 
 # Options that take a value: those completed by _option_value, and free text.
-OPTION_VALUE_DESTS = {"config", "dest", "device", "tag", "match"}
+OPTION_VALUE_DESTS = {"config", "dest", "device", "tag", "match", "prop"}
 FREE_TEXT_DESTS = {"name", "timeout", "description"}
 
 HEADER = "# bash completion for udevmon"   # marks a file as ours (uninstall checks it)
@@ -222,7 +223,7 @@ def _option_value(st: _State, cur: str):
     if dest in ("device", "tag"):
         cfg = _config(st.config)
         return WORDS, _startswith(_names("device" if dest == "device" else "tag", cfg), cur)
-    if dest == "match":
+    if dest in ("match", "prop"):
         keys = RULE_KEYS if path == ("tags", "add") else MATCH_KEYS
         return NOSPACE, _startswith([k + "=" for k in keys], cur)
     return WORDS, []                     # free text: --name, --timeout, --description
@@ -239,6 +240,8 @@ def _positional(st: _State, cur: str, cfg):
     kind = slot.rstrip("*")
     if kind == "events":
         return WORDS, _events(cur)
+    if kind == "event":
+        return WORDS, _startswith(sorted(VALID_KINDS), cur)
     return WORDS, _startswith(_names(kind, cfg, st.positionals), cur)
 
 

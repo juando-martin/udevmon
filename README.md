@@ -391,6 +391,38 @@ Things to know:
 - `udevmon present` shows, for everything plugged in now, whether it is named and which
   tags it has, which is the quickest way to check a rule.
 
+## Checking what will run
+
+`udevmon explain` answers "what would happen if this were plugged in?"
+without plugging anything in. It applies the same rules as the daemon (named or
+unnamed, tags, `allow_unnamed`) and shows the commands with their values filled
+in.
+
+```
+udevmon explain                     # everything plugged in now
+udevmon explain mounted             # only what "mounted" would do
+udevmon explain connected --device stick
+udevmon explain mounted --prop fs_type=ext4 \
+  --prop mountpoint=/media/x
+```
+
+With `--device NAME` it simulates that named device; `--prop KEY=VALUE` adds
+properties (repeat it), so you can try an unnamed ext4 drive against a rule
+without owning one. Only the properties you give are known. The output looks
+like this:
+
+```
+Filesystem X (ext4) at /media/x   unnamed   tags: storage
+  mounted       runs 'open' (tag storage, unnamed)
+                  notify-send 'mounted /media/x'
+  mounted       skips 'closed': an unnamed thing, and the action
+                does not set allow_unnamed = true
+  nothing to run for: unmounted, startup, shutdown
+```
+
+Things that match no device and no tag are left out (a count says how many);
+`--all` lists them, and system filesystems too.
+
 ## Configuration file
 
 The file is `~/.config/udevmon/config.toml` (respects `$XDG_CONFIG_HOME`). Use
@@ -398,8 +430,18 @@ The file is `~/.config/udevmon/config.toml` (respects `$XDG_CONFIG_HOME`). Use
 subcommand: `udevmon --config my.toml run`.
 
 You can edit it by hand or through the CLI. CLI edits keep your comments and
-formatting, and save the previous version as `config.toml.bak`. After
-editing by hand, run `udevmon check`, then `udevmon reload`.
+formatting, and save the previous version as `config.toml.bak`.
+
+- **CLI edits reload the daemon for you.** After `devices add`, `actions
+  remove` and the other editing commands (and after `scan` saves a device),
+  a running daemon that uses the same config file picks the change up right
+  away, and the command says `Reloaded the running daemon.` A daemon that
+  uses a different config file is left alone. Add `--no-reload` to skip it.
+- **After editing by hand,** run `udevmon check`, then `udevmon reload`.
+- `udevmon check` also warns when an action's program can't be found or isn't
+  executable (say, a mistyped script path). The daemon logs the same warning
+  when it starts and on every reload, using *its own* `PATH`, which under
+  systemd is often shorter than your shell's.
 
 ```toml
 [daemon]                       # every setting here is optional
@@ -481,7 +523,6 @@ use letters, digits, `_`, `.` and `-`.
 ## Command reference
 
 ```
-```
 udevmon scan [--present] [--no-prompt]  watch events and name things
 udevmon present [--all]                 list what is plugged in now
 udevmon devices list | show NAME | remove NAME
@@ -495,6 +536,8 @@ udevmon actions list | remove NAME
 udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT...]
                     [--name NAME] [--timeout S]
                     [--allow-unnamed | --named-only] -- COMMAND...
+udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
+                                        what would run (see above)
 udevmon check                           validate the config
 udevmon run [--dry-run]                 run the daemon in the foreground
 udevmon reload                          make the running daemon reload
@@ -503,9 +546,10 @@ udevmon service uninstall               stop and remove it
 udevmon completion bash | install | uninstall
                                          bash tab completion
 ```
-```
 
 Global options, placed before the subcommand: `--config PATH`, `-v` (debug logging).
+The editing commands (`devices`, `tags`, `actions`: add, remove, tag, untag)
+also take `--no-reload`.
 
 Manual device creation, without scanning:
 
@@ -594,11 +638,17 @@ trust the *contents* of the device without care.
   properties differ from what you saved. Compare with `udevmon present` or
   `udevmon scan`. Remember that a stick appears as both a USB device and a
   filesystem, and a device matches only one of those.
-- **A tag action doesn't run for a drive I plugged in.** Check `udevmon present`: it
-  shows whether the thing is `unnamed` or a named `device:` and which `tags:` it has. An
-  unnamed thing runs only actions with `allow_unnamed = true`; a thing with no tags
-  matches no tag action at all. `udevmon -v run` logs why an action was skipped, and
-  `udevmon check` explains the notes about `allow_unnamed`.
+- **An action doesn't run when I expect it to.** Run `udevmon explain`. It
+  shows, for everything plugged in now, whether the thing is `unnamed` or a
+  named `device:`, which `tags:` it has, and which actions would run or be
+  skipped, with the reason. An unnamed thing runs only actions with
+  `allow_unnamed = true`, and a thing with no tags matches no tag action at
+  all. `udevmon -v run` logs the same reasons, and `udevmon check` explains
+  the notes about `allow_unnamed`.
+- **The daemon says a command was not found.** It checked with its own
+  `PATH`. Under systemd that is often shorter than your shell's, so use the
+  full path to the program in `run`, or put the directory on the service's
+  `PATH`.
 - **Filesystem events never fire.** Check that udisks2 is running
   (`systemctl status udisks2`) and that the drive is mounted through it (for
   example by your desktop's automounter or `udisksctl mount`). Mounts done

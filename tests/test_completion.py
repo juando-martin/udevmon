@@ -140,6 +140,21 @@ class EngineTests(unittest.TestCase):
                          ["connected,disconnected"])
         self.assertNotIn("mounted,mounted", self.words("udevmon actions add --tag t mounted,"))
 
+    def test_explain(self):
+        self.assertIn("explain", self.words("udevmon "))
+        self.assertEqual(self.words("udevmon explain mo"), ["mounted"])
+        self.assertIn("connected", self.words("udevmon explain "))
+        self.assertEqual(self.words("udevmon explain --device s"), ["stick"])
+        self.assertEqual(self.comp("udevmon explain --prop fs_t"), (NOSPACE, ["fs_type="]))
+        self.assertIn("mountpoint=", self.comp("udevmon explain --prop ")[1])   # any property
+        self.assertEqual(set(self.words("udevmon explain --")),
+                         {"--device", "--prop", "--all", "--help"})
+
+    def test_no_reload_flag(self):
+        self.assertIn("--no-reload", self.words("udevmon devices add --"))
+        self.assertIn("--no-reload", self.words("udevmon actions remove --"))
+        self.assertNotIn("--no-reload", self.words("udevmon devices list --"))
+
     def test_bash_splits_at_equals_signs(self):
         """`--name a=b` reaches us as --name, a, =, b; the "=" must not count as an argument."""
         words = ["udevmon", "--config", str(self.cfg), "actions", "add", "--tag", "t",
@@ -215,7 +230,7 @@ def drift_problems(parser, cfg_path):
     problems = []
     seen = set()
     fill = {"device": "stick", "tag": "usbtest", "declared-tag": "storage", "action": "log",
-            "device-tag": "usbtest", "events": "connected"}
+            "device-tag": "usbtest", "events": "connected", "event": "connected"}
     for path, node in [((), parser), *_commands(parser)]:      # the top level has options too
         seen.add(path)
         positionals = _positionals(node)

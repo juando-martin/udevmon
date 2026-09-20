@@ -24,15 +24,38 @@ def lock_path() -> Path:
     return Path(base) / "udevmon.lock"
 
 
-def running_pid() -> int | None:
-    """PID of a running daemon, or None."""
+def _is_udevmon(pid: int) -> bool:
     try:
-        pid = int(lock_path().read_text().strip())
         with open(f"/proc/{pid}/cmdline", "rb") as f:
-            cmd = f.read()
+            return b"udevmon" in f.read()
+    except OSError:
+        return False
+
+
+def running_daemon() -> tuple[int, str | None] | None:
+    """(pid, config path it runs with) of the running daemon, or None.
+
+    The lock file holds the PID, then the config path on a second line (older
+    daemons wrote only the PID, so the config can be unknown).
+    """
+    try:
+        first, _, rest = lock_path().read_text().partition("\n")
+        pid = int(first.strip())
     except (OSError, ValueError):
         return None
-    return pid if b"udevmon" in cmd else None
+    if not _is_udevmon(pid):
+        return None
+    return pid, (rest.strip() or None)
+
+
+def running_pid() -> int | None:
+    """PID of a running daemon, or None."""
+    found = running_daemon()
+    return found[0] if found else None
+
+
+def _same_file(a, b) -> bool:
+    return os.path.realpath(os.path.expanduser(str(a))) == os.path.realpath(os.path.expanduser(str(b)))
 
 
 class Daemon:
@@ -48,7 +71,7 @@ class Daemon:
         except BlockingIOError:
             raise SystemExit("udevmon is already running")
         os.ftruncate(fd, 0)
-        os.write(fd, str(os.getpid()).encode())
+        os.write(fd, f"{os.getpid()}\n{os.path.realpath(self.config_path)}\n".encode())
         return fd                       # keep open for the process lifetime
 
     def _emit(self, event: Event) -> None:
@@ -76,7 +99,7 @@ class Daemon:
             log.warning("udev_filters changed; restart the daemon to apply")
         self.cfg = new
         self.engine.set_config(new)
-        for w in new.warnings:
+        for w in [*new.warnings, *cfgmod.command_problems(new)]:
             log.warning(w)
         log.info("config reloaded: %d device(s), %d action(s)", len(new.devices), len(new.actions))
         return True
@@ -89,7 +112,7 @@ class Daemon:
         except cfgmod.ConfigError as e:
             log.error("invalid config: %s", e)
             return 1
-        for w in self.cfg.warnings:
+        for w in [*self.cfg.warnings, *cfgmod.command_problems(self.cfg)]:
             log.warning(w)
         self.runner = ActionRunner(self.cfg.settings.max_workers, self.dry_run)
         self.engine = Engine(self.cfg, self.runner)
@@ -115,9 +138,20 @@ class Daemon:
         return 0
 
 
-def reload_running() -> bool:
-    pid = running_pid()
-    if pid is None:
+def reload_running(config_path=None) -> bool:
+    """Ask the running daemon to reload; True if a signal was sent.
+
+    With ``config_path`` only a daemon that runs with that same config is
+    signalled (a daemon whose config is unknown is assumed to match).
+    """
+    found = running_daemon()
+    if found is None:
         return False
-    os.kill(pid, signal.SIGHUP)
+    pid, its_config = found
+    if config_path is not None and its_config is not None and not _same_file(config_path, its_config):
+        return False
+    try:
+        os.kill(pid, signal.SIGHUP)
+    except OSError:
+        return False
     return True

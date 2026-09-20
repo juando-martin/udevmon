@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import logging
 import sys
 from pathlib import Path
@@ -11,7 +12,7 @@ from . import __version__
 from . import config as cfgmod
 from . import configedit
 from .events import VALID_KINDS, describe
-from .matching import build_match, strength
+from .matching import build_match, resolve, strength
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -37,6 +38,26 @@ def _guard(fn, *a, **kw):
         for p in e.problems:
             print(f"error: {p}", file=sys.stderr)
         raise SystemExit(1)
+
+
+def _reload_after_edit(args) -> None:
+    """Tell the running daemon (if it uses this config) to pick up the change."""
+    if getattr(args, "no_reload", False):
+        return
+    from .daemon import reload_running
+    if reload_running(args.config):
+        print("Reloaded the running daemon.")
+
+
+def _reloads(fn):
+    """Run an editing command, then reload the daemon if it succeeded."""
+    @functools.wraps(fn)
+    def wrapper(args):
+        rc = fn(args)
+        if not rc:
+            _reload_after_edit(args)
+        return rc
+    return wrapper
 
 
 # -- commands ------------------------------------------------------------------
@@ -90,6 +111,55 @@ def _parse_matches(pairs, *, allow_lists: bool) -> dict:
     return match
 
 
+def _parse_props(pairs) -> dict:
+    props: dict = {}
+    for pair in pairs or []:
+        key, sep, value = pair.partition("=")
+        if not sep or not key:
+            raise cfgmod.ConfigError([f"bad --prop {pair!r}, expected key=value"])
+        if key in props:
+            raise cfgmod.ConfigError([f"--prop {key!r} given twice"])
+        props[key] = value
+    return props
+
+
+def cmd_explain(args):
+    from . import explain
+    cfg = _load(args)
+    props = _guard(_parse_props, args.prop)
+    if args.device is not None and args.device not in cfg.devices:
+        print(f"error: no such device {args.device!r}", file=sys.stderr)
+        return 1
+    if args.device is not None or props:                     # a simulated thing
+        endpoint = explain.simulated(cfg, args.device, props, args.event)
+        shown = "  ".join(f"{k}={v}" for k, v in endpoint.props.items())
+        lines = explain.explain_endpoint(cfg, endpoint, [args.event] if args.event else None,
+                                         header=f"Simulated thing ({shown})")
+        print("\n".join(lines))
+        print("\nOnly the properties above are known; add --prop KEY=VALUE for others "
+              "(for example fs_type=ext4).")
+        return 0
+    from .sources.udev import UdevSource
+    from .sources.udisks import UdisksSource
+    things = UdevSource(cfg.settings.udev_filters).snapshot() \
+        + UdisksSource().snapshot(include_system=args.all)
+    blocks, idle = [], 0
+    for endpoint in things:
+        if args.event and args.event not in explain.kinds_for(endpoint):
+            continue
+        res = resolve(cfg, endpoint.props)
+        if not args.all and not res.named and not res.tags:
+            idle += 1                    # matches no device or tag: nothing can ever run for it
+            continue
+        blocks.append("\n".join(explain.explain_endpoint(
+            cfg, endpoint, [args.event] if args.event else None)))
+    print("\n\n".join(blocks) if blocks else "Nothing present matches a device or a tag.")
+    if idle:
+        print(f"\nNot shown: {idle} present thing(s) that match no device or tag "
+              "(--all lists them).")
+    return 0
+
+
 def cmd_devices_list(args):
     cfg = _load(args)
     if not cfg.devices:
@@ -115,6 +185,7 @@ def cmd_devices_show(args):
     return 0
 
 
+@_reloads
 def cmd_devices_add(args):
     match = _guard(_parse_matches, args.match, allow_lists=False)
     _guard(configedit.add_device, args.config, args.name, match, args.description or "",
@@ -123,18 +194,21 @@ def cmd_devices_add(args):
     return 0
 
 
+@_reloads
 def cmd_devices_remove(args):
     _guard(configedit.remove_device, args.config, args.name)
     print(f"Removed device {args.name!r}.")
     return 0
 
 
+@_reloads
 def cmd_devices_tag(args):
     _guard(configedit.set_device_tags, args.config, args.name, add=args.tags)
     print(f"Tagged {args.name!r}: {', '.join(args.tags)}.")
     return 0
 
 
+@_reloads
 def cmd_devices_untag(args):
     _guard(configedit.set_device_tags, args.config, args.name, remove=args.tags)
     print(f"Removed tag(s) {', '.join(args.tags)} from {args.name!r}.")
@@ -176,6 +250,7 @@ def cmd_tags_show(args):
     return 0
 
 
+@_reloads
 def cmd_tags_add(args):
     rule = _guard(_parse_matches, args.match or [], allow_lists=True)
     _guard(configedit.add_tag, args.config, args.name, rule, args.description or "")
@@ -183,6 +258,7 @@ def cmd_tags_add(args):
     return 0
 
 
+@_reloads
 def cmd_tags_remove(args):
     _guard(configedit.remove_tag, args.config, args.name)
     print(f"Removed tag {args.name!r}.")
@@ -200,6 +276,7 @@ def cmd_actions_list(args):
     return 0
 
 
+@_reloads
 def cmd_actions_add(args):
     on = [k.strip() for k in args.on.split(",") if k.strip()]
     bad = [k for k in on if k not in VALID_KINDS]
@@ -222,6 +299,7 @@ def cmd_actions_add(args):
     return 0
 
 
+@_reloads
 def cmd_actions_remove(args):
     _guard(configedit.remove_action, args.config, args.name)
     print(f"Removed action {args.name!r}.")
@@ -235,7 +313,7 @@ def cmd_check(args):
         for p in e.problems:
             print(f"error: {p}")
         return 1
-    for w in cfg.warnings:
+    for w in [*cfg.warnings, *cfgmod.command_problems(cfg)]:
         print(f"warning: {w}")
     for n in cfg.notes:
         print(f"note: {n}")
@@ -326,6 +404,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--config", type=Path, default=None, help="config file path")
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="cmd_name", required=True)
+    edits = argparse.ArgumentParser(add_help=False)          # shared by the editing commands
+    edits.add_argument("--no-reload", action="store_true",
+                       help="don't tell the running daemon to reload")
 
     s = sub.add_parser("run", help="run the daemon")
     s.add_argument("--dry-run", action="store_true", help="log actions instead of running them")
@@ -345,17 +426,17 @@ def build_parser() -> argparse.ArgumentParser:
     g = dev.add_subparsers(dest="sub", required=False)
     x = g.add_parser("list", help="list named devices"); x.set_defaults(fn=cmd_devices_list)
     x = g.add_parser("show"); x.add_argument("name"); x.set_defaults(fn=cmd_devices_show)
-    x = g.add_parser("add")
+    x = g.add_parser("add", parents=[edits])
     x.add_argument("name")
     x.add_argument("--match", action="append", required=True, metavar="KEY=VALUE")
     x.add_argument("--tag", action="append", metavar="TAG", help="explicit tag (repeatable)")
     x.add_argument("--description")
     x.set_defaults(fn=cmd_devices_add)
-    x = g.add_parser("remove"); x.add_argument("name"); x.set_defaults(fn=cmd_devices_remove)
-    x = g.add_parser("tag", help="add explicit tags to a device")
+    x = g.add_parser("remove", parents=[edits]); x.add_argument("name"); x.set_defaults(fn=cmd_devices_remove)
+    x = g.add_parser("tag", help="add explicit tags to a device", parents=[edits])
     x.add_argument("name"); x.add_argument("tags", nargs="+", metavar="TAG")
     x.set_defaults(fn=cmd_devices_tag)
-    x = g.add_parser("untag", help="remove explicit tags from a device")
+    x = g.add_parser("untag", help="remove explicit tags from a device", parents=[edits])
     x.add_argument("name"); x.add_argument("tags", nargs="+", metavar="TAG")
     x.set_defaults(fn=cmd_devices_untag)
     dev.set_defaults(fn=cmd_devices_list)              # bare `udevmon devices` lists them
@@ -364,18 +445,19 @@ def build_parser() -> argparse.ArgumentParser:
         dest="sub", required=True)
     x = tg.add_parser("list"); x.set_defaults(fn=cmd_tags_list)
     x = tg.add_parser("show"); x.add_argument("name"); x.set_defaults(fn=cmd_tags_show)
-    x = tg.add_parser("add", help="declare a tag, optionally with a rule")
+    x = tg.add_parser("add", help="declare a tag, optionally with a rule", parents=[edits])
     x.add_argument("name")
     x.add_argument("--match", action="append", metavar="KEY=VALUE",
                    help="rule pair; repeat a key to allow several values")
     x.add_argument("--description")
     x.set_defaults(fn=cmd_tags_add)
-    x = tg.add_parser("remove"); x.add_argument("name"); x.set_defaults(fn=cmd_tags_remove)
+    x = tg.add_parser("remove", parents=[edits]); x.add_argument("name"); x.set_defaults(fn=cmd_tags_remove)
 
     a = sub.add_parser("actions", help="manage actions").add_subparsers(dest="sub", required=True)
     x = a.add_parser("list"); x.set_defaults(fn=cmd_actions_list)
     x = a.add_parser("add", help="actions add (--device N ... | --tag N ...) EVENT[,EVENT] "
-                                 "[--name N] [--allow-unnamed|--named-only] -- CMD [ARG...]")
+                                 "[--name N] [--allow-unnamed|--named-only] -- CMD [ARG...]",
+                     parents=[edits])
     x.add_argument("on", help="comma-separated: " + ", ".join(sorted(VALID_KINDS)))
     x.add_argument("--device", action="append", metavar="NAME", help="target device (repeatable)")
     x.add_argument("--tag", action="append", metavar="NAME", help="target tag (repeatable)")
@@ -387,7 +469,17 @@ def build_parser() -> argparse.ArgumentParser:
     grp.add_argument("--named-only", dest="allow_unnamed", action="store_const", const=False,
                      help="run for named devices only (explicit)")
     x.set_defaults(fn=cmd_actions_add)
-    x = a.add_parser("remove"); x.add_argument("name"); x.set_defaults(fn=cmd_actions_remove)
+    x = a.add_parser("remove", parents=[edits]); x.add_argument("name"); x.set_defaults(fn=cmd_actions_remove)
+
+    s = sub.add_parser("explain", help="show what would run for a thing (present or simulated)")
+    s.add_argument("event", nargs="?", choices=sorted(VALID_KINDS), metavar="EVENT",
+                   help="only this event (default: every event that fits)")
+    s.add_argument("--device", metavar="NAME", help="simulate this named device")
+    s.add_argument("--prop", action="append", metavar="KEY=VALUE",
+                   help="simulate a thing with this property (repeatable)")
+    s.add_argument("--all", action="store_true",
+                   help="also list system filesystems and things nothing matches")
+    s.set_defaults(fn=cmd_explain)
 
     s = sub.add_parser("check", help="validate the config"); s.set_defaults(fn=cmd_check)
     s = sub.add_parser("reload", help="tell the running daemon to reload"); s.set_defaults(fn=cmd_reload)
