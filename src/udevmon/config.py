@@ -55,7 +55,6 @@ class Config:
     devices: dict[str, Device] = field(default_factory=dict)
     actions: list[Action] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    deprecated: bool = False        # file still uses the old 'assets'/'asset' names
 
 
 # Only {lower_snake_name} is a placeholder. "{{" / "}}" are literal braces, and anything
@@ -91,38 +90,9 @@ _DEVICE = {"description", "match"}
 _ACTION = {"name", "device", "on", "run", "timeout"}
 
 
-def _upgrade_legacy(data: dict, problems: list[str]) -> tuple[dict, bool]:
-    """Accept the pre-rename spelling: [assets.X] -> [devices.X], asset = -> device =."""
-    data, legacy = dict(data), False
-    if "assets" in data:
-        if "devices" in data:
-            problems.append("both [devices] and the deprecated [assets] are present; "
-                            "run `udevmon migrate` or merge them by hand")
-        else:
-            data["devices"] = data.pop("assets")
-            legacy = True
-    actions = []
-    for i, a in enumerate(data.get("actions") or [], 1):
-        if isinstance(a, dict) and "asset" in a:
-            if "device" in a:
-                problems.append(f"[[actions]] #{i}: has both 'device' and deprecated 'asset'")
-            else:
-                a = dict(a)
-                a["device"] = a.pop("asset")
-                legacy = True
-        actions.append(a)
-    if "actions" in data:
-        data["actions"] = actions
-    return data, legacy
-
-
 def parse(data: dict) -> Config:
     problems: list[str] = []
     cfg = Config()
-    data, cfg.deprecated = _upgrade_legacy(data, problems)
-    if cfg.deprecated:
-        cfg.warnings.append("config uses the deprecated 'assets'/'asset' names; "
-                            "run `udevmon migrate` to update it")
 
     def unknown(where: str, got, allowed):
         for k in got:

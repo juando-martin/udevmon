@@ -270,7 +270,6 @@ udevmon present [--all]                  list USB devices and filesystems that a
 udevmon devices list | show NAME | add NAME --match KEY=VALUE ... | remove NAME
 udevmon actions list | add ... | remove NAME
 udevmon check                            validate the config
-udevmon migrate                          update a config that still uses the old `assets` names
 udevmon run [--dry-run]                  run the daemon in the foreground
 udevmon reload                           tell the running daemon to reload its config
 udevmon service install [--now]          install (and optionally start) the systemd user service
@@ -287,22 +286,6 @@ udevmon devices add my-key --match vendor_id=1050 --match product_id=0407 --matc
 A device can't be removed while actions still use it; remove those first.
 Actions created by hand without a `name` can't be removed through the CLI
 (edit the file instead).
-
-### Upgrading from the `assets` names
-
-Early versions called named devices *assets* (`[assets.NAME]` tables and an
-`asset = "NAME"` key in actions). Those files still load and run, with a
-warning, but `udevmon devices add` and similar edit commands refuse to touch
-them until you convert them:
-
-```
-udevmon migrate
-```
-
-This renames the section headers and keys in place, keeping your comments,
-and saves the previous file as `config.toml.bak`. The old `udevmon assets ...`
-command still works for now but prints a deprecation note. The list of
-present devices, previously `udevmon devices`, is now `udevmon present`.
 
 ## Examples
 

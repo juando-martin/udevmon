@@ -193,15 +193,6 @@ Rules:
   formatting elsewhere are preserved; a change that fails re-parsing is
   rolled back. A `config.toml.bak` is written before each edit.
 
-### 6.1 Legacy names and migration
-
-Early versions called named devices *assets* (`[assets.X]`, action key `asset`). The
-loader still accepts them, sets `Config.deprecated` and warns. Mixing old and new
-spellings is an error. The CLI's editing commands refuse to modify a deprecated file;
-`udevmon migrate` rewrites `[assets` → `[devices` and `asset =` → `device =` in place
-(comments kept, `.bak` written) and rolls back unless the parsed result is identical.
-The `udevmon assets ...` command is kept as a deprecated alias of `udevmon devices ...`.
-
 ## 7. Daemon (`udevmon run`)
 
 - Single instance (`flock` on `$XDG_RUNTIME_DIR/udevmon.lock`, which also
@@ -233,10 +224,9 @@ udevmon scan [--no-prompt] [--present]
                                   scan mode (below)
 udevmon present [--all]           list USB devices and filesystems present now,
                                   with match strength and known device names
-udevmon devices list|show|add|remove   (named devices; `assets` is a deprecated alias)
+udevmon devices list|show|add|remove
 udevmon actions list|add|remove
 udevmon check                     validate config, report problems, exit 1 on error
-udevmon migrate                   rewrite a legacy config ([assets]/asset =) to [devices]/device =
 udevmon reload                    SIGHUP the running daemon
 udevmon service install [--now] [--dest DIR]
                                   write the systemd user unit (and optionally enable)

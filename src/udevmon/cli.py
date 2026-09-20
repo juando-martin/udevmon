@@ -155,15 +155,6 @@ def cmd_check(args):
     return 0
 
 
-def cmd_migrate(args):
-    changed = _guard(configedit.migrate, args.config)
-    if changed:
-        print(f"Migrated {args.config} to [devices] / device = (previous version saved as .bak).")
-    else:
-        print("Nothing to migrate: the config already uses the current names.")
-    return 0
-
-
 def cmd_reload(args):
     from .daemon import reload_running
     if reload_running():
@@ -217,9 +208,6 @@ def build_parser() -> argparse.ArgumentParser:
     dev = sub.add_parser("devices", help="manage named devices")
     device_commands(dev.add_subparsers(dest="sub", required=False))
     dev.set_defaults(fn=cmd_devices_list)              # bare `udevmon devices` lists them
-    old = sub.add_parser("assets", help=argparse.SUPPRESS)   # deprecated spelling
-    device_commands(old.add_subparsers(dest="sub", required=True))
-    old.set_defaults(deprecated_alias="devices")
 
     a = sub.add_parser("actions", help="manage actions").add_subparsers(dest="sub", required=True)
     x = a.add_parser("list"); x.set_defaults(fn=cmd_actions_list)
@@ -232,8 +220,6 @@ def build_parser() -> argparse.ArgumentParser:
     x = a.add_parser("remove"); x.add_argument("name"); x.set_defaults(fn=cmd_actions_remove)
 
     s = sub.add_parser("check", help="validate the config"); s.set_defaults(fn=cmd_check)
-    s = sub.add_parser("migrate", help="update a config that uses the old 'assets' names")
-    s.set_defaults(fn=cmd_migrate)
     s = sub.add_parser("reload", help="tell the running daemon to reload"); s.set_defaults(fn=cmd_reload)
 
     sv = sub.add_parser("service", help="systemd user service").add_subparsers(
@@ -254,9 +240,6 @@ def main(argv=None) -> int:
         argv, tail = argv[:i], argv[i + 1:]
     args = parser.parse_args(argv)
     args.cmd = tail
-    if getattr(args, "deprecated_alias", None):
-        print(f"note: 'udevmon assets' is deprecated, use 'udevmon {args.deprecated_alias}'",
-              file=sys.stderr)
     args.config_explicit = args.config is not None
     if args.config is None:
         args.config = cfgmod.default_config_path()
