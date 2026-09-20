@@ -1,5 +1,6 @@
 import contextlib
 import io
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -410,6 +411,46 @@ class ScanPromptTests(unittest.TestCase):
             self.assertEqual(cfg.devices["stick-fs"].match, {"fs_uuid": "3F2A-91BC"})
             self.assertEqual(cfg.devices["stick-fs"].tags, ("usb-storage", "backup"))
             scanner.loop.quit.assert_not_called()
+
+
+    def run_prompt(self, endpoints, answers):
+        from udevmon.scan import Scanner
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        path = Path(d) / "config.toml"
+        scanner = Scanner(path, prompt=True)
+        scanner.loop = mock.Mock()
+        scanner.pending = {str(i): e for i, e in enumerate(endpoints)}
+        seq = iter(answers)
+        prompts = []
+
+        def fake_input(prompt=""):
+            prompts.append(prompt)
+            return next(seq)
+        out = io.StringIO()
+        with mock.patch("builtins.input", fake_input), contextlib.redirect_stdout(out):
+            scanner._prompt_user()
+        return path, out.getvalue(), prompts
+
+    def test_wrong_property_asks_again_and_keeps_the_name(self):
+        usb = Endpoint("udev", "/sys/1", {"vendor_id": "090c", "product_id": "1000",
+                                          "serial": "1111222233334444", "vendor": "V"})
+        # what happened for real: the next device's name typed at the properties prompt
+        path, out, prompts = self.run_prompt([usb], ["1", "stick", "stick-fs", "", "usbtest"])
+        self.assertIn("Not a property of this thing: stick-fs", out)
+        cfg = C.load(path)
+        self.assertEqual(cfg.devices["stick"].match["serial"], "1111222233334444")
+        self.assertEqual(cfg.devices["stick"].tags, ("usbtest",))
+        self.assertEqual(sum("Device name" in p for p in prompts), 1)   # not asked twice
+
+    def test_typed_property_list_and_skip(self):
+        usb = Endpoint("udev", "/sys/1", {"vendor_id": "090c", "product_id": "1000",
+                                          "serial": "1111222233334444"})
+        path, out, _ = self.run_prompt([usb], ["1", "s", "vendor_id,serial", "", ""])
+        self.assertEqual(set(C.load(path).devices["s"].match), {"vendor_id", "serial"})
+        path, out, _ = self.run_prompt([usb], ["1", "", ""])           # empty name: skip
+        self.assertIn("Skipped.", out)
+        self.assertFalse(path.exists())
 
 
 if __name__ == "__main__":

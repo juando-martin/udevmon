@@ -84,8 +84,8 @@ class Scanner:
             print("\nDetected:")
             for i, d in enumerate(endpoints, 1):
                 print(f"  [{i}] {describe(d)}   {status_text(cfg, d)}")
-            ans = input("Number(s) to name (e.g. 2 or 1,2), Enter to keep scanning, "
-                        "q to quit: ").strip().lower()
+            ans = input("Number(s) to name (e.g. 2 or 1,2), "
+                        "Enter = scan on, q = quit: ").strip().lower()
             if ans == "q":
                 self.loop.quit()
                 return
@@ -103,20 +103,30 @@ class Scanner:
         print("Waiting for more events (Ctrl+C to quit)...")
 
     def _name_endpoint(self, endpoint: Endpoint) -> bool:
-        name = input("Device name: ").strip()
+        name = input("Device name (Enter to skip): ").strip()
+        if not name:
+            print("Skipped.")
+            return False
         if not cfgmod.NAME_RE.match(name):
             print("Names may contain only letters, digits, _ . -")
             return False
         defaults = default_match_keys(endpoint)
         available = [k for k in endpoint.props if not k.startswith("udev_")
                      and k not in ("syspath", "subsystem", "devtype", "mountpoint")]
-        print(f"Available keys: {', '.join(available)}")
-        raw = input(f"Match on [{', '.join(defaults)}] (Enter to accept): ").strip()
-        keys = [k.strip() for k in raw.split(",") if k.strip()] if raw else defaults
+        print(f"Properties you can match on: {', '.join(available)}")
+        while True:
+            raw = input(f"Match on [{', '.join(defaults)}] "
+                        "(Enter to accept, or type a list): ").strip()
+            keys = [k.strip() for k in raw.split(",") if k.strip()] if raw else defaults
+            unknown = [k for k in keys if not endpoint.props.get(k)]
+            if not keys:
+                print("Nothing to match on; skipped.")
+                return False
+            if not unknown:
+                break
+            print(f"Not a property of this thing: {', '.join(unknown)}. "
+                  "Choose from the list above.")
         match = build_match(endpoint, keys)
-        if not match or len(match) != len(keys):
-            print("Some chosen keys are missing on this device; nothing saved.")
-            return False
         level = strength(match)
         print(f"Match strength: {level} — {strength_note(level)}")
         if level != STRONG:

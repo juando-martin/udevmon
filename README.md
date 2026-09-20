@@ -113,14 +113,22 @@ prints what it sees, then after a short pause asks you what to do:
 
 ```
 Detected:
-  [1] USB SanDisk Cruzer [0781:5567]
-  [2] Filesystem BACKUP (ext4) on /dev/sdb1 at /media/me/BACKUP
-Number to name, Enter to keep scanning, q to quit: 2
-Device name: backup-disk
-Match on [fs_uuid] (Enter to accept):
+  [1] USB SanDisk Cruzer [0781:5567]   unnamed
+  [2] Filesystem BACKUP (ext4) on /dev/sdb1   unnamed
+Number(s) to name (e.g. 2 or 1,2), Enter = scan on, q = quit: 2
+Device name (Enter to skip): backup-disk
+Properties you can match on: fs_uuid, fs_label, fs_type, devnode
+Match on [fs_uuid] (Enter to accept, or type a list):
 Match strength: strong — identifies this exact device
+Tags, comma-separated (Enter for none): backup
 Saved device 'backup-disk' to /home/me/.config/udevmon/config.toml
 ```
+
+The prompts are asked in that order. If you type a property that doesn't
+exist (say, a device name at the "Match on" prompt), it tells you and asks
+again. When nothing more is left to name it prints `Waiting for more events`
+and keeps scanning; press Ctrl+C to leave (the `q` answer works only at the
+"Number(s) to name" prompt).
 
 A physical stick usually shows up twice: as a **USB device** (identified by
 vendor/product ID and serial number) and as one or more **filesystems**
