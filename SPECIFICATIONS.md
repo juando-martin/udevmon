@@ -89,6 +89,7 @@ Event kinds (extensible registry):
 | `disconnected` | udev   | it was removed (props come from a cache)          |
 | `mounted`      | udisks | a filesystem gained a mount point                 |
 | `unmounted`    | udisks | it lost its mount point, or its device vanished   |
+| `removed`      | udisks | a mounted filesystem vanished without an unmount  |
 | `startup`      | both   | the thing was already present when the daemon started |
 | `shutdown`     | both   | the thing is still present when the daemon exits  |
 
@@ -104,6 +105,15 @@ means "whenever this thing becomes known to me". Placeholders for these kinds ar
 the union of USB and filesystem keys; a missing one (e.g. `{mountpoint}` for an
 unmounted filesystem) skips that action. `shutdown` actions do **not** run if the
 daemon is killed (`SIGKILL`), crashes, or the machine loses power.
+
+**Surprise removal.** udisks reports a clean unmount as a change of the filesystem's
+mount points, and a vanished device as the removal of its interfaces. The tracker
+keeps them apart: a clean unmount fires `unmounted` with `surprise = "0"`; a
+filesystem that disappears while mounted fires `unmounted` (as before, so actions
+written for it keep working) and then `removed`, both with `surprise = "1"` and the
+properties the filesystem had (including `mountpoint`). Nothing fires for a
+filesystem that was not mounted, nor a second time. The USB device's own
+`disconnected` comes separately from udev, in either order.
 
 ### 4.2 Normalized properties
 
@@ -123,7 +133,9 @@ Filesystems (udisks):
 - `fs_uuid`, `fs_label`, `fs_type` — `Block.IdUUID/IdLabel/IdType`
 - `part_uuid` — `Partition.UUID` (GPT)
 - `devnode` — `Block.Device`
-- `mountpoint` — first entry of `Filesystem.MountPoints` (mount/unmount events)
+- `mountpoint` — first entry of `Filesystem.MountPoints` (mount/unmount/removed events)
+- `surprise` — `"1"` when the filesystem vanished while mounted, `"0"` after a clean
+  unmount; only on `unmounted` and `removed` events
 - `drive_vendor`, `drive_model`, `drive_serial` — `Drive` of the block device
 
 Added by the engine for actions (not present on the endpoint, so not matchable):
@@ -134,7 +146,7 @@ Added by the engine for actions (not present on the endpoint, so not matchable):
 
 **Volatile keys** change from plug to plug or event to event and are rejected in
 tag rules (§5.4): `mountpoint`, `devnode`, `syspath`, `event`, `device`, `tag`,
-and the raw properties `udev_devname`, `udev_devpath`, `udev_busnum`,
+`surprise`, and the raw properties `udev_devname`, `udev_devpath`, `udev_busnum`,
 `udev_devnum`, `udev_seqnum`, `udev_usec_initialized`.
 
 ## 5. Devices, tags and matching
@@ -378,7 +390,7 @@ printed by `check` only. Neither changes the exit status.
   unnamed things);
 - warning: an `allow_unnamed = true` action that uses placeholders derived from
   hardware-supplied values (anything other than `event`, `tag`, `devnode`,
-  `syspath`, `port_path`, `subsystem`, `devtype`);
+  `syspath`, `port_path`, `subsystem`, `devtype`, `surprise`);
 - warning: a device `match` that uses a volatile key;
 - warning: an action whose program cannot be run (`run[0]`, with `~` expanded, is not
   found in `PATH`, does not exist, or is not an executable file; skipped when it
@@ -581,7 +593,7 @@ with the reason.
   same snapshot as `present`; `--all` adds system filesystems). For each thing: a
   header (description, `device:` or `unnamed`, `tags:`), then, for each event kind
   that fits it (`connected`, `disconnected` for USB; `mounted`, `unmounted` for
-  filesystems; `startup` and `shutdown` for both), the actions that would run
+  filesystems, plus `removed`; `startup` and `shutdown` for both), the actions that would run
   (`runs 'NAME' (device X | tag T[, unnamed])`, followed by the command with its
   placeholders expanded, or `cannot run here: {name} is not available`) and the
   ones skipped (`skips 'NAME': reason`). Kinds with nothing to say are collapsed

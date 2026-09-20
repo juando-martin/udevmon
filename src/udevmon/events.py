@@ -10,6 +10,7 @@ CONNECTED = "connected"
 DISCONNECTED = "disconnected"
 MOUNTED = "mounted"
 UNMOUNTED = "unmounted"
+REMOVED = "removed"          # a mounted filesystem vanished without being unmounted
 STARTUP = "startup"          # device already present when the daemon started
 SHUTDOWN = "shutdown"        # device still present when the daemon exits
 
@@ -28,7 +29,8 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
     CONNECTED: _USB_KEYS | _COMMON,
     DISCONNECTED: _USB_KEYS | _COMMON,
     MOUNTED: _FS_KEYS | {"mountpoint"} | _COMMON,
-    UNMOUNTED: _FS_KEYS | {"mountpoint"} | _COMMON,
+    UNMOUNTED: _FS_KEYS | {"mountpoint", "surprise"} | _COMMON,
+    REMOVED: _FS_KEYS | {"mountpoint", "surprise"} | _COMMON,
     # present devices may be USB or filesystems; a missing key skips the action at run time
     STARTUP: _USB_KEYS | _FS_KEYS | {"mountpoint"} | _COMMON,
     SHUTDOWN: _USB_KEYS | _FS_KEYS | {"mountpoint"} | _COMMON,
@@ -37,7 +39,7 @@ VALID_KINDS = frozenset(KNOWN_KEYS)
 
 # Properties that change per plug / per event; useless (and misleading) in match rules.
 VOLATILE_KEYS = frozenset({
-    "mountpoint", "devnode", "syspath", "event", "device", "tag",
+    "mountpoint", "devnode", "syspath", "event", "device", "tag", "surprise",
     "udev_devname", "udev_devpath", "udev_busnum", "udev_devnum", "udev_seqnum",
     "udev_usec_initialized",
 })
@@ -45,6 +47,7 @@ VOLATILE_KEYS = frozenset({
 # Placeholders whose values do not come from the (possibly hostile) hardware itself.
 TRUSTED_PLACEHOLDERS = frozenset({
     "event", "tag", "device", "devnode", "syspath", "port_path", "subsystem", "devtype",
+    "surprise",
 })
 
 

@@ -134,11 +134,12 @@ class EngineTests(unittest.TestCase):
 
     def test_events(self):
         self.assertEqual(self.words("udevmon actions add --tag t "),
-                         ["connected", "disconnected", "mounted", "shutdown", "startup", "unmounted"])
+                         ["connected", "disconnected", "mounted", "removed", "shutdown", "startup",
+                          "unmounted"])
         self.assertEqual(self.words("udevmon actions add --tag t mo"), ["mounted"])
         self.assertEqual(self.words("udevmon actions add --tag t connected,"),
-                         ["connected,disconnected", "connected,mounted", "connected,shutdown",
-                          "connected,startup", "connected,unmounted"])
+                         ["connected,disconnected", "connected,mounted", "connected,removed",
+                          "connected,shutdown", "connected,startup", "connected,unmounted"])
         self.assertEqual(self.words("udevmon actions add --tag t connected,dis"),
                          ["connected,disconnected"])
         self.assertNotIn("mounted,mounted", self.words("udevmon actions add --tag t mounted,"))

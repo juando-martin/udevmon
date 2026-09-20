@@ -12,12 +12,12 @@ import shlex
 from . import config as cfgmod
 from .engine import Engine
 from .matching import device_label
-from .events import (CONNECTED, DISCONNECTED, MOUNTED, SHUTDOWN, STARTUP, UNMOUNTED,
-                     Endpoint, Event, describe)
+from .events import (CONNECTED, DISCONNECTED, MOUNTED, REMOVED, SHUTDOWN, STARTUP,
+                     UNMOUNTED, Endpoint, Event, describe)
 
 USB_KINDS = (CONNECTED, DISCONNECTED, STARTUP, SHUTDOWN)
-FS_KINDS = (MOUNTED, UNMOUNTED, STARTUP, SHUTDOWN)
-_FS_PROPS = {"fs_uuid", "fs_label", "fs_type", "part_uuid", "mountpoint",
+FS_KINDS = (MOUNTED, UNMOUNTED, REMOVED, STARTUP, SHUTDOWN)
+_FS_PROPS = {"fs_uuid", "fs_label", "fs_type", "part_uuid", "mountpoint", "surprise",
              "drive_vendor", "drive_model", "drive_serial"}
 
 
@@ -36,7 +36,7 @@ def simulated(cfg: cfgmod.Config, device: str | None, props: dict[str, str],
     if device is not None:
         merged.update(cfg.devices[device].match)
     merged.update(props)
-    if event in (MOUNTED, UNMOUNTED):
+    if event in (MOUNTED, UNMOUNTED, REMOVED):
         source = "udisks"
     elif event in (CONNECTED, DISCONNECTED):
         source = "udev"

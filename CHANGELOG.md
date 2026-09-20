@@ -20,6 +20,11 @@ to the version and date, and start a new empty **Unreleased** above it.
   ignore wins if a thing matches several devices. Both stay "named", so they never
   fall into the unnamed category. New commands: `devices disable`, `devices ignore`
   and `devices enable`, which take several names and change nothing unless all exist.
+- **Surprise removal.** A mounted filesystem that vanishes without being unmounted
+  (a pulled stick) now fires a new **`removed`** event after `unmounted`, so an
+  action can warn about it (`on = ["removed"]`). The new `surprise` value (`{surprise}`,
+  `$UDEVMON_SURPRISE`) is `1` for a pulled stick and `0` after a clean unmount, on
+  `unmounted` and `removed`. Existing `on = ["unmounted"]` actions still fire.
 - **`enabled = false` on actions**, with `actions disable` and `actions enable`.
 - **`actions set NAME`** changes `allow_unnamed` (`--allow-unnamed`, `--named-only`,
   `--default-unnamed` to clear it), the events (`--on`) or the `--timeout` of an

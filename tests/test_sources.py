@@ -1,6 +1,6 @@
 import unittest
 
-from udevmon.events import CONNECTED, DISCONNECTED, MOUNTED, UNMOUNTED
+from udevmon.events import CONNECTED, DISCONNECTED, MOUNTED, REMOVED, UNMOUNTED
 from udevmon.sources import udev as U
 from udevmon.sources import udisks as D
 
@@ -83,7 +83,7 @@ class UdisksTrackerTests(unittest.TestCase):
         ev = t.interfaces_added(P, m[P])
         self.assertEqual([e.kind for e in ev], [MOUNTED])
         ev = t.interfaces_removed(P, [FS, BLK, D.I_PART])
-        self.assertEqual([e.kind for e in ev], [UNMOUNTED])
+        self.assertEqual([e.kind for e in ev], [UNMOUNTED, REMOVED])       # a yank: both events
         self.assertNotIn(P, t.objects)
 
     def test_filesystems_listing(self):

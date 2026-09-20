@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Callable
 
-from ..events import MOUNTED, STARTUP, UNMOUNTED, Endpoint, Event
+from ..events import MOUNTED, REMOVED, STARTUP, UNMOUNTED, Endpoint, Event
 
 log = logging.getLogger("udevmon.udisks")
 
@@ -31,6 +31,12 @@ def _str(v) -> str:
 
 def _mountpoints(v) -> list[str]:
     return [_str(m) for m in (v or [])]
+
+
+def _with_surprise(endpoint: Endpoint, surprise: bool) -> Endpoint:
+    """A copy of ``endpoint`` whose ``surprise`` says how it stopped being mounted."""
+    return Endpoint(endpoint.source, endpoint.key,
+                    {**endpoint.props, "surprise": "1" if surprise else "0"})
 
 
 class UdisksTracker:
@@ -83,9 +89,9 @@ class UdisksTracker:
             endpoint = self._endpoint(path, mps[0])
             self._mounted[path] = endpoint
             return [Event(MOUNTED, endpoint)]
-        if not mps and was is not None:
+        if not mps and was is not None:                 # a clean unmount
             del self._mounted[path]
-            return [Event(UNMOUNTED, was)]
+            return [Event(UNMOUNTED, _with_surprise(was, False))]
         return []
 
     def interfaces_added(self, path: str, ifaces: dict) -> list[Event]:
@@ -108,8 +114,11 @@ class UdisksTracker:
             return []
         events = []
         if I_FS in iface_names and path in self._mounted:
-            # device vanished (or fs interface dropped) while mounted
-            events.append(Event(UNMOUNTED, self._mounted.pop(path)))
+            # the device vanished (or its filesystem interface was dropped) while mounted:
+            # `unmounted` still fires, as before, then `removed`; both say surprise = "1"
+            gone = _with_surprise(self._mounted.pop(path), True)
+            events.append(Event(UNMOUNTED, gone))
+            events.append(Event(REMOVED, gone))
         for name in iface_names:
             ifaces.pop(name, None)
         if not ifaces:

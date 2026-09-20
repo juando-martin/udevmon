@@ -251,14 +251,19 @@ To only write the unit without enabling it, leave out `--now`.
 - `connected` — a USB device is plugged in (USB properties).
 - `disconnected` — a USB device is unplugged (USB properties).
 - `mounted` — a filesystem is mounted (filesystem properties, `mountpoint`).
-- `unmounted` — a filesystem is unmounted, or its device disappears while mounted (filesystem properties, `mountpoint`).
+- `unmounted` — a filesystem is unmounted, or its device disappears while mounted (filesystem properties, `mountpoint`, `surprise`).
+- `removed` — a mounted filesystem **vanished without being unmounted first** (the stick was pulled, or the drive failed). It comes right after `unmounted`, which fires too (filesystem properties, `mountpoint`, `surprise`).
 - `startup` — the device was **already present** when udevmon started (USB or filesystem properties).
 - `shutdown` — the device is **still present** when udevmon exits (USB or filesystem properties).
 
 Notes:
 
-- Unplugging a mounted stick without unmounting first produces both
-  `unmounted` (for its filesystem) and `disconnected` (for the USB device).
+- Pulling a mounted stick without ejecting it produces `unmounted` and then
+  `removed` for its filesystem, and `disconnected` for the USB device. A normal
+  eject produces only `unmounted`. The `surprise` value tells them apart: `1`
+  for a pulled stick, `0` for a clean unmount, so one action on `unmounted` can
+  behave differently (`{surprise}` in the command, `$UDEVMON_SURPRISE` in the
+  environment). To act only on pulled sticks, use `on = ["removed"]`.
 - Events for the same device and kind that repeat within one second are
   dropped (`debounce`, configurable).
 - `shutdown` actions run when udevmon receives a normal stop signal
@@ -286,7 +291,8 @@ Filesystems:
 - `part_uuid` — e.g. `2b5c...`; partition UUID (GPT disks).
 - `fs_label`, `fs_type` — e.g. `BACKUP`, `ext4`; labels are not unique.
 - `devnode` — e.g. `/dev/sdb1`.
-- `mountpoint` — e.g. `/media/me/BACKUP`; only on mounted/unmounted (and mounted startup/shutdown) events.
+- `mountpoint` — e.g. `/media/me/BACKUP`; only on mounted/unmounted/removed (and mounted startup/shutdown) events.
+- `surprise` — `1` if the filesystem vanished while mounted, `0` after a clean unmount; only on `unmounted` and `removed`. It can be used in commands but not in tag rules.
 - `drive_vendor`, `drive_model`, `drive_serial` — of the physical drive holding it.
 
 `udevmon present` lists everything currently present with these values, and
@@ -653,6 +659,13 @@ run = ["sh", "-c",
        'rsync -a ~/Documents/ "$1/Documents/" && udisksctl unmount -b "$2"',
        "sh", "{mountpoint}", "{devnode}"]
 timeout = 3600
+```
+
+Warn when a drive is pulled without ejecting it (its data may be damaged):
+
+```
+udevmon actions add --device backup-disk removed -- \
+  notify-send -u critical "Drive pulled without ejecting" "{fs_label}"
 ```
 
 Lock the screen when a security key is removed:
