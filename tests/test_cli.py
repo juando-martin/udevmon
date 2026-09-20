@@ -25,7 +25,7 @@ class CliTests(unittest.TestCase):
         return rc, out.getvalue(), err.getvalue()
 
     def test_full_flow(self):
-        self.assertEqual(self.run_cli("assets", "add", "disk", "--match", "fs_uuid=U1")[0], 0)
+        self.assertEqual(self.run_cli("devices", "add", "disk", "--match", "fs_uuid=U1")[0], 0)
         rc, out, _ = self.run_cli("actions", "add", "disk", "mounted,unmounted",
                                   "--name", "log", "--timeout", "5", "--",
                                   "sh", "-c", "echo $1", "sh", "{mountpoint}")
@@ -34,19 +34,19 @@ class CliTests(unittest.TestCase):
         self.assertEqual(cfg.actions[0].run, ("sh", "-c", "echo $1", "sh", "{mountpoint}"))
         self.assertEqual((cfg.actions[0].name, cfg.actions[0].timeout), ("log", 5))
         self.assertEqual(self.run_cli("check")[0], 0)
-        self.assertIn("disk", self.run_cli("assets", "list")[1])
-        self.assertNotEqual(self.run_cli("assets", "remove", "disk")[0], 0)   # in use
+        self.assertIn("disk", self.run_cli("devices", "list")[1])
+        self.assertNotEqual(self.run_cli("devices", "remove", "disk")[0], 0)   # in use
         self.assertEqual(self.run_cli("actions", "remove", "log")[0], 0)
-        self.assertEqual(self.run_cli("assets", "remove", "disk")[0], 0)
+        self.assertEqual(self.run_cli("devices", "remove", "disk")[0], 0)
         self.assertNotIn("\n\n\n", self.cfg.read_text())
 
     def test_actions_add_requires_command_and_valid_events(self):
-        self.run_cli("assets", "add", "disk", "--match", "fs_uuid=U1")
+        self.run_cli("devices", "add", "disk", "--match", "fs_uuid=U1")
         self.assertNotEqual(self.run_cli("actions", "add", "disk", "mounted")[0], 0)
         self.assertNotEqual(self.run_cli("actions", "add", "disk", "bogus", "--", "true")[0], 0)
 
     def test_check_reports_bad_config(self):
-        self.cfg.write_text('[assets.a]\nmatch = {}\n')
+        self.cfg.write_text('[devices.a]\nmatch = {}\n')
         self.cfg.chmod(0o600)
         rc, out, _ = self.run_cli("check")
         self.assertEqual(rc, 1)

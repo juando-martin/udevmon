@@ -7,9 +7,9 @@ unprivileged user.
 ## 1. Goals
 
 - Detect USB connect/disconnect and filesystem mount/unmount **without root**.
-- Let the user give a device or filesystem a **name** (an *asset*) by running
+- Let the user give a USB device or filesystem a **name** (a *device*) by running
   the tool in a *scan mode*, then attach *actions* to that name.
-- Match assets on **stable identifiers** (serial number, filesystem UUID,
+- Match devices on **stable identifiers** (serial number, filesystem UUID,
   partition UUID) whenever available; clearly flag weaker matches.
 - Run continuously with negligible resource use (event-driven, no polling).
 - Configuration is a hand-editable **TOML** file, plus a **CLI** for common edits.
@@ -49,16 +49,17 @@ unprivileged user.
 
 - One GLib main loop drives every source. Nothing polls.
 - A **source** turns raw system notifications into normalized `Event`s.
-- The **engine** matches events against assets, debounces, and hands matching
+- The **engine** matches events against devices, debounces, and hands matching
   actions to the runner.
 - The same sources feed `scan`, `devices` and the daemon.
 
 ### 4.1 Data model
 
-`Device`: `source` (`"udev"`/`"udisks"`), `key` (stable id while present:
+`Endpoint`: a USB device or filesystem as observed by a source (not to be confused with
+a user-named *device* in the config): `source` (`"udev"`/`"udisks"`), `key` (stable id while present:
 sysfs path or udisks object path), `props` (`dict[str, str]`).
 
-`Event`: `kind`, `device`, `time`.
+`Event`: `kind`, `endpoint`, `time`.
 
 Event kinds (extensible registry):
 
@@ -109,18 +110,18 @@ Filesystems (udisks):
 | `mountpoint` | first entry of `Filesystem.MountPoints` (mount/unmount events) |
 | `drive_vendor`, `drive_model`, `drive_serial` | `Drive` of the block device |
 
-Every event also provides `event` (the kind) and `asset` (matched asset name)
+Every event also provides `event` (the kind) and `device` (the matched named device)
 for actions.
 
-## 5. Assets and matching
+## 5. Devices and matching
 
-An asset is a name plus a `match` table of `key = "value"` pairs. An event
-matches an asset when **every** pair equals the corresponding event property
+A device is a name plus a `match` table of `key = "value"` pairs. An event
+matches a device when **every** pair equals the corresponding event property
 (case-insensitive). A missing property never matches.
 
 ### 5.1 Match strength
 
-Reported by `scan`, `devices`, `assets list` and warned about on creation:
+Reported by `scan`, `devices`, `devices list` and warned about on creation:
 
 - **strong** — includes an identity-grade key: `serial`, `fs_uuid`,
   `part_uuid`, `drive_serial`, and the serial is not suspicious.
@@ -130,8 +131,8 @@ Reported by `scan`, `devices`, `assets list` and warned about on creation:
   Matches every device of that model / any filesystem with that label.
 
 A serial is *suspicious* (downgraded to weak) when it is empty, all one
-repeated character, or a well-known placeholder (`0123456789ABCDEF`,
-`1234567890`, …). Cheap sticks often share such serials.
+repeated character, or a well-known placeholder (`0A1B2C3D4E59ABCDEF`,
+`A1B2C3D4E590`, …). Cheap sticks often share such serials.
 
 ### 5.2 Default keys chosen by scan
 
@@ -149,26 +150,26 @@ overridable with `--config`. Unknown keys are errors (catches typos).
 
 ```toml
 [daemon]                      # all optional
-debounce = 1.0                # seconds; repeats of (asset, kind) are dropped
+debounce = 1.0                # seconds; repeats of (device, kind) are dropped
 udev_filters = ["usb/usb_device"]   # "subsystem" or "subsystem/devtype"
 max_workers = 4
 
-[assets.backup-disk]
+[devices.backup-disk]
 description = "Weekly backup drive"
 match = { fs_uuid = "3F2A-91BC" }
 
-[assets.yubikey]
-match = { vendor_id = "1050", product_id = "0407", serial = "12345678" }
+[devices.yubikey]
+match = { vendor_id = "1050", product_id = "0407", serial = "A1B2C3D4E5" }
 
 [[actions]]
 name = "run-backup"           # optional; generated if missing
-asset = "backup-disk"
+device = "backup-disk"
 on = ["mounted"]              # string or list
 run = ["~/bin/backup.sh", "{mountpoint}"]   # argv list, or a string (shlex-split)
 timeout = 300                 # seconds, default 60
 
 [[actions]]
-asset = "yubikey"
+device = "yubikey"
 on = ["connected", "disconnected"]
 run = ["notify-send", "YubiKey {event}"]
 ```
@@ -176,7 +177,7 @@ run = ["notify-send", "YubiKey {event}"]
 Rules:
 
 - Names match `[A-Za-z0-9_.-]+` and are unique.
-- Every action references an existing asset; `on` values must be known kinds.
+- Every action references an existing device; `on` values must be known kinds.
 - `run` is **never passed through a shell**. Use `["sh", "-c", "…"]` explicitly
   if a shell is wanted. A leading `~` in each argument is expanded.
 - Placeholders are `{lower_snake_name}`; `{{`/`}}` produce literal braces. Any other
@@ -184,13 +185,22 @@ Rules:
   `awk '{print $1}'` needs no escaping. `check` verifies each placeholder exists for the action's event kinds.
   At run time, an action whose placeholder is missing is **skipped with an
   error**, never run with an empty value (protects against e.g. `rm {mountpoint}/x`).
-- Actions run with environment `UDEVMON_EVENT`, `UDEVMON_ASSET`, and
+- Actions run with environment `UDEVMON_EVENT`, `UDEVMON_DEVICE`, and
   `UDEVMON_<KEY>` for every property, cwd = `$HOME`, stdin = `/dev/null`.
 - Because actions execute commands, the daemon **refuses to load** a config
   that is not owned by the user or is group/world-writable.
 - The CLI edits the file by appending/removing whole blocks so comments and
   formatting elsewhere are preserved; a change that fails re-parsing is
   rolled back. A `config.toml.bak` is written before each edit.
+
+### 6.1 Legacy names and migration
+
+Early versions called named devices *assets* (`[assets.X]`, action key `asset`). The
+loader still accepts them, sets `Config.deprecated` and warns. Mixing old and new
+spellings is an error. The CLI's editing commands refuse to modify a deprecated file;
+`udevmon migrate` rewrites `[assets` → `[devices` and `asset =` → `device =` in place
+(comments kept, `.bak` written) and rolls back unless the parsed result is identical.
+The `udevmon assets ...` command is kept as a deprecated alias of `udevmon devices ...`.
 
 ## 7. Daemon (`udevmon run`)
 
@@ -202,8 +212,8 @@ Rules:
   `udev_filters` need a restart (logged).
 - `SIGTERM`/`SIGINT`: emit `shutdown` events, wait for those actions (bounded by each
   action's `timeout`), stop cleanly.
-- For each event: match all assets → for each matched asset the actions whose
-  `on` includes the kind → debounce per `(asset, kind)` → one job per event
+- For each event: match all devices → for each matched device the actions whose
+  `on` includes the kind → debounce per `(device, kind)` → one job per event
   runs its actions **sequentially in config order**; different events run in
   parallel in a small thread pool.
 - Runner: `subprocess.Popen(argv, start_new_session=True)`, combined
@@ -221,11 +231,12 @@ Rules:
 udevmon run [--dry-run] [-v]      run the daemon
 udevmon scan [--no-prompt] [--present]
                                   scan mode (below)
-udevmon devices                   list present USB devices and mounted filesystems,
-                                  with match strength and known asset names
-udevmon assets list|show|add|remove
+udevmon present [--all]           list USB devices and filesystems present now,
+                                  with match strength and known device names
+udevmon devices list|show|add|remove   (named devices; `assets` is a deprecated alias)
 udevmon actions list|add|remove
 udevmon check                     validate config, report problems, exit 1 on error
+udevmon migrate                   rewrite a legacy config ([assets]/asset =) to [devices]/device =
 udevmon reload                    SIGHUP the running daemon
 udevmon service install [--now] [--dest DIR]
                                   write the systemd user unit (and optionally enable)
@@ -238,9 +249,9 @@ Global: `--config PATH`, `-v`.
 1. Print a banner and start the same sources as the daemon.
 2. Print each event as it happens (kind, description, properties, strength).
 3. After 2 s without new events, present the collected devices as a numbered
-   list, noting any that already belong to a named asset.
+   list, noting any that already belong to a named device.
 4. Prompt: choose a number → enter a name → confirm or edit the match keys
-   (default per §5.2, weak/medium warnings shown) → asset appended to the
+   (default per §5.2, weak/medium warnings shown) → device appended to the
    config. Repeat, Enter to continue scanning, `q` to quit.
 5. `--no-prompt` (also automatic when stdin is not a TTY) only prints events.
 

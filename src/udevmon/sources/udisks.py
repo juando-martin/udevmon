@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Callable
 
-from ..events import MOUNTED, STARTUP, UNMOUNTED, Device, Event
+from ..events import MOUNTED, STARTUP, UNMOUNTED, Endpoint, Event
 
 log = logging.getLogger("udevmon.udisks")
 
@@ -38,7 +38,7 @@ class UdisksTracker:
 
     def __init__(self):
         self.objects: dict[str, dict[str, dict]] = {}
-        self._mounted: dict[str, Device] = {}
+        self._mounted: dict[str, Endpoint] = {}
 
     # -- device construction -------------------------------------------------
     def _props_for(self, path: str) -> dict[str, str]:
@@ -57,11 +57,11 @@ class UdisksTracker:
                 props[key] = drive[name]
         return props
 
-    def _device(self, path: str, mountpoint: str | None = None) -> Device:
+    def _endpoint(self, path: str, mountpoint: str | None = None) -> Endpoint:
         props = self._props_for(path)
         if mountpoint:
             props["mountpoint"] = mountpoint
-        return Device("udisks", path, props)
+        return Endpoint("udisks", path, props)
 
     def _mount_points(self, path: str) -> list[str]:
         return _mountpoints(self.objects.get(path, {}).get(I_FS, {}).get("MountPoints"))
@@ -74,15 +74,15 @@ class UdisksTracker:
         for path in self.objects:
             mps = self._mount_points(path)
             if mps:
-                self._mounted[path] = self._device(path, mps[0])
+                self._mounted[path] = self._endpoint(path, mps[0])
 
     def _reconcile(self, path: str) -> list[Event]:
         mps = self._mount_points(path)
         was = self._mounted.get(path)
         if mps and was is None:
-            device = self._device(path, mps[0])
-            self._mounted[path] = device
-            return [Event(MOUNTED, device)]
+            endpoint = self._endpoint(path, mps[0])
+            self._mounted[path] = endpoint
+            return [Event(MOUNTED, endpoint)]
         if not mps and was is not None:
             del self._mounted[path]
             return [Event(UNMOUNTED, was)]
@@ -116,7 +116,7 @@ class UdisksTracker:
             del self.objects[path]
         return events
 
-    def filesystems(self, include_system: bool = False) -> list[Device]:
+    def filesystems(self, include_system: bool = False) -> list[Endpoint]:
         out = []
         for path, ifaces in self.objects.items():
             if I_FS not in ifaces:
@@ -125,7 +125,7 @@ class UdisksTracker:
             if block.get("HintSystem") and not include_system:
                 continue
             mps = self._mount_points(path)
-            out.append(self._device(path, mps[0] if mps else None))
+            out.append(self._endpoint(path, mps[0] if mps else None))
         return out
 
 
@@ -150,11 +150,11 @@ class UdisksSource:
                              Gio.DBusCallFlags.NONE, 5000, None)
         return res.unpack()[0]
 
-    def present(self) -> list[Device]:
+    def present(self) -> list[Endpoint]:
         """Filesystems currently known to be present."""
         return self.tracker.filesystems(self.include_system)
 
-    def snapshot(self, include_system: bool = False) -> list[Device]:
+    def snapshot(self, include_system: bool = False) -> list[Endpoint]:
         from gi.repository import Gio
         try:
             conn = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)

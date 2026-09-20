@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Callable, Mapping
 
-from ..events import CONNECTED, DISCONNECTED, STARTUP, Device, Event
+from ..events import CONNECTED, DISCONNECTED, STARTUP, Endpoint, Event
 
 log = logging.getLogger("udevmon.udev")
 
@@ -59,7 +59,7 @@ class UdevSource:
     def __init__(self, filters=("usb/usb_device",), announce_present=False):
         self.filters = parse_filters(filters)
         self.announce_present = announce_present
-        self._cache: dict[str, Device] = {}
+        self._cache: dict[str, Endpoint] = {}
         self._emit: Callable[[Event], None] | None = None
         self._monitor = None
         self._watch_id = None
@@ -68,16 +68,16 @@ class UdevSource:
     def handle(self, action: str, props: dict[str, str]) -> Event | None:
         key = props["syspath"]
         if action == "add":
-            device = Device(self.name, key, props)
-            self._cache[key] = device
-            return Event(CONNECTED, device)
+            endpoint = Endpoint(self.name, key, props)
+            self._cache[key] = endpoint
+            return Event(CONNECTED, endpoint)
         if action == "remove":
             cached = self._cache.pop(key, None)
             merged = {**(cached.props if cached else {}), **props}
-            return Event(DISCONNECTED, Device(self.name, key, merged))
+            return Event(DISCONNECTED, Endpoint(self.name, key, merged))
         return None
 
-    def present(self) -> list[Device]:
+    def present(self) -> list[Endpoint]:
         """Devices currently known to be present."""
         return list(self._cache.values())
 
@@ -86,16 +86,16 @@ class UdevSource:
         import pyudev
         return pyudev, pyudev.Context()
 
-    def snapshot(self) -> list[Device]:
+    def snapshot(self) -> list[Endpoint]:
         pyudev, ctx = self._context()
-        devices = []
+        endpoints = []
         for sub, devtype in self.filters:
             kwargs = {"subsystem": sub}
             if devtype:
                 kwargs["DEVTYPE"] = devtype
             for dev in ctx.list_devices(**kwargs):
-                devices.append(Device(self.name, dev.sys_path, _device_props(dev)))
-        return devices
+                endpoints.append(Endpoint(self.name, dev.sys_path, _device_props(dev)))
+        return endpoints
 
     def start(self, emit: Callable[[Event], None]) -> None:
         from gi.repository import GLib

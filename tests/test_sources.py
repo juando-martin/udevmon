@@ -29,7 +29,7 @@ class UdevTests(unittest.TestCase):
         self.assertEqual(add.kind, CONNECTED)
         rem = src.handle("remove", self.props())      # remove event without ID_* props
         self.assertEqual(rem.kind, DISCONNECTED)
-        self.assertEqual(rem.device.props["serial"], "S9x7")
+        self.assertEqual(rem.endpoint.props["serial"], "S9x7")
         self.assertIsNone(src.handle("change", self.props()))
 
     def test_filters(self):
@@ -59,7 +59,7 @@ class UdisksTrackerTests(unittest.TestCase):
         t.load(managed())
         ev = t.properties_changed(P, FS, {"MountPoints": [list(b"/run/media/u/BACKUP\0")]})
         self.assertEqual([e.kind for e in ev], [MOUNTED])
-        props = ev[0].device.props
+        props = ev[0].endpoint.props
         self.assertEqual(props["mountpoint"], "/run/media/u/BACKUP")
         self.assertEqual((props["fs_uuid"], props["fs_label"], props["part_uuid"],
                           props["devnode"], props["drive_serial"]),
@@ -67,7 +67,7 @@ class UdisksTrackerTests(unittest.TestCase):
         self.assertEqual(t.properties_changed(P, FS, {"MountPoints": [list(b"/run/media/u/BACKUP\0")]}), [])
         ev = t.properties_changed(P, FS, {"MountPoints": []})
         self.assertEqual([e.kind for e in ev], [UNMOUNTED])
-        self.assertEqual(ev[0].device.props["mountpoint"], "/run/media/u/BACKUP")
+        self.assertEqual(ev[0].endpoint.props["mountpoint"], "/run/media/u/BACKUP")
 
     def test_startup_state_fires_nothing_then_unmount(self):
         t = D.UdisksTracker()

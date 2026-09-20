@@ -27,7 +27,7 @@ def default_config_path() -> Path:
 
 
 @dataclass(frozen=True)
-class Asset:
+class Device:
     name: str
     match: dict[str, str]
     description: str = ""
@@ -36,7 +36,7 @@ class Asset:
 @dataclass(frozen=True)
 class Action:
     name: str
-    asset: str
+    device: str
     on: tuple[str, ...]
     run: tuple[str, ...]
     timeout: float = 60.0
@@ -52,9 +52,10 @@ class Settings:
 @dataclass
 class Config:
     settings: Settings = field(default_factory=Settings)
-    assets: dict[str, Asset] = field(default_factory=dict)
+    devices: dict[str, Device] = field(default_factory=dict)
     actions: list[Action] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    deprecated: bool = False        # file still uses the old 'assets'/'asset' names
 
 
 # Only {lower_snake_name} is a placeholder. "{{" / "}}" are literal braces, and anything
@@ -84,15 +85,44 @@ def expand(argv, props) -> list[str]:
     return out
 
 
-_TOP = {"daemon", "assets", "actions"}
+_TOP = {"daemon", "devices", "actions"}
 _DAEMON = {"debounce", "udev_filters", "max_workers"}
-_ASSET = {"description", "match"}
-_ACTION = {"name", "asset", "on", "run", "timeout"}
+_DEVICE = {"description", "match"}
+_ACTION = {"name", "device", "on", "run", "timeout"}
+
+
+def _upgrade_legacy(data: dict, problems: list[str]) -> tuple[dict, bool]:
+    """Accept the pre-rename spelling: [assets.X] -> [devices.X], asset = -> device =."""
+    data, legacy = dict(data), False
+    if "assets" in data:
+        if "devices" in data:
+            problems.append("both [devices] and the deprecated [assets] are present; "
+                            "run `udevmon migrate` or merge them by hand")
+        else:
+            data["devices"] = data.pop("assets")
+            legacy = True
+    actions = []
+    for i, a in enumerate(data.get("actions") or [], 1):
+        if isinstance(a, dict) and "asset" in a:
+            if "device" in a:
+                problems.append(f"[[actions]] #{i}: has both 'device' and deprecated 'asset'")
+            else:
+                a = dict(a)
+                a["device"] = a.pop("asset")
+                legacy = True
+        actions.append(a)
+    if "actions" in data:
+        data["actions"] = actions
+    return data, legacy
 
 
 def parse(data: dict) -> Config:
     problems: list[str] = []
     cfg = Config()
+    data, cfg.deprecated = _upgrade_legacy(data, problems)
+    if cfg.deprecated:
+        cfg.warnings.append("config uses the deprecated 'assets'/'asset' names; "
+                            "run `udevmon migrate` to update it")
 
     def unknown(where: str, got, allowed):
         for k in got:
@@ -115,15 +145,15 @@ def parse(data: dict) -> Config:
     except (TypeError, ValueError):
         problems.append("[daemon]: invalid debounce/udev_filters/max_workers")
 
-    for name, a in (data.get("assets") or {}).items():
-        where = f"[assets.{name}]"
+    for name, a in (data.get("devices") or {}).items():
+        where = f"[devices.{name}]"
         if not NAME_RE.match(name):
             problems.append(f"{where}: invalid name")
             continue
         if not isinstance(a, dict):
             problems.append(f"{where}: must be a table")
             continue
-        unknown(where, a, _ASSET)
+        unknown(where, a, _DEVICE)
         m = a.get("match")
         if not isinstance(m, dict) or not m:
             problems.append(f"{where}: 'match' must be a non-empty table")
@@ -132,9 +162,9 @@ def parse(data: dict) -> Config:
             problems.append(f"{where}: match values must be strings")
             continue
         match = {str(k): str(v) for k, v in m.items()}
-        cfg.assets[name] = Asset(name, match, str(a.get("description", "")))
+        cfg.devices[name] = Device(name, match, str(a.get("description", "")))
         if strength(match) == WEAK:
-            cfg.warnings.append(f"asset {name!r}: weak match {match} (matches every "
+            cfg.warnings.append(f"device {name!r}: weak match {match} (matches every "
                                 "device/filesystem with these values)")
 
     seen: set[str] = set()
@@ -144,11 +174,11 @@ def parse(data: dict) -> Config:
             problems.append(f"{where}: must be a table")
             continue
         unknown(where, a, _ACTION)
-        asset = a.get("asset")
-        if asset not in cfg.assets:
-            problems.append(f"{where}: unknown asset {asset!r}")
+        device = a.get("device")
+        if device not in cfg.devices:
+            problems.append(f"{where}: unknown device {device!r}")
             continue
-        name = a.get("name") or f"{asset}-{i}"
+        name = a.get("name") or f"{device}-{i}"
         where = f"action {name!r}"
         if not isinstance(name, str) or not NAME_RE.match(name):
             problems.append(f"{where}: invalid name")
@@ -186,7 +216,7 @@ def parse(data: dict) -> Config:
         except (TypeError, ValueError):
             problems.append(f"{where}: invalid timeout")
             continue
-        cfg.actions.append(Action(name, asset, on, tuple(run), timeout))
+        cfg.actions.append(Action(name, device, on, tuple(run), timeout))
 
     if problems:
         raise ConfigError(problems)

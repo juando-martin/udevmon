@@ -3,7 +3,7 @@ import unittest
 from udevmon import config as C
 from udevmon.daemon import Daemon
 from udevmon.engine import Engine
-from udevmon.events import SHUTDOWN, STARTUP, Device
+from udevmon.events import SHUTDOWN, STARTUP, Endpoint
 from udevmon.sources import udev as U
 from udevmon.sources import udisks as D
 from tests.test_engine_actions import FakeRunner
@@ -12,18 +12,18 @@ from tests.test_sources import FS, P, managed
 
 class PresentKindsTests(unittest.TestCase):
     def test_config_accepts_startup_shutdown_with_mountpoint(self):
-        cfg = C.parse({"assets": {"d": {"match": {"fs_uuid": "U1"}}},
-                       "actions": [{"asset": "d", "on": ["startup", "shutdown"],
+        cfg = C.parse({"devices": {"d": {"match": {"fs_uuid": "U1"}}},
+                       "actions": [{"device": "d", "on": ["startup", "shutdown"],
                                     "run": ["echo", "{mountpoint}", "{serial}"]}]})
         self.assertEqual(cfg.actions[0].on, ("startup", "shutdown"))
 
     def test_engine_dispatches_present_kinds(self):
-        cfg = C.parse({"assets": {"d": {"match": {"fs_uuid": "U1"}}},
-                       "actions": [{"name": "s", "asset": "d", "on": ["startup"], "run": ["true"]},
-                                   {"name": "e", "asset": "d", "on": ["shutdown"], "run": ["true"]}]})
+        cfg = C.parse({"devices": {"d": {"match": {"fs_uuid": "U1"}}},
+                       "actions": [{"name": "s", "device": "d", "on": ["startup"], "run": ["true"]},
+                                   {"name": "e", "device": "d", "on": ["shutdown"], "run": ["true"]}]})
         runner = FakeRunner()
         engine = Engine(cfg, runner)
-        dev = Device("udisks", "k", {"fs_uuid": "U1"})
+        dev = Endpoint("udisks", "k", {"fs_uuid": "U1"})
         from udevmon.events import Event
         engine.handle(Event(STARTUP, dev))
         engine.handle(Event(SHUTDOWN, dev))
@@ -54,9 +54,9 @@ class PresentKindsTests(unittest.TestCase):
         seen = []
 
         class Eng:
-            def handle(self, e): seen.append((e.kind, e.device.key))
+            def handle(self, e): seen.append((e.kind, e.endpoint.key))
         d = Daemon.__new__(Daemon)
-        d.engine, d.sources = Eng(), [Src([Device("udev", "a", {})]), Src([Device("udisks", "b", {})])]
+        d.engine, d.sources = Eng(), [Src([Endpoint("udev", "a", {})]), Src([Endpoint("udisks", "b", {})])]
         d.fire_shutdown()
         self.assertEqual(seen, [(SHUTDOWN, "a"), (SHUTDOWN, "b")])
 

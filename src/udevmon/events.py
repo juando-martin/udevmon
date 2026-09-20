@@ -22,7 +22,7 @@ _FS_KEYS = frozenset({
     "fs_uuid", "fs_label", "fs_type", "part_uuid", "devnode",
     "drive_vendor", "drive_model", "drive_serial",
 })
-_COMMON = frozenset({"event", "asset"})
+_COMMON = frozenset({"event", "device"})
 
 KNOWN_KEYS: dict[str, frozenset[str]] = {
     CONNECTED: _USB_KEYS | _COMMON,
@@ -37,7 +37,7 @@ VALID_KINDS = frozenset(KNOWN_KEYS)
 
 
 @dataclass(frozen=True)
-class Device:
+class Endpoint:
     source: str                     # "udev" | "udisks"
     key: str                        # stable while present (syspath / object path)
     props: Mapping[str, str]
@@ -50,18 +50,18 @@ class Device:
 @dataclass(frozen=True)
 class Event:
     kind: str
-    device: Device
+    endpoint: Endpoint
     time: float = field(default_factory=time.time)
 
     @property
     def props(self) -> dict[str, str]:
-        return {**self.device.props, "event": self.kind}
+        return {**self.endpoint.props, "event": self.kind}
 
 
-def describe(device: Device) -> str:
+def describe(endpoint: Endpoint) -> str:
     """One-line human description of a device."""
-    p = device.props
-    if device.is_filesystem:
+    p = endpoint.props
+    if endpoint.is_filesystem:
         name = p.get("fs_label") or p.get("fs_uuid") or p.get("devnode", "?")
         out = f"Filesystem {name}"
         if p.get("fs_type"):

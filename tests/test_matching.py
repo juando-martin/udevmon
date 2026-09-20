@@ -1,6 +1,6 @@
 import unittest
 
-from udevmon.events import Device
+from udevmon.events import Endpoint
 from udevmon.matching import (MEDIUM, STRONG, WEAK, build_match, default_match_keys,
                               is_suspicious_serial, matches, strength)
 
@@ -27,14 +27,14 @@ class MatchingTests(unittest.TestCase):
         self.assertFalse(is_suspicious_serial("323434393551"))
 
     def test_default_keys(self):
-        usb = Device("udev", "k", {"vendor_id": "1", "product_id": "2", "serial": "S9x7",
+        usb = Endpoint("udev", "k", {"vendor_id": "1", "product_id": "2", "serial": "S9x7",
                                    "port_path": "1-2"})
         self.assertEqual(default_match_keys(usb), ["vendor_id", "product_id", "serial"])
-        noserial = Device("udev", "k", {"vendor_id": "1", "product_id": "2", "port_path": "1-2"})
+        noserial = Endpoint("udev", "k", {"vendor_id": "1", "product_id": "2", "port_path": "1-2"})
         self.assertEqual(default_match_keys(noserial), ["vendor_id", "product_id", "port_path"])
-        fs = Device("udisks", "k", {"fs_uuid": "U", "fs_label": "L", "part_uuid": "P"})
+        fs = Endpoint("udisks", "k", {"fs_uuid": "U", "fs_label": "L", "part_uuid": "P"})
         self.assertEqual(default_match_keys(fs), ["fs_uuid"])
-        fs2 = Device("udisks", "k", {"fs_label": "L"})
+        fs2 = Endpoint("udisks", "k", {"fs_label": "L"})
         self.assertEqual(default_match_keys(fs2), ["fs_label"])
         self.assertEqual(build_match(usb, ["vendor_id", "serial"]),
                          {"vendor_id": "1", "serial": "S9x7"})

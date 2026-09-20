@@ -19,8 +19,8 @@ def _key(k: str) -> str:
     return k if re.fullmatch(r"[A-Za-z0-9_-]+", k) else _s(k)
 
 
-def render_asset(name, match, description="") -> str:
-    lines = [f"[assets.{name}]"]
+def render_device(name, match, description="") -> str:
+    lines = [f"[devices.{name}]"]
     if description:
         lines.append(f"description = {_s(description)}")
     inner = ", ".join(f"{_key(k)} = {_s(v)}" for k, v in match.items())
@@ -28,8 +28,8 @@ def render_asset(name, match, description="") -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_action(name, asset, on, run, timeout=None) -> str:
-    lines = ["[[actions]]", f"name = {_s(name)}", f"asset = {_s(asset)}",
+def render_action(name, device, on, run, timeout=None) -> str:
+    lines = ["[[actions]]", f"name = {_s(name)}", f"device = {_s(device)}",
              "on = [" + ", ".join(_s(k) for k in on) + "]",
              "run = [" + ", ".join(_s(a) for a in run) + "]"]
     if timeout is not None:
@@ -67,27 +67,35 @@ def _append(path: Path, block: str) -> str:
     return (old + "\n\n" if old else "") + block
 
 
-def add_asset(path: Path, name, match, description="") -> None:
+def _load_for_edit(path: Path, *, must_exist: bool = False):
+    cfg = cfgmod.load(path, must_exist=must_exist)
+    if cfg.deprecated:
+        raise cfgmod.ConfigError([f"{path} uses the deprecated 'assets'/'asset' names; "
+                                  "run `udevmon migrate` first"])
+    return cfg
+
+
+def add_device(path: Path, name, match, description="") -> None:
     if not cfgmod.NAME_RE.match(name):
-        raise cfgmod.ConfigError([f"invalid asset name {name!r} (use letters, digits, _ . -)"])
-    existing = cfgmod.load(path)
-    if name in existing.assets:
-        raise cfgmod.ConfigError([f"asset {name!r} already exists"])
-    _edit(path, _append(path, render_asset(name, match, description)),
-          lambda c: c.assets[name])
+        raise cfgmod.ConfigError([f"invalid device name {name!r} (use letters, digits, _ . -)"])
+    existing = _load_for_edit(path)
+    if name in existing.devices:
+        raise cfgmod.ConfigError([f"device {name!r} already exists"])
+    _edit(path, _append(path, render_device(name, match, description)),
+          lambda c: c.devices[name])
 
 
-def add_action(path: Path, name, asset, on, run, timeout=None) -> str:
-    existing = cfgmod.load(path)
+def add_action(path: Path, name, device, on, run, timeout=None) -> str:
+    existing = _load_for_edit(path)
     if not name:
-        base = f"{asset}-{'-'.join(on)}"
+        base = f"{device}-{'-'.join(on)}"
         name, n = base, 2
         taken = {a.name for a in existing.actions}
         while name in taken:
             name, n = f"{base}-{n}", n + 1
     elif name in {a.name for a in existing.actions}:
         raise cfgmod.ConfigError([f"action {name!r} already exists"])
-    _edit(path, _append(path, render_action(name, asset, on, run, timeout)),
+    _edit(path, _append(path, render_action(name, device, on, run, timeout)),
           lambda c: [a for a in c.actions if a.name == name][0])
     return name
 
@@ -111,26 +119,26 @@ def _remove_block(text: str, header_re: str, extra_re: str | None = None) -> str
     return "".join(lines[:start] + lines[end:])
 
 
-def remove_asset(path: Path, name: str) -> None:
-    cfg = cfgmod.load(path, must_exist=True)
-    if name not in cfg.assets:
-        raise cfgmod.ConfigError([f"no such asset {name!r}"])
-    users = [a.name for a in cfg.actions if a.asset == name]
+def remove_device(path: Path, name: str) -> None:
+    cfg = _load_for_edit(path, must_exist=True)
+    if name not in cfg.devices:
+        raise cfgmod.ConfigError([f"no such device {name!r}"])
+    users = [a.name for a in cfg.actions if a.device == name]
     if users:
-        raise cfgmod.ConfigError([f"asset {name!r} is used by action(s): {', '.join(users)}"])
+        raise cfgmod.ConfigError([f"device {name!r} is used by action(s): {', '.join(users)}"])
     text = path.read_text()
-    new = _remove_block(text, rf"\[assets\.(?:{re.escape(name)}|\"{re.escape(name)}\")\]\s*$")
+    new = _remove_block(text, rf"\[devices\.(?:{re.escape(name)}|\"{re.escape(name)}\")\]\s*$")
     if new is None:
-        raise cfgmod.ConfigError([f"could not locate [assets.{name}] block to remove"])
+        raise cfgmod.ConfigError([f"could not locate [devices.{name}] block to remove"])
 
     def verify(c):
-        if name in c.assets:
+        if name in c.devices:
             raise cfgmod.ConfigError([f"removal of {name!r} did not take effect"])
     _edit(path, new, verify)
 
 
 def remove_action(path: Path, name: str) -> None:
-    cfg = cfgmod.load(path, must_exist=True)
+    cfg = _load_for_edit(path, must_exist=True)
     if name not in {a.name for a in cfg.actions}:
         raise cfgmod.ConfigError([f"no such action {name!r}"])
     text = path.read_text()
@@ -153,3 +161,23 @@ def remove_action(path: Path, name: str) -> None:
             return
     raise cfgmod.ConfigError([f"action {name!r} has no explicit name in the file; "
                               "edit config.toml by hand to remove it"])
+
+
+def migrate(path: Path) -> bool:
+    """Rewrite legacy [assets.X] / ``asset =`` to [devices.X] / ``device =``.
+
+    Returns False when the file is already current. Comments and layout are kept.
+    """
+    old = cfgmod.load(path, must_exist=True)
+    if not old.deprecated:
+        return False
+    text = path.read_text()
+    new = re.sub(r"(?m)^\[assets(?=[.\]])", "[devices", text)
+    new = re.sub(r"(?m)^(\s*)asset(?=\s*=)", r"\1device", new)
+
+    def verify(c):
+        if c.deprecated or c.devices != old.devices or c.actions != old.actions:
+            raise cfgmod.ConfigError(["migration would change the configuration; "
+                                      "file left untouched, please edit it by hand"])
+    _edit(path, new, verify)
+    return True

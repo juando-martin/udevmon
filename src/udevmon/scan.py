@@ -1,4 +1,4 @@
-"""Scan mode: watch events live and let the user name devices as assets."""
+"""Scan mode: watch events live and let the user name devices as devices."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import config as cfgmod
 from . import configedit
-from .events import STARTUP, Device, Event, describe
+from .events import STARTUP, Endpoint, Event, describe
 from .matching import (MEDIUM, STRONG, build_match, default_match_keys, matches, strength,
                        strength_note)
 from .sources.udev import UdevSource
@@ -18,12 +18,12 @@ QUIET_MS = 2000
 SKIP_KEYS = ("syspath", "subsystem", "devtype")
 
 
-def known_assets(cfg: cfgmod.Config, device: Device) -> list[str]:
-    return [a.name for a in cfg.assets.values() if matches(a.match, device.props)]
+def known_devices(cfg: cfgmod.Config, endpoint: Endpoint) -> list[str]:
+    return [a.name for a in cfg.devices.values() if matches(a.match, endpoint.props)]
 
 
-def format_props(device: Device) -> str:
-    return "  ".join(f"{k}={v}" for k, v in device.props.items()
+def format_props(endpoint: Endpoint) -> str:
+    return "  ".join(f"{k}={v}" for k, v in endpoint.props.items()
                      if not k.startswith("udev_") and k not in SKIP_KEYS)
 
 
@@ -32,12 +32,12 @@ class Scanner:
         self.config_path = config_path
         self.prompt = prompt
         self.present = present
-        self.pending: dict[str, Device] = {}
+        self.pending: dict[str, Endpoint] = {}
         self._timer = None
 
     def _emit(self, event: Event) -> None:
         from gi.repository import GLib
-        d = event.device
+        d = event.endpoint
         stamp = time.strftime("%H:%M:%S", time.localtime(event.time))
         keys = default_match_keys(d)
         level = strength(build_match(d, keys)) if keys else None
@@ -66,14 +66,14 @@ class Scanner:
         return False
 
     def _prompt_user(self) -> None:
-        devices = list(self.pending.values())
+        endpoints = list(self.pending.values())
         self.pending.clear()
-        while devices:
+        while endpoints:
             cfg = cfgmod.load(self.config_path)
             print("\nDetected:")
-            for i, d in enumerate(devices, 1):
-                known = known_assets(cfg, d)
-                note = f"  (already asset: {', '.join(known)})" if known else ""
+            for i, d in enumerate(endpoints, 1):
+                known = known_devices(cfg, d)
+                note = f"  (already device: {', '.join(known)})" if known else ""
                 print(f"  [{i}] {describe(d)}{note}")
             ans = input("Number to name, Enter to keep scanning, q to quit: ").strip().lower()
             if ans == "q":
@@ -81,25 +81,25 @@ class Scanner:
                 return
             if not ans:
                 return
-            if not ans.isdigit() or not 1 <= int(ans) <= len(devices):
+            if not ans.isdigit() or not 1 <= int(ans) <= len(endpoints):
                 print("Not a valid choice.")
                 continue
-            if self._name_device(devices[int(ans) - 1]):
-                devices.pop(int(ans) - 1)
+            if self._name_endpoint(endpoints[int(ans) - 1]):
+                endpoints.pop(int(ans) - 1)
         print("Waiting for more events (Ctrl+C to quit)...")
 
-    def _name_device(self, device: Device) -> bool:
-        name = input("Asset name: ").strip()
+    def _name_endpoint(self, endpoint: Endpoint) -> bool:
+        name = input("Device name: ").strip()
         if not cfgmod.NAME_RE.match(name):
             print("Names may contain only letters, digits, _ . -")
             return False
-        defaults = default_match_keys(device)
-        available = [k for k in device.props if not k.startswith("udev_")
+        defaults = default_match_keys(endpoint)
+        available = [k for k in endpoint.props if not k.startswith("udev_")
                      and k not in ("syspath", "subsystem", "devtype", "mountpoint")]
         print(f"Available keys: {', '.join(available)}")
         raw = input(f"Match on [{', '.join(defaults)}] (Enter to accept): ").strip()
         keys = [k.strip() for k in raw.split(",") if k.strip()] if raw else defaults
-        match = build_match(device, keys)
+        match = build_match(endpoint, keys)
         if not match or len(match) != len(keys):
             print("Some chosen keys are missing on this device; nothing saved.")
             return False
@@ -108,15 +108,15 @@ class Scanner:
         if level != STRONG:
             if input("Save anyway? [y/N] ").strip().lower() != "y":
                 return False
-        desc = describe(device)
+        desc = describe(endpoint)
         try:
-            configedit.add_asset(self.config_path, name, match, desc)
+            configedit.add_device(self.config_path, name, match, desc)
         except cfgmod.ConfigError as e:
             print(f"Could not save: {e}")
             return False
-        print(f"Saved asset {name!r} to {self.config_path}")
+        print(f"Saved device {name!r} to {self.config_path}")
         print(f"Add an action with e.g.:\n  udevmon actions add {name} "
-              f"{'mounted' if device.is_filesystem else 'connected'} -- notify-send 'hello'")
+              f"{'mounted' if endpoint.is_filesystem else 'connected'} -- notify-send 'hello'")
         return True
 
     def run(self) -> int:

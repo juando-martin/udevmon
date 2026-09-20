@@ -1,10 +1,10 @@
-"""Asset matching and match-strength assessment."""
+"""Device matching and match-strength assessment."""
 
 from __future__ import annotations
 
 from typing import Mapping
 
-from .events import Device
+from .events import Endpoint
 
 STRONG, MEDIUM, WEAK = "strong", "medium", "weak"
 
@@ -55,10 +55,10 @@ def strength_note(level: str) -> str:
     }[level]
 
 
-def default_match_keys(device: Device) -> list[str]:
-    """Best available identifying keys for ``device`` (see spec 5.2)."""
-    p = device.props
-    if device.is_filesystem:
+def default_match_keys(endpoint: Endpoint) -> list[str]:
+    """Best available identifying keys for ``endpoint`` (see spec 5.2)."""
+    p = endpoint.props
+    if endpoint.is_filesystem:
         if p.get("fs_uuid"):
             return ["fs_uuid"]
         if p.get("part_uuid"):
@@ -72,5 +72,5 @@ def default_match_keys(device: Device) -> list[str]:
     return ids + [k for k in ("port_path",) if p.get(k)]
 
 
-def build_match(device: Device, keys: list[str]) -> dict[str, str]:
-    return {k: device.props[k] for k in keys if device.props.get(k)}
+def build_match(endpoint: Endpoint, keys: list[str]) -> dict[str, str]:
+    return {k: endpoint.props[k] for k in keys if endpoint.props.get(k)}

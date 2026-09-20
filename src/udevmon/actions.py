@@ -14,18 +14,18 @@ from .events import Event
 log = logging.getLogger("udevmon.actions")
 
 
-def build_env(event: Event, asset: str) -> dict[str, str]:
+def build_env(event: Event, device: str) -> dict[str, str]:
     env = dict(os.environ)
     env["UDEVMON_EVENT"] = event.kind
-    env["UDEVMON_ASSET"] = asset
-    for k, v in event.device.props.items():
+    env["UDEVMON_DEVICE"] = device
+    for k, v in event.endpoint.props.items():
         env[f"UDEVMON_{k.upper()}"] = v
     return env
 
 
-def run_action(action: Action, event: Event, asset: str, *, dry_run: bool = False) -> int | None:
+def run_action(action: Action, event: Event, device: str, *, dry_run: bool = False) -> int | None:
     """Run one action; returns exit status (None if skipped/timeout-killed)."""
-    props = {**event.props, "asset": asset}
+    props = {**event.props, "device": device}
     try:
         argv = expand(action.run, props)
     except KeyError as e:
@@ -38,7 +38,7 @@ def run_action(action: Action, event: Event, asset: str, *, dry_run: bool = Fals
     log.info("action %r: running %s", action.name, argv)
     try:
         proc = subprocess.Popen(
-            argv, cwd=os.path.expanduser("~"), env=build_env(event, asset),
+            argv, cwd=os.path.expanduser("~"), env=build_env(event, device),
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, errors="replace", start_new_session=True)
     except OSError as e:
@@ -80,13 +80,13 @@ class ActionRunner:
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="action")
 
     def submit(self, event: Event, jobs: list[tuple[Action, str]]):
-        """Run (action, asset) jobs sequentially in one worker."""
+        """Run (action, device) jobs sequentially in one worker."""
         return self._pool.submit(self._run_all, event, jobs)
 
     def _run_all(self, event, jobs):
-        for action, asset in jobs:
+        for action, device in jobs:
             try:
-                run_action(action, event, asset, dry_run=self.dry_run)
+                run_action(action, event, device, dry_run=self.dry_run)
             except Exception:
                 log.exception("action %r crashed", action.name)
 

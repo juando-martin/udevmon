@@ -5,7 +5,7 @@ from pathlib import Path
 from udevmon import actions as A
 from udevmon import config as C
 from udevmon.engine import Engine
-from udevmon.events import CONNECTED, MOUNTED, Device, Event
+from udevmon.events import CONNECTED, MOUNTED, Endpoint, Event
 
 
 class FakeRunner:
@@ -13,7 +13,7 @@ class FakeRunner:
         self.calls = []
 
     def submit(self, event, jobs):
-        self.calls.append((event.kind, [(a.name, asset) for a, asset in jobs]))
+        self.calls.append((event.kind, [(a.name, device) for a, device in jobs]))
 
 
 def cfg(text_dict):
@@ -22,11 +22,11 @@ def cfg(text_dict):
 
 DATA = {
     "daemon": {"debounce": 1.0},
-    "assets": {"disk": {"match": {"fs_uuid": "U1"}}, "key": {"match": {"serial": "S9x7"}}},
+    "devices": {"disk": {"match": {"fs_uuid": "U1"}}, "key": {"match": {"serial": "S9x7"}}},
     "actions": [
-        {"name": "a1", "asset": "disk", "on": ["mounted"], "run": ["true"]},
-        {"name": "a2", "asset": "disk", "on": ["mounted"], "run": ["true"]},
-        {"name": "k1", "asset": "key", "on": ["connected"], "run": ["true"]},
+        {"name": "a1", "device": "disk", "on": ["mounted"], "run": ["true"]},
+        {"name": "a2", "device": "disk", "on": ["mounted"], "run": ["true"]},
+        {"name": "k1", "device": "key", "on": ["connected"], "run": ["true"]},
     ],
 }
 
@@ -38,7 +38,7 @@ class EngineTests(unittest.TestCase):
         self.engine = Engine(cfg(DATA), self.runner, clock=lambda: self.now)
 
     def ev(self, kind, source, **props):
-        return Event(kind, Device(source, "k", props))
+        return Event(kind, Endpoint(source, "k", props))
 
     def test_matching_and_order(self):
         self.engine.handle(self.ev(MOUNTED, "udisks", fs_uuid="U1", mountpoint="/m"))
@@ -70,11 +70,11 @@ class RunActionTests(unittest.TestCase):
         return C.Action("t", "a", ("mounted",), tuple(run), timeout)
 
     def event(self, **props):
-        return Event(MOUNTED, Device("udisks", "k", props))
+        return Event(MOUNTED, Endpoint("udisks", "k", props))
 
     def test_runs_with_placeholders_and_env(self):
         out = self.dir / "out"
-        rc = A.run_action(self.action(["sh", "-c", 'echo "$1|$UDEVMON_EVENT|$UDEVMON_ASSET|$UDEVMON_FS_UUID" > "$2"',
+        rc = A.run_action(self.action(["sh", "-c", 'echo "$1|$UDEVMON_EVENT|$UDEVMON_DEVICE|$UDEVMON_FS_UUID" > "$2"',
                                        "sh", "{mountpoint}", str(out)]),
                           self.event(mountpoint="/mnt/x y", fs_uuid="U"), "disk")
         self.assertEqual(rc, 0)

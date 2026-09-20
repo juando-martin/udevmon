@@ -61,8 +61,8 @@ class Daemon:
         """Emit a ``shutdown`` event for every device still present."""
         for s in self.sources:
             try:
-                for device in s.present():
-                    self.engine.handle(Event(SHUTDOWN, device))
+                for endpoint in s.present():
+                    self.engine.handle(Event(SHUTDOWN, endpoint))
             except Exception:
                 log.exception("error firing shutdown events")
 
@@ -78,7 +78,7 @@ class Daemon:
         self.engine.set_config(new)
         for w in new.warnings:
             log.warning(w)
-        log.info("config reloaded: %d asset(s), %d action(s)", len(new.assets), len(new.actions))
+        log.info("config reloaded: %d device(s), %d action(s)", len(new.devices), len(new.actions))
         return True
 
     def run(self) -> int:
@@ -102,7 +102,7 @@ class Daemon:
                         UdisksSource(announce_present=True)]
         for s in self.sources:
             s.start(self._emit)
-        log.info("udevmon running: %d asset(s), %d action(s)%s", len(self.cfg.assets),
+        log.info("udevmon running: %d device(s), %d action(s)%s", len(self.cfg.devices),
                  len(self.cfg.actions), " [dry-run]" if self.dry_run else "")
         try:
             loop.run()

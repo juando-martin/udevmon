@@ -1,4 +1,4 @@
-"""Match events against assets, debounce, and dispatch actions."""
+"""Match events against devices, debounce, and dispatch actions."""
 
 from __future__ import annotations
 
@@ -26,26 +26,26 @@ class Engine:
         props = event.props
         jobs: list[tuple[Action, str]] = []
         matched = False
-        for asset in self.config.assets.values():
-            if not matches(asset.match, props):
+        for device in self.config.devices.values():
+            if not matches(device.match, props):
                 continue
             matched = True
             actions = [a for a in self.config.actions
-                       if a.asset == asset.name and event.kind in a.on]
+                       if a.device == device.name and event.kind in a.on]
             if not actions:
-                log.debug("%s matched asset %r but no action for it", event.kind, asset.name)
+                log.debug("%s matched device %r but no action for it", event.kind, device.name)
                 continue
-            key = (asset.name, event.kind)
+            key = (device.name, event.kind)
             now = self._clock()
             last = self._last.get(key)
             if last is not None and now - last < self.config.settings.debounce:
-                log.debug("debounced %s for asset %r", event.kind, asset.name)
+                log.debug("debounced %s for device %r", event.kind, device.name)
                 continue
             self._last[key] = now
-            log.info("%s: asset %r matched, %d action(s)", event.kind, asset.name, len(actions))
-            jobs.extend((a, asset.name) for a in actions)
+            log.info("%s: device %r matched, %d action(s)", event.kind, device.name, len(actions))
+            jobs.extend((a, device.name) for a in actions)
         if not matched:
-            log.debug("%s: no asset matched (%s)", event.kind, event.device.key)
+            log.debug("%s: no device matched (%s)", event.kind, event.endpoint.key)
         if jobs:
             self.runner.submit(event, jobs)
         return jobs

@@ -10,7 +10,7 @@ from pathlib import Path
 from . import __version__
 from . import config as cfgmod
 from . import configedit
-from .events import VALID_KINDS, Device, describe
+from .events import VALID_KINDS, Endpoint, describe
 from .matching import build_match, matches, strength
 
 
@@ -51,47 +51,47 @@ def cmd_scan(args):
                    present=args.present).run()
 
 
-def cmd_devices(args):
+def cmd_present(args):
     from .sources.udev import UdevSource
     from .sources.udisks import UdisksSource
-    from .scan import known_assets, format_props
+    from .scan import known_devices, format_props
     from .matching import default_match_keys
     cfg = _load(args)
-    devices = UdevSource(cfg.settings.udev_filters).snapshot() \
+    endpoints = UdevSource(cfg.settings.udev_filters).snapshot() \
         + UdisksSource().snapshot(include_system=args.all)
-    for d in devices:
+    for d in endpoints:
         keys = default_match_keys(d)
         level = strength(build_match(d, keys)) if keys else "-"
-        known = known_assets(cfg, d)
-        print(f"{describe(d)}   [{level}]" + (f"   asset: {', '.join(known)}" if known else ""))
+        known = known_devices(cfg, d)
+        print(f"{describe(d)}   [{level}]" + (f"   device: {', '.join(known)}" if known else ""))
         print(f"    {format_props(d)}")
     return 0
 
 
-def cmd_assets_list(args):
+def cmd_devices_list(args):
     cfg = _load(args)
-    if not cfg.assets:
-        print("No assets. Run `udevmon scan` to create some.")
-    for a in cfg.assets.values():
-        n = sum(1 for x in cfg.actions if x.asset == a.name)
+    if not cfg.devices:
+        print("No devices. Run `udevmon scan` to create some.")
+    for a in cfg.devices.values():
+        n = sum(1 for x in cfg.actions if x.device == a.name)
         print(f"{a.name:<20} {strength(a.match):<7} {a.match}  ({n} action(s))")
     return 0
 
 
-def cmd_assets_show(args):
+def cmd_devices_show(args):
     cfg = _load(args, must_exist=True)
-    a = cfg.assets.get(args.name)
+    a = cfg.devices.get(args.name)
     if not a:
-        print(f"error: no such asset {args.name!r}", file=sys.stderr)
+        print(f"error: no such device {args.name!r}", file=sys.stderr)
         return 1
     print(f"{a.name}: {a.description}\n  match: {a.match}  ({strength(a.match)})")
     for x in cfg.actions:
-        if x.asset == a.name:
+        if x.device == a.name:
             print(f"  action {x.name}: on {list(x.on)} run {list(x.run)} (timeout {x.timeout:g}s)")
     return 0
 
 
-def cmd_assets_add(args):
+def cmd_devices_add(args):
     match = {}
     for pair in args.match:
         k, sep, v = pair.partition("=")
@@ -99,22 +99,22 @@ def cmd_assets_add(args):
             print(f"error: bad --match {pair!r}, expected key=value", file=sys.stderr)
             return 1
         match[k] = v
-    _guard(configedit.add_asset, args.config, args.name, match, args.description or "")
+    _guard(configedit.add_device, args.config, args.name, match, args.description or "")
     level = strength(match)
-    print(f"Added asset {args.name!r} ({level}).")
+    print(f"Added device {args.name!r} ({level}).")
     return 0
 
 
-def cmd_assets_remove(args):
-    _guard(configedit.remove_asset, args.config, args.name)
-    print(f"Removed asset {args.name!r}.")
+def cmd_devices_remove(args):
+    _guard(configedit.remove_device, args.config, args.name)
+    print(f"Removed device {args.name!r}.")
     return 0
 
 
 def cmd_actions_list(args):
     cfg = _load(args)
     for x in cfg.actions:
-        print(f"{x.name:<24} {x.asset:<16} on {','.join(x.on):<24} {list(x.run)}")
+        print(f"{x.name:<24} {x.device:<16} on {','.join(x.on):<24} {list(x.run)}")
     if not cfg.actions:
         print("No actions.")
     return 0
@@ -130,7 +130,7 @@ def cmd_actions_add(args):
     if not cmd:
         print("error: no command given (put it after --)", file=sys.stderr)
         return 1
-    name = _guard(configedit.add_action, args.config, args.name, args.asset, on, cmd,
+    name = _guard(configedit.add_action, args.config, args.name, args.device, on, cmd,
                   args.timeout)
     print(f"Added action {name!r}.")
     return 0
@@ -151,7 +151,16 @@ def cmd_check(args):
         return 1
     for w in cfg.warnings:
         print(f"warning: {w}")
-    print(f"OK: {len(cfg.assets)} asset(s), {len(cfg.actions)} action(s)")
+    print(f"OK: {len(cfg.devices)} device(s), {len(cfg.actions)} action(s)")
+    return 0
+
+
+def cmd_migrate(args):
+    changed = _guard(configedit.migrate, args.config)
+    if changed:
+        print(f"Migrated {args.config} to [devices] / device = (previous version saved as .bak).")
+    else:
+        print("Nothing to migrate: the config already uses the current names.")
     return 0
 
 
@@ -191,25 +200,31 @@ def build_parser() -> argparse.ArgumentParser:
                    help="also offer devices and filesystems that are already present")
     s.set_defaults(fn=cmd_scan)
 
-    s = sub.add_parser("devices", help="list present USB devices and filesystems")
+    s = sub.add_parser("present", help="list USB devices and filesystems that are present now")
     s.add_argument("--all", action="store_true", help="include system filesystems")
-    s.set_defaults(fn=cmd_devices)
+    s.set_defaults(fn=cmd_present)
 
-    a = sub.add_parser("assets", help="manage named assets").add_subparsers(
-        dest="sub", required=True)
-    x = a.add_parser("list"); x.set_defaults(fn=cmd_assets_list)
-    x = a.add_parser("show"); x.add_argument("name"); x.set_defaults(fn=cmd_assets_show)
-    x = a.add_parser("add")
-    x.add_argument("name")
-    x.add_argument("--match", action="append", required=True, metavar="KEY=VALUE")
-    x.add_argument("--description")
-    x.set_defaults(fn=cmd_assets_add)
-    x = a.add_parser("remove"); x.add_argument("name"); x.set_defaults(fn=cmd_assets_remove)
+    def device_commands(group):
+        x = group.add_parser("list", help="list named devices"); x.set_defaults(fn=cmd_devices_list)
+        x = group.add_parser("show"); x.add_argument("name"); x.set_defaults(fn=cmd_devices_show)
+        x = group.add_parser("add")
+        x.add_argument("name")
+        x.add_argument("--match", action="append", required=True, metavar="KEY=VALUE")
+        x.add_argument("--description")
+        x.set_defaults(fn=cmd_devices_add)
+        x = group.add_parser("remove"); x.add_argument("name"); x.set_defaults(fn=cmd_devices_remove)
+
+    dev = sub.add_parser("devices", help="manage named devices")
+    device_commands(dev.add_subparsers(dest="sub", required=False))
+    dev.set_defaults(fn=cmd_devices_list)              # bare `udevmon devices` lists them
+    old = sub.add_parser("assets", help=argparse.SUPPRESS)   # deprecated spelling
+    device_commands(old.add_subparsers(dest="sub", required=True))
+    old.set_defaults(deprecated_alias="devices")
 
     a = sub.add_parser("actions", help="manage actions").add_subparsers(dest="sub", required=True)
     x = a.add_parser("list"); x.set_defaults(fn=cmd_actions_list)
-    x = a.add_parser("add", help="actions add ASSET EVENT[,EVENT] [--name N] -- CMD [ARG...]")
-    x.add_argument("asset")
+    x = a.add_parser("add", help="actions add DEVICE EVENT[,EVENT] [--name N] -- CMD [ARG...]")
+    x.add_argument("device")
     x.add_argument("on", help="comma-separated: " + ", ".join(sorted(VALID_KINDS)))
     x.add_argument("--name")
     x.add_argument("--timeout", type=float)
@@ -217,6 +232,8 @@ def build_parser() -> argparse.ArgumentParser:
     x = a.add_parser("remove"); x.add_argument("name"); x.set_defaults(fn=cmd_actions_remove)
 
     s = sub.add_parser("check", help="validate the config"); s.set_defaults(fn=cmd_check)
+    s = sub.add_parser("migrate", help="update a config that uses the old 'assets' names")
+    s.set_defaults(fn=cmd_migrate)
     s = sub.add_parser("reload", help="tell the running daemon to reload"); s.set_defaults(fn=cmd_reload)
 
     sv = sub.add_parser("service", help="systemd user service").add_subparsers(
@@ -237,6 +254,9 @@ def main(argv=None) -> int:
         argv, tail = argv[:i], argv[i + 1:]
     args = parser.parse_args(argv)
     args.cmd = tail
+    if getattr(args, "deprecated_alias", None):
+        print(f"note: 'udevmon assets' is deprecated, use 'udevmon {args.deprecated_alias}'",
+              file=sys.stderr)
     args.config_explicit = args.config is not None
     if args.config is None:
         args.config = cfgmod.default_config_path()

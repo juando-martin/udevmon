@@ -23,9 +23,9 @@ Concepts:
 
 | Term | Meaning |
 |---|---|
-| **asset** | A name you give to a device or filesystem, plus the properties that identify it (e.g. `fs_uuid = "3F2A-91BC"`). |
-| **event** | Something that happened to an asset: `connected`, `disconnected`, `mounted`, `unmounted`, `startup`, `shutdown`. |
-| **action** | A command to run when a given event happens to a given asset. |
+| **device** | A name you give to a physical USB device or a filesystem, plus the properties that identify it (e.g. `fs_uuid = "3F2A-91BC"`). Devices are what you attach actions to. |
+| **event** | Something that happened to a device: `connected`, `disconnected`, `mounted`, `unmounted`, `startup`, `shutdown`. |
+| **action** | A command to run when a given event happens to a given device. |
 
 ## Requirements
 
@@ -79,10 +79,10 @@ Detected:
   [1] USB SanDisk Cruzer [0781:5567]
   [2] Filesystem BACKUP (ext4) on /dev/sdb1 at /media/me/BACKUP
 Number to name, Enter to keep scanning, q to quit: 2
-Asset name: backup-disk
+Device name: backup-disk
 Match on [fs_uuid] (Enter to accept):
 Match strength: strong — identifies this exact device
-Saved asset 'backup-disk' to /home/me/.config/udevmon/config.toml
+Saved device 'backup-disk' to /home/me/.config/udevmon/config.toml
 ```
 
 A physical stick usually shows up twice: as a **USB device** (identified by
@@ -100,7 +100,7 @@ udevmon actions add backup-disk mounted -- notify-send "Backup disk ready" "{mou
 udevmon actions add backup-disk mounted --name run-backup --timeout 600 -- ~/bin/backup.sh "{mountpoint}"
 ```
 
-The format is `actions add ASSET EVENT[,EVENT...] [--name NAME] [--timeout SECONDS] -- COMMAND [ARGS...]`.
+The format is `actions add DEVICE EVENT[,EVENT...] [--name NAME] [--timeout SECONDS] -- COMMAND [ARGS...]`.
 Options go **before** the `--`; everything after it is the command, verbatim.
 
 **3. Run the daemon**
@@ -147,7 +147,7 @@ Notes:
 
 - Unplugging a mounted stick without unmounting first produces both
   `unmounted` (for its filesystem) and `disconnected` (for the USB device).
-- Events for the same asset and kind that repeat within one second are
+- Events for the same device and kind that repeat within one second are
   dropped (`debounce`, configurable).
 - `shutdown` actions run when udevmon receives a normal stop signal
   (`systemctl --user stop`, Ctrl+C, logout). The daemon waits for them to
@@ -181,12 +181,12 @@ Filesystems:
 | `mountpoint` | `/media/me/BACKUP` | only on mounted/unmounted (and mounted startup/shutdown) events |
 | `drive_vendor`, `drive_model`, `drive_serial` | | of the physical drive holding it |
 
-`udevmon devices` lists everything currently present with these values, and
+`udevmon present` lists everything currently present with these values, and
 how strongly each could be matched.
 
 ### Match strength
 
-When you create an asset, udevmon tells you how precisely it identifies things:
+When you create a device, udevmon tells you how precisely it identifies things:
 
 - **strong**: includes a serial number or a UUID. Identifies exactly this
   device.
@@ -196,7 +196,7 @@ When you create an asset, udevmon tells you how precisely it identifies things:
 - **weak**: anything else, for example a filesystem label or just the model.
   Matches every device with those values.
 
-Some cheap devices report fake serials (`0000000`, `1234567890`, ...). udevmon
+Some cheap devices report fake serials (`0000000`, `A1B2C3D4E590`, ...). udevmon
 treats those as weak. Prefer strong matches for anything that runs a script.
 
 ## Configuration file
@@ -211,26 +211,26 @@ editing by hand, run `udevmon check`, then `udevmon reload`.
 
 ```toml
 [daemon]                       # every setting here is optional
-debounce = 1.0                 # seconds; repeated (asset, event) pairs are ignored
+debounce = 1.0                 # seconds; repeated (device, event) pairs are ignored
 max_workers = 4                # actions from different events can run in parallel
 udev_filters = ["usb/usb_device"]
 
-[assets.backup-disk]
+[devices.backup-disk]
 description = "Weekly backup drive"
 match = { fs_uuid = "3F2A-91BC" }
 
-[assets.yubikey]
-match = { vendor_id = "1050", product_id = "0407", serial = "12345678" }
+[devices.yubikey]
+match = { vendor_id = "1050", product_id = "0407", serial = "A1B2C3D4E5" }
 
 [[actions]]
 name = "run-backup"            # optional
-asset = "backup-disk"
+device = "backup-disk"
 on = ["mounted"]               # one event or a list
 run = ["~/bin/backup.sh", "{mountpoint}"]
 timeout = 600                  # seconds before the action is killed (default 60)
 
 [[actions]]
-asset = "yubikey"
+device = "yubikey"
 on = ["connected", "disconnected"]
 run = ["notify-send", "YubiKey {event}"]
 ```
@@ -243,7 +243,7 @@ run = ["notify-send", "YubiKey {event}"]
   `run = ["sh", "-c", "cd \"$1\" && ls | wc -l >> ~/count.log", "sh", "{mountpoint}"]`
 - A leading `~` in an argument is expanded to your home directory.
 - `{name}` is replaced by a property value: `{mountpoint}`, `{serial}`,
-  `{fs_uuid}`, `{devnode}`, and so on, plus `{event}` and `{asset}`. Values
+  `{fs_uuid}`, `{devnode}`, and so on, plus `{event}` and `{device}`. Values
   are always passed as a single argument, so spaces or shell characters in a
   mount point can't break out of the command.
 - Only `{lowercase_names}` are placeholders. Other braces (`${HOME}`,
@@ -253,7 +253,7 @@ run = ["notify-send", "YubiKey {event}"]
   missing at run time, the action is **skipped** with an error rather than
   run with an empty value.
 - The same information is available as environment variables:
-  `UDEVMON_EVENT`, `UDEVMON_ASSET`, and `UDEVMON_<PROPERTY>` (for example
+  `UDEVMON_EVENT`, `UDEVMON_DEVICE`, and `UDEVMON_<PROPERTY>` (for example
   `UDEVMON_MOUNTPOINT`, `UDEVMON_SERIAL`).
 - Commands run as you, with your home directory as working directory and no
   standard input. Their output goes to the log.
@@ -266,10 +266,11 @@ run = ["notify-send", "YubiKey {event}"]
 
 ```
 udevmon scan [--present] [--no-prompt]   watch events and name devices
-udevmon devices [--all]                  list present USB devices and filesystems
-udevmon assets list | show NAME | add NAME --match KEY=VALUE ... | remove NAME
+udevmon present [--all]                  list USB devices and filesystems that are present now
+udevmon devices list | show NAME | add NAME --match KEY=VALUE ... | remove NAME
 udevmon actions list | add ... | remove NAME
 udevmon check                            validate the config
+udevmon migrate                          update a config that still uses the old `assets` names
 udevmon run [--dry-run]                  run the daemon in the foreground
 udevmon reload                           tell the running daemon to reload its config
 udevmon service install [--now]          install (and optionally start) the systemd user service
@@ -277,15 +278,31 @@ udevmon service install [--now]          install (and optionally start) the syst
 
 Global options, placed before the subcommand: `--config PATH`, `-v` (debug logging).
 
-Manual asset creation, without scanning:
+Manual device creation, without scanning:
 
 ```
-udevmon assets add my-key --match vendor_id=1050 --match product_id=0407 --match serial=12345678
+udevmon devices add my-key --match vendor_id=1050 --match product_id=0407 --match serial=A1B2C3D4E5
 ```
 
-An asset can't be removed while actions still use it; remove those first.
+A device can't be removed while actions still use it; remove those first.
 Actions created by hand without a `name` can't be removed through the CLI
 (edit the file instead).
+
+### Upgrading from the `assets` names
+
+Early versions called named devices *assets* (`[assets.NAME]` tables and an
+`asset = "NAME"` key in actions). Those files still load and run, with a
+warning, but `udevmon devices add` and similar edit commands refuse to touch
+them until you convert them:
+
+```
+udevmon migrate
+```
+
+This renames the section headers and keys in place, keeping your comments,
+and saves the previous file as `config.toml.bak`. The old `udevmon assets ...`
+command still works for now but prints a deprecation note. The list of
+present devices, previously `udevmon devices`, is now `udevmon present`.
 
 ## Examples
 
@@ -300,7 +317,7 @@ Run a backup when the backup drive is mounted, and safely unmount afterwards:
 ```toml
 [[actions]]
 name = "backup"
-asset = "backup-disk"
+device = "backup-disk"
 on = ["mounted"]
 run = ["sh", "-c", "rsync -a ~/Documents/ \"$1/Documents/\" && udisksctl unmount -b \"$2\"",
        "sh", "{mountpoint}", "{devnode}"]
@@ -325,7 +342,7 @@ udevmon actions add backup-disk startup,mounted -- ~/bin/sync-check.sh
 Running commands automatically when hardware appears is convenient and also a
 classic attack vector ("BadUSB"). udevmon helps by:
 
-- warning about weak matches when you create an asset;
+- warning about weak matches when you create a device;
 - preferring serial numbers and UUIDs (a plain vendor/product ID can be
   imitated by anyone);
 - never running commands through a shell and never splicing device values
@@ -339,10 +356,10 @@ trust the *contents* of the device without care.
 ## Troubleshooting
 
 - **Nothing happens when I plug the device in.** Run `udevmon -v run` in a
-  terminal and plug it in. Look for `no asset matched`, which means the
-  properties differ from what you saved. Compare with `udevmon devices` or
+  terminal and plug it in. Look for `no device matched`, which means the
+  properties differ from what you saved. Compare with `udevmon present` or
   `udevmon scan`. Remember that a stick appears as both a USB device and a
-  filesystem, and an asset matches only one of those.
+  filesystem, and a device matches only one of those.
 - **Filesystem events never fire.** Check that udisks2 is running
   (`systemctl status udisks2`) and that the drive is mounted through it (for
   example by your desktop's automounter or `udisksctl mount`). Mounts done
