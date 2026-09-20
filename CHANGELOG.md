@@ -12,6 +12,8 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-20
+
 ### Added
 
 - **Bash tab completion.** `udevmon completion install` (or `completion bash`
