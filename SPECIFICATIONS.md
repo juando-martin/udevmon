@@ -330,7 +330,8 @@ run = ["~/bin/backup.sh", "{mountpoint}", "{device}"]
 
 Rules:
 
-- Names (devices, tags, actions) match `[A-Za-z0-9_.-]+`; device, tag and action
+- Names (devices, tags, actions) match `[A-Za-z0-9_.-]+` (a name with a dot is
+  written quoted in a header); device, tag and action
   names are each unique within their kind.
 - An action has **exactly one** of `device` or `tag`, each a name or a non-empty
   list of names. `device` values must be existing devices. `on` values must be
@@ -359,6 +360,25 @@ Rules:
   table or a sub-table (`[devices.x.match]`), or whether an array or string spans
   several lines. An array is edited in place, keeping its layout; when no tags are
   left the `tags` key is removed (never an emptied array).
+- **`devices set`** replaces the match of a device (an inline table is replaced in
+  place, keeping a comment after it; a `[devices.x.match]` sub-table is emptied and
+  refilled) and sets or, for an empty text, removes `description`.
+- **Renames** (`devices|tags|actions rename OLD NEW`) need care because `tomlkit`
+  cannot rename a key in place (popping and re-adding a table moves it to the end).
+  So references are changed through `tomlkit` (each `device` or `tag` value of an
+  action, whether a string or an array item; the `tags` of each device; an action's
+  `name`), which keeps comments and layout, and the table headers (`[devices.OLD]`
+  and its sub-tables, or `[tags.OLD]`) are renamed in place by one anchored
+  substitution that accepts indentation, spaces, either kind of quotes and a
+  comment. The new name is written quoted if it contains a dot. The result must
+  equal the original parsed config with only that name changed **and in the same
+  order**, or nothing is written; this also catches a header-like line inside a
+  multi-line string. A device written with dotted keys (no header of its own), and an
+  action without an explicit `name`, are refused with a reason. The new name must be
+  valid (§6) and unused in its kind (for tags, undeclared tags count). The report lists
+  what was updated, made-up action names that changed (they follow the target), and
+  the remaining lines that mention the old name (comments, descriptions, commands),
+  which are never edited.
 - Every edit is written only if the result re-parses with the strict reader and
   does what was asked; otherwise the file is left byte for byte as it was. A
   `config.toml.bak` is written before each edit. Line endings (LF or CRLF) and a
@@ -468,6 +488,8 @@ udevmon devices add NAME --match KEY=VALUE ...
 udevmon devices remove NAME
 udevmon devices tag NAME TAG [TAG ...]  add explicit tags to a device
 udevmon devices disable|ignore|enable NAME...   (§5.7)
+udevmon devices set NAME [--match KEY=VALUE ...] [--description TEXT]
+udevmon devices|tags|actions rename OLD NEW
 udevmon devices untag NAME TAG [TAG ...]
 udevmon tags list|show
 udevmon tags add NAME [--match KEY=VALUE ...] [--description TEXT]

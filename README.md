@@ -492,6 +492,48 @@ The list commands, `present`, `scan`, `explain` and `check` show what is switche
 off, and every one of these commands reloads a running daemon (`--no-reload`
 skips it), like the other editing commands.
 
+## Renaming and changing things
+
+```
+udevmon devices rename stick usb-key
+udevmon tags rename old-tag archive
+udevmon actions rename backup nightly-backup
+udevmon devices set usb-key --match vendor_id=1050 --match serial=Q1
+udevmon devices set usb-key --description "Work key"
+```
+
+**Renaming** changes the name everywhere it is used, in one step:
+
+- a device: its `[devices.NAME]` header (and sub-tables such as
+  `[devices.NAME.match]`) and every action that names it, whether as
+  `device = "NAME"` or in a list, even one spread over several lines;
+- a tag: its `[tags.NAME]` block, the `tags` of every device that carries it,
+  and the `tag` of every action that uses it (a tag you never declared can be
+  renamed too);
+- an action: its `name`.
+
+The header stays where it was and comments and layout are kept. Before writing,
+udevmon checks that the result is exactly your old config with only that name
+changed, in the same order; if not, nothing is written. The command then tells you:
+
+- which actions or devices it updated;
+- which actions changed name because they have none of their own (an action
+  without a `name` line is called after its target, such as `stick-4`);
+- where the old name still appears in **comments, descriptions or commands**
+  (`run = ["echo", "stick"]`). Those are left alone, since they may not mean
+  the device.
+
+Limits: a device written with dotted keys under `[devices]` instead of its own
+`[devices.NAME]` table can't be renamed (it says so), and an action that has no
+`name` line has to be given one first (edit the file).
+
+**`devices set`** replaces a device's whole match (`--match`, repeated for
+several keys; a device match takes exact values) and/or its `--description`
+(empty removes it). A comment after the old `match` line is kept.
+
+Names may contain letters, digits, `_`, `.` and `-`. A name with a dot is written
+in quotes in the file (`[devices."usb.1"]`), which the commands handle for you.
+
 ## Pausing everything
 
 `udevmon pause` stops every action without touching your config, and
@@ -622,6 +664,8 @@ udevmon devices list | show NAME | remove NAME
 udevmon devices add NAME --match KEY=VALUE ...
                     [--tag TAG ...] [--description TEXT]
 udevmon devices tag NAME TAG...         add explicit tags to a device
+udevmon devices set NAME [--match KEY=VALUE ...] [--description TEXT]
+udevmon devices|tags|actions rename OLD NEW
 udevmon devices disable | ignore | enable NAME...
                                         switch devices off (see above)
 udevmon devices untag NAME TAG...

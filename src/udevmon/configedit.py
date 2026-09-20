@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import config as cfgmod
@@ -28,7 +29,7 @@ def _name_or_list(items) -> str:
 
 
 def render_device(name, match, description="", tags=(), status=None) -> str:
-    lines = [f"[devices.{name}]"]
+    lines = [f"[devices.{_key(name)}]"]
     if description:
         lines.append(f"description = {_s(description)}")
     inner = ", ".join(f"{_key(k)} = {_s(v)}" for k, v in match.items())
@@ -42,7 +43,7 @@ def render_device(name, match, description="", tags=(), status=None) -> str:
 
 def render_tag(name, match, description="") -> str:
     """``match`` maps key -> str | list[str]."""
-    lines = [f"[tags.{name}]"]
+    lines = [f"[tags.{_key(name)}]"]
     if description:
         lines.append(f"description = {_s(description)}")
     if match:
@@ -156,15 +157,15 @@ def _tomlkit():
     return tomlkit
 
 
-def _edited(path: Path, change) -> str:
+def _edited(path: Path, change, what: str = "that entry") -> str:
     """The file's text after ``change(doc)`` has been applied to its tomlkit document."""
     tk = _tomlkit()
     doc = tk.parse(_read(path))
     try:
         change(doc)
     except (KeyError, IndexError, TypeError, AttributeError) as e:
-        raise cfgmod.ConfigError([f"could not find that entry in {path} ({type(e).__name__}); "
-                                  "edit the file by hand"]) from None
+        raise cfgmod.ConfigError([f"could not find {what} in the structure of {path} "
+                                  f"({type(e).__name__}: {e}); edit the file by hand"]) from None
     return tk.dumps(doc)
 
 
@@ -173,8 +174,9 @@ def _find_action(doc, name: str, verb: str):
     for index, action in enumerate(doc["actions"]):
         if action.get("name") == name:
             return index, action
-    raise cfgmod.ConfigError([f"action {name!r} has no explicit name in the file; "
-                              f"edit config.toml by hand to {verb} it"])
+    raise cfgmod.ConfigError([f"action {name!r} has no explicit name in the file (its name is "
+                              "made up from its target). Add a line `name = \"...\"` to it, or "
+                              f"edit config.toml by hand, to {verb} it"])
 
 
 def remove_device(path: Path, name: str) -> None:
@@ -188,7 +190,8 @@ def remove_device(path: Path, name: str) -> None:
     def verify(c):
         if name in c.devices:
             raise cfgmod.ConfigError([f"removal of {name!r} did not take effect"])
-    _edit(path, _edited(path, lambda doc: doc["devices"].__delitem__(name)), verify)
+    _edit(path, _edited(path, lambda doc: doc["devices"].__delitem__(name), f"device {name!r}"),
+          verify)
 
 
 def remove_tag(path: Path, name: str) -> None:
@@ -204,7 +207,8 @@ def remove_tag(path: Path, name: str) -> None:
     def verify(c):
         if name in c.tags:
             raise cfgmod.ConfigError([f"removal of {name!r} did not take effect"])
-    _edit(path, _edited(path, lambda doc: doc["tags"].__delitem__(name)), verify)
+    _edit(path, _edited(path, lambda doc: doc["tags"].__delitem__(name), f"tag {name!r}"),
+          verify)
 
 
 def remove_action(path: Path, name: str) -> None:
@@ -358,3 +362,168 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
                 or (timeout is not None and a.timeout != float(timeout))):
             raise cfgmod.ConfigError([f"the change to {name!r} did not take effect"])
     _edit(path, _edited(path, change), verify)
+
+
+def set_device_fields(path: Path, name: str, *, match=None, description=None) -> None:
+    """Replace a device's match keys and/or change its description.
+
+    ``match`` replaces the whole match (a device match is exact values); an empty
+    ``description`` removes the line.
+    """
+    cfg = cfgmod.load(path, must_exist=True)
+    if name not in cfg.devices:
+        raise cfgmod.ConfigError([f"no such device {name!r}"])
+    if match is None and description is None:
+        raise cfgmod.ConfigError(["nothing to change: give --match or --description"])
+    if match is not None and not match:
+        raise cfgmod.ConfigError(["a device needs at least one --match KEY=VALUE"])
+
+    def change(doc):
+        from tomlkit.items import InlineTable
+        table = doc["devices"][name]
+        if match is not None:
+            current = table.get("match")
+            if isinstance(current, InlineTable) or current is None:
+                inner = ", ".join(f"{_key(k)} = {_s(v)}" for k, v in match.items())
+                fresh = _tomlkit().parse(f"match = {{ {inner} }}\n")["match"]
+                if current is not None:                 # keep a comment after the old value
+                    fresh.trivia.comment_ws = current.trivia.comment_ws
+                    fresh.trivia.comment = current.trivia.comment
+                table["match"] = fresh
+            else:                                       # a [devices.x.match] sub-table
+                for key in list(current.keys()):
+                    del current[key]
+                for key, value in match.items():
+                    current[key] = value
+        if description is not None:
+            if description == "":
+                table.pop("description", None)
+            else:
+                table["description"] = description
+
+    def verify(c):
+        d = c.devices[name]
+        if (match is not None and d.match != match) or \
+                (description is not None and d.description != description):
+            raise cfgmod.ConfigError([f"the change to {name!r} did not take effect"])
+    _edit(path, _edited(path, change, f"device {name!r}"), verify)
+
+
+# -- renames -----------------------------------------------------------------------------
+
+@dataclass
+class RenameReport:
+    updated: list[str] = field(default_factory=list)       # what referred to the old name
+    generated: list[tuple[str, str]] = field(default_factory=list)   # made-up action names that changed
+    mentions: list[tuple[int, str]] = field(default_factory=list)    # lines that still contain it
+
+
+def _swap(container, key: str, old: str, new: str) -> None:
+    """Replace ``old`` by ``new`` in container[key] (a string or an array), in place."""
+    value = container.get(key)
+    if value is None:
+        return
+    if isinstance(value, str):
+        if value == old:
+            container[key] = new
+    else:
+        for i, item in enumerate(list(value)):
+            if item == old:
+                value[i] = new
+
+
+def _rename_headers(text: str, table: str, old: str, new: str) -> tuple[str, int]:
+    """Rename ``[table.old]`` and its sub-table headers (``[table.old.x]``) in place."""
+    n = re.escape(old)
+    pattern = re.compile(rf"^(\s*\[\s*{table}\s*\.\s*)(?:{n}|\"{n}\"|'{n}')(\s*[.\]])", re.MULTILINE)
+    return pattern.subn(lambda m: m.group(1) + _key(new) + m.group(2), text)
+
+
+def _expected_after_rename(cfg, raw_actions, kind: str, old: str, new: str):
+    """The parsed config as it must look once ``old`` is called ``new`` (same order)."""
+    def dev(n):
+        return new if kind == "devices" and n == old else n
+
+    def tag(t):
+        return new if kind == "tags" and t == old else t
+    devices = [(dev(n), replace(d, name=dev(n), tags=tuple(tag(t) for t in d.tags)))
+               for n, d in cfg.devices.items()]
+    tags = [(tag(n), replace(t, name=tag(n))) for n, t in cfg.tags.items()]
+    actions = []
+    for i, a in enumerate(cfg.actions, 1):
+        devices_, tags_ = tuple(dev(x) for x in a.devices), tuple(tag(x) for x in a.tags)
+        name = a.name if "name" in raw_actions[i - 1] else f"{(devices_ or tags_)[0]}-{i}"
+        if kind == "actions" and a.name == old:
+            name = new
+        actions.append(replace(a, name=name, devices=devices_, tags=tags_))
+    return devices, tags, actions
+
+
+def _mentions(text: str, old: str) -> list[tuple[int, str]]:
+    word = re.compile(rf"(?<![\w-]){re.escape(old)}(?![\w-])")
+    return [(n, line.strip()) for n, line in enumerate(text.splitlines(), 1) if word.search(line)]
+
+
+def _rename(path: Path, kind: str, old: str, new: str) -> RenameReport:
+    singular = {"devices": "device", "tags": "tag", "actions": "action"}[kind]
+    _check_name(singular, new)
+    cfg = cfgmod.load(path, must_exist=True)
+    existing = {"devices": set(cfg.devices), "tags": cfg.all_tag_names(),
+                "actions": {a.name for a in cfg.actions}}[kind]
+    if old not in existing:
+        raise cfgmod.ConfigError([f"no such {singular} {old!r}"])
+    if new == old:
+        raise cfgmod.ConfigError([f"{new!r} is already its name"])
+    if new in existing:
+        raise cfgmod.ConfigError([f"{singular} {new!r} already exists"])
+    raw_actions = cfgmod.tomllib.loads(_read(path)).get("actions") or []
+    expected = _expected_after_rename(cfg, raw_actions, kind, old, new)
+
+    def change(doc):
+        if kind == "devices":                            # every action that names the device
+            for action in doc.get("actions", []):
+                _swap(action, "device", old, new)
+        elif kind == "tags":                             # explicit tags on devices, tag actions
+            for _, device in doc.get("devices", {}).items():
+                _swap(device, "tags", old, new)
+            for action in doc.get("actions", []):
+                _swap(action, "tag", old, new)
+        else:
+            _find_action(doc, old, "rename")[1]["name"] = new
+
+    text = _edited(path, change, f"{singular} {old!r}")
+    if kind in ("devices", "tags"):
+        has_block = old in (cfg.devices if kind == "devices" else cfg.tags)
+        text, headers = _rename_headers(text, kind, old, new)
+        if has_block and headers == 0:
+            raise cfgmod.ConfigError([f"{singular} {old!r} is not written as a [{kind}.{old}] "
+                                      "table (dotted keys?); rename it by hand"])
+
+    def verify(c):
+        got = (list(c.devices.items()), list(c.tags.items()), c.actions)
+        if got != expected:
+            raise cfgmod.ConfigError([f"renaming {old!r} would have changed something else in "
+                                      "the file; nothing was written"])
+    _edit(path, text, verify)
+
+    report = RenameReport(mentions=_mentions(text, old))
+    if kind == "devices":
+        report.updated = [a.name for a in cfg.actions if old in a.devices]
+    elif kind == "tags":
+        report.updated = [f"device {d.name}" for d in cfg.devices.values() if old in d.tags]
+        report.updated += [f"action {a.name}" for a in cfg.actions if old in a.tags]
+    report.generated = [(a.name, e.name) for a, e, raw in zip(cfg.actions, expected[2], raw_actions)
+                        if "name" not in raw and a.name != e.name]
+    return report
+
+
+def rename_device(path: Path, old: str, new: str) -> RenameReport:
+    return _rename(path, "devices", old, new)
+
+
+def rename_tag(path: Path, old: str, new: str) -> RenameReport:
+    return _rename(path, "tags", old, new)
+
+
+def rename_action(path: Path, old: str, new: str) -> RenameReport:
+    return _rename(path, "actions", old, new)

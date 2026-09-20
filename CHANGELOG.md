@@ -20,6 +20,14 @@ to the version and date, and start a new empty **Unreleased** above it.
   ignore wins if a thing matches several devices. Both stay "named", so they never
   fall into the unnamed category. New commands: `devices disable`, `devices ignore`
   and `devices enable`, which take several names and change nothing unless all exist.
+- **Renaming.** `devices rename`, `tags rename` and `actions rename` change a name
+  everywhere it is used (headers and sub-tables, every action's `device` or `tag`,
+  the `tags` of devices), keep comments, layout and order, and refuse (writing
+  nothing) unless the result is exactly the old config with that one name changed.
+  They report what was updated, made-up action names that changed, and the comments,
+  descriptions and commands that still mention the old name (left alone).
+- **`devices set NAME`** replaces a device's match (`--match`) and/or its
+  `--description`, keeping a comment after the old value.
 - **Global pause.** `udevmon pause` stops every action without touching the config,
   `udevmon pause --for 30m` (`90s`, `2h`, `1d`, `1h30m`) for a while, and
   `udevmon resume` lets them run again. Nothing runs while paused, not even
@@ -41,6 +49,13 @@ to the version and date, and start a new empty **Unreleased** above it.
 - `devices list`, `devices show`, `actions list`, `present`, `scan` and `explain`
   mark what is switched off; `explain` says why an action was skipped (disabled
   action, disabled device) and `check` notes it.
+
+### Fixed
+
+- **Names containing a dot** (`usb.1`) were accepted but written as a nested header, so
+  the file was rejected. They are now written quoted (`[devices."usb.1"]`).
+- **Clearer reasons** when an edit cannot proceed: the message names the entry it could
+  not find, and says how to give an unnamed action a name so it can be changed.
 
 ## [0.2.0] - 2026-09-20
 

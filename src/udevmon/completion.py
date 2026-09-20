@@ -41,12 +41,19 @@ POSITIONALS = {
     ("actions", "disable"): ["action*"],
     ("actions", "enable"): ["action*"],
     ("actions", "set"): ["action"],
+    ("devices", "set"): ["device"],
+    ("devices", "rename"): ["device", "new"],
+    ("tags", "rename"): ["tag", "new"],
+    ("actions", "rename"): ["action", "new"],
     ("actions", "add"): ["events"],
     ("explain",): ["event"],
 }
 
 # Every kind a positional slot above may use (tests check these tables against the CLI).
-SLOT_KINDS = {"device", "tag", "declared-tag", "action", "device-tag", "events", "event"}
+SLOT_KINDS = {"device", "tag", "declared-tag", "action", "device-tag", "events", "event", "new"}
+
+# Slots that take a new name typed by the user: nothing to complete.
+FREE_SLOT_KINDS = {"new"}
 
 # Commands whose positional arguments are deliberately not completed (a new name).
 NO_COMPLETION = {("devices", "add"), ("tags", "add")}
@@ -250,6 +257,8 @@ def _positional(st: _State, cur: str, cfg):
         return WORDS, _events(cur)
     if kind == "event":
         return WORDS, _startswith(sorted(VALID_KINDS), cur)
+    if kind in FREE_SLOT_KINDS:
+        return WORDS, []
     return WORDS, _startswith(_names(kind, cfg, st.positionals), cur)
 
 

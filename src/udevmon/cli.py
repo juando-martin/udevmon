@@ -305,6 +305,51 @@ def cmd_actions_set(args):
     return 0
 
 
+def _say_renamed(kind: str, args, report) -> None:
+    print(f"Renamed {kind} {args.old!r} to {args.new!r}.")
+    if report.updated:
+        print(f"  Updated: {', '.join(report.updated)}.")
+    if report.generated:
+        print("  Actions without a name of their own are called after their target, so these "
+              "changed name:")
+        for was, now in report.generated:
+            print(f"    {was} -> {now}")
+    if report.mentions:
+        print(f"  {args.old!r} still appears in the file (comments, descriptions, commands); "
+              "left as they are:")
+        for number, line in report.mentions[:8]:
+            print(f"    line {number}: {line[:70]}")
+        if len(report.mentions) > 8:
+            print(f"    ... and {len(report.mentions) - 8} more")
+
+
+@_reloads
+def cmd_devices_rename(args):
+    _say_renamed("device", args, _guard(configedit.rename_device, args.config, args.old, args.new))
+    return 0
+
+
+@_reloads
+def cmd_tags_rename(args):
+    _say_renamed("tag", args, _guard(configedit.rename_tag, args.config, args.old, args.new))
+    return 0
+
+
+@_reloads
+def cmd_actions_rename(args):
+    _say_renamed("action", args, _guard(configedit.rename_action, args.config, args.old, args.new))
+    return 0
+
+
+@_reloads
+def cmd_devices_set(args):
+    match = _guard(_parse_matches, args.match, allow_lists=False) if args.match else None
+    _guard(configedit.set_device_fields, args.config, args.name, match=match,
+           description=args.description)
+    print(f"Updated device {args.name!r}" + (f" ({strength(match)})." if match else "."))
+    return 0
+
+
 @_reloads
 def cmd_devices_tag(args):
     _guard(configedit.set_device_tags, args.config, args.name, add=args.tags)
@@ -544,6 +589,15 @@ def build_parser() -> argparse.ArgumentParser:
     x = g.add_parser("untag", help="remove explicit tags from a device", parents=[edits])
     x.add_argument("name"); x.add_argument("tags", nargs="+", metavar="TAG")
     x.set_defaults(fn=cmd_devices_untag)
+    x = g.add_parser("set", help="change a device's match keys or description", parents=[edits])
+    x.add_argument("name")
+    x.add_argument("--match", action="append", metavar="KEY=VALUE",
+                   help="replace the match (repeat for several keys)")
+    x.add_argument("--description", metavar="TEXT", help="new description (empty removes it)")
+    x.set_defaults(fn=cmd_devices_set)
+    x = g.add_parser("rename", help="rename a device and everything that names it",
+                     parents=[edits])
+    x.add_argument("old"); x.add_argument("new"); x.set_defaults(fn=cmd_devices_rename)
     x = g.add_parser("disable", help="turn off the device's own actions (its tags' still run)",
                      parents=[edits])
     x.add_argument("names", nargs="+", metavar="NAME"); x.set_defaults(fn=cmd_devices_disable)
@@ -564,6 +618,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="rule pair; repeat a key to allow several values")
     x.add_argument("--description")
     x.set_defaults(fn=cmd_tags_add)
+    x = tg.add_parser("rename", help="rename a tag wherever it is used", parents=[edits])
+    x.add_argument("old"); x.add_argument("new"); x.set_defaults(fn=cmd_tags_rename)
     x = tg.add_parser("remove", parents=[edits]); x.add_argument("name"); x.set_defaults(fn=cmd_tags_remove)
 
     a = sub.add_parser("actions", help="manage actions").add_subparsers(dest="sub", required=True)
@@ -583,6 +639,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="run for named devices only (explicit)")
     x.set_defaults(fn=cmd_actions_add)
     x = a.add_parser("remove", parents=[edits]); x.add_argument("name"); x.set_defaults(fn=cmd_actions_remove)
+    x = a.add_parser("rename", help="give an action a new name", parents=[edits])
+    x.add_argument("old"); x.add_argument("new"); x.set_defaults(fn=cmd_actions_rename)
     x = a.add_parser("disable", help="stop actions running without deleting them", parents=[edits])
     x.add_argument("names", nargs="+", metavar="NAME"); x.set_defaults(fn=cmd_actions_disable)
     x = a.add_parser("enable", help="let disabled actions run again", parents=[edits])

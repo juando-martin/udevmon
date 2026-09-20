@@ -79,14 +79,15 @@ class EngineTests(unittest.TestCase):
 
     def test_groups_and_subcommands(self):
         self.assertEqual(self.words("udevmon devices "),
-                         ["add", "disable", "enable", "ignore", "list", "remove", "show", "tag",
-                          "untag"])
+                         ["add", "disable", "enable", "ignore", "list", "remove", "rename", "set",
+                          "show", "tag", "untag"])
         self.assertEqual(self.words("udevmon actions "),
-                         ["add", "disable", "enable", "list", "remove", "set"])
-        self.assertEqual(self.words("udevmon tags "), ["add", "list", "remove", "show"])
+                         ["add", "disable", "enable", "list", "remove", "rename", "set"])
+        self.assertEqual(self.words("udevmon tags "), ["add", "list", "remove", "rename", "show"])
         self.assertEqual(self.words("udevmon service "), ["install", "uninstall"])
         self.assertEqual(self.words("udevmon completion "), ["bash", "install", "uninstall"])
-        self.assertEqual(self.words("udevmon devices s"), ["show"])
+        self.assertEqual(self.words("udevmon devices sh"), ["show"])
+        self.assertEqual(self.words("udevmon devices s"), ["set", "show"])
 
     def test_names_come_from_the_config_named_on_the_command_line(self):
         self.assertEqual(self.words("udevmon devices show "), ["stick", "disk"])
@@ -278,6 +279,8 @@ def drift_problems(parser, cfg_path):
                     if slot.rstrip("*") not in completion.SLOT_KINDS:
                         problems.append(f"{' '.join(path)}: unknown slot kind {slot!r}")
                         continue
+                    if slot.rstrip("*") in completion.FREE_SLOT_KINDS:
+                        continue                       # a new name: nothing to offer
                     before = [fill[k.rstrip("*")] for k in slots[:i]]
                     words = ["udevmon", "--config", str(cfg_path), *path, *before, ""]
                     if not completion.complete(parser, words, len(words) - 1)[1]:
@@ -321,10 +324,10 @@ class CliDriftTests(unittest.TestCase):
         parser = cli.build_parser()
         sub = completion._subparsers(parser).choices["tags"]
         group = completion._subparsers(sub)
-        group.add_parser("rename").add_argument("name")
+        group.add_parser("frobnicate").add_argument("name")
         problems = drift_problems(parser, self.cfg)
         self.assertEqual(len(problems), 1)
-        self.assertIn("tags rename", problems[0])
+        self.assertIn("tags frobnicate", problems[0])
 
     def test_a_new_value_option_is_caught(self):
         parser = cli.build_parser()
