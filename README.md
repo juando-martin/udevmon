@@ -507,7 +507,13 @@ udevmon actions set notify --named-only
 udevmon actions set notify --default-unnamed   # clear it: not stated
 udevmon actions set notify --add-device card --remove-device stick
 udevmon actions set archive --add-tag backup
+udevmon actions set notify --timeout 30 -- notify-send "{device} {event}"
 ```
+
+A command after `--` replaces the action's command (the same as in `actions add`;
+it must come last). The new command is checked like any other, so a placeholder
+that the action's events don't provide (`{mountpoint}` on `connected`) is
+refused and nothing is written. A comment after the old `run` line is kept.
 
 `--add-device`, `--remove-device`, `--add-tag` and `--remove-tag` change what the
 action targets, and can be repeated and combined with the other options. An
@@ -565,6 +571,21 @@ Limits: a device written with dotted keys under `[devices]` instead of its own
 **`devices set`** replaces a device's whole match (`--match`, repeated for
 several keys; a device match takes single values, capitals ignored) and/or its `--description`
 (empty removes it). A comment after the old `match` line is kept.
+
+**`tags set`** changes a declared tag (one with a `[tags.NAME]` table):
+
+```
+udevmon tags set storage --match fs_type=ext4 --match fs_type=exfat
+udevmon tags set storage --description "Filesystems I care about"
+udevmon tags set storage --no-rule
+```
+
+`--match` replaces the whole rule (repeat a key to allow several values, as in
+`tags add`), and `--no-rule` removes it, leaving a tag that only the devices that
+carry it belong to. A comment after the old `match` is kept, and a rule that
+uses a property changing from plug to plug is refused. A tag that only devices
+carry has no table to edit: declare it with `tags add`. A new rule changes which
+things the tag's actions run for, so run `udevmon explain` afterwards.
 
 Names may contain letters, digits, `_`, `.` and `-`. A name with a dot is written
 in quotes in the file (`[devices."usb.1"]`), which the commands handle for you.
@@ -707,6 +728,8 @@ udevmon devices disable | ignore | enable NAME...
 udevmon devices untag NAME TAG...
 udevmon tags list | show NAME | remove NAME
 udevmon tags add NAME [--match KEY=VALUE ...] [--description TEXT]
+udevmon tags set NAME [--match KEY=VALUE ... | --no-rule]
+                      [--description TEXT]
 udevmon actions list | remove NAME
 udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT...]
                     [--name NAME] [--timeout S]
@@ -715,6 +738,7 @@ udevmon actions set NAME [--allow-unnamed | --named-only
                           | --default-unnamed] [--on EVENTS] [--timeout S]
                     [--add-device NAME ...] [--remove-device NAME ...]
                     [--add-tag NAME ...] [--remove-tag NAME ...]
+                    [-- COMMAND...]
 udevmon actions disable | enable NAME...
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
                                         what would run (see above)

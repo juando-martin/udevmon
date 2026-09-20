@@ -493,6 +493,8 @@ udevmon devices|tags|actions rename OLD NEW
 udevmon devices untag NAME TAG [TAG ...]
 udevmon tags list|show
 udevmon tags add NAME [--match KEY=VALUE ...] [--description TEXT]
+udevmon tags set NAME [--match KEY=VALUE ... | --no-rule]
+                     [--description TEXT]
 udevmon tags remove NAME
 udevmon actions list
 udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT ...]
@@ -504,7 +506,7 @@ udevmon actions set NAME [--allow-unnamed | --named-only
                           | --default-unnamed]
                     [--on EVENTS] [--timeout SECONDS]
                     [--add-device N ...] [--remove-device N ...]
-                    [--add-tag N ...] [--remove-tag N ...]
+                    [--add-tag N ...] [--remove-tag N ...] [-- COMMAND ...]
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
                                         what would run (§8.4)
 udevmon pause [--for DURATION]          stop every action (§8.5)

@@ -300,6 +300,28 @@ Rules cannot use properties that change from plug to plug
 .B surprise
 and a few raw udev ones).
 .TP
+.B udevmon tags set \fINAME\fR [\fB\-\-match \fIKEY=VALUE\fR ... | \fB\-\-no\-rule\fR] [\fB\-\-description \fITEXT\fR]
+Change a declared tag (one with a
+.B [tags.NAME]
+table).
+.B \-\-match
+replaces the whole rule (repeat a key to allow several values, as in
+.BR "tags add" ),
+and
+.B \-\-no\-rule
+removes it, leaving a tag that only the devices that carry it belong to.
+.B \-\-description
+changes the description (an empty text removes it).
+A comment after the old
+.B match
+is kept, and a rule that uses a property that changes from plug to plug is
+refused.
+A tag that only devices carry has no table to change; declare it with
+.BR "tags add" .
+A new rule changes which things the tag's actions run for, so check the result
+with
+.BR "udevmon explain" .
+.TP
 .B udevmon tags remove \fINAME\fR
 Remove a declared tag.
 Refused while an action uses it.
@@ -349,7 +371,7 @@ An action created by hand without a
 .B name
 line cannot be removed this way; edit the file.
 .TP
-.B udevmon actions set \fINAME\fR [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR | \fB\-\-default\-unnamed\fR] [\fB\-\-on \fIEVENTS\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-add\-device \fINAME\fR ...] [\fB\-\-remove\-device \fINAME\fR ...] [\fB\-\-add\-tag \fINAME\fR ...] [\fB\-\-remove\-tag \fINAME\fR ...]
+.B udevmon actions set \fINAME\fR [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR | \fB\-\-default\-unnamed\fR] [\fB\-\-on \fIEVENTS\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-add\-device \fINAME\fR ...] [\fB\-\-remove\-device \fINAME\fR ...] [\fB\-\-add\-tag \fINAME\fR ...] [\fB\-\-remove\-tag \fINAME\fR ...] [\fB\-\- \fICOMMAND\fR ...]
 Change an action without removing and adding it again.
 .B \-\-on
 replaces the events (comma\-separated).
@@ -383,6 +405,17 @@ for that).
 Adding what is already there changes nothing.
 A single name stays a plain string, a list is edited in place, and comments and
 layout are kept.
+.IP
+A command after
+.B \-\-
+(it must come last) replaces the action's command, exactly as
+.B actions add
+takes it.
+The new command is validated like any other, so a placeholder that the action's
+events do not provide is refused and nothing is written.
+A comment after the old
+.B run
+line is kept.
 .TP
 .B udevmon actions disable \fINAME\fR...
 Stop actions from running without deleting them

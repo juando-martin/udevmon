@@ -344,9 +344,9 @@ def _retarget(kind: str, what: str, current, add, remove, action: str) -> list[s
 
 
 def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
-                       on=None, timeout: float | None = None,
+                       on=None, timeout: float | None = None, run=None,
                        add_devices=(), remove_devices=(), add_tags=(), remove_tags=()):
-    """Change an action's ``allow_unnamed``, events, timeout or targets.
+    """Change an action's ``allow_unnamed``, events, timeout, command or targets.
 
     ``unnamed`` is "allow", "named-only" or "default" (back to not stated). An action
     targets devices or tags, never both, and keeps at least one. Returns the new list of
@@ -357,10 +357,14 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
     if action is None:
         raise cfgmod.ConfigError([f"no such action {name!r}"])
     device_edit, tag_edit = bool(add_devices or remove_devices), bool(add_tags or remove_tags)
-    if unnamed is None and on is None and timeout is None and not (device_edit or tag_edit):
+    if run is not None and not (run and all(isinstance(x, str) for x in run)):
+        raise cfgmod.ConfigError(["the command must not be empty"])
+    if (unnamed is None and on is None and timeout is None and run is None
+            and not (device_edit or tag_edit)):
         raise cfgmod.ConfigError(["nothing to change: give --allow-unnamed, --named-only, "
                                   "--default-unnamed, --on, --timeout, --add-device, "
-                                  "--remove-device, --add-tag or --remove-tag"])
+                                  "--remove-device, --add-tag, --remove-tag or a new command "
+                                  "after --"])
     key = None
     targets = None
     if device_edit and tag_edit:
@@ -385,7 +389,7 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
         if targets == current:
             targets = None                                  # already as asked: no edit
             key = None
-            if unnamed is None and on is None and timeout is None:
+            if unnamed is None and on is None and timeout is None and run is None:
                 return None
 
     def change(doc):
@@ -403,6 +407,11 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
             item["on"] = array
         if timeout is not None:
             item["timeout"] = int(timeout) if float(timeout).is_integer() else float(timeout)
+        if run is not None:
+            array = _tomlkit().array()
+            for word in run:
+                array.append(word)
+            item["run"] = array                             # a comment after it is kept
         if key is not None:
             current_value = item.get(key)
             if hasattr(current_value, "append") and hasattr(current_value, "remove"):
@@ -425,6 +434,7 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
         if (a.allow_unnamed != want_unnamed
                 or (on is not None and a.on != tuple(on))
                 or (timeout is not None and a.timeout != float(timeout))
+                or (run is not None and a.run != tuple(run))
                 or (key is not None and list(a.targets) != targets)):
             raise cfgmod.ConfigError([f"the change to {name!r} did not take effect"])
     _edit(path, _edited(path, change), verify)
@@ -474,6 +484,57 @@ def set_device_fields(path: Path, name: str, *, match=None, description=None) ->
                 (description is not None and d.description != description):
             raise cfgmod.ConfigError([f"the change to {name!r} did not take effect"])
     _edit(path, _edited(path, change, f"device {name!r}"), verify)
+
+
+def set_tag_fields(path: Path, name: str, *, match=None, clear_rule: bool = False,
+                   description=None) -> None:
+    """Replace a declared tag's rule (``match``: key -> str | list[str]), remove its rule,
+    and/or change its description (an empty one removes the line)."""
+    cfg = cfgmod.load(path, must_exist=True)
+    if name not in cfg.tags:
+        raise cfgmod.ConfigError([
+            f"no declared tag {name!r} ([tags.{name}]). A tag that only devices carry needs no "
+            "declaration; declare one with `tags add`"])
+    if match is not None and clear_rule:
+        raise cfgmod.ConfigError(["give --match or --no-rule, not both"])
+    if match is None and not clear_rule and description is None:
+        raise cfgmod.ConfigError(["nothing to change: give --match, --no-rule or --description"])
+    if match is not None and not match:
+        raise cfgmod.ConfigError(["a rule needs at least one --match KEY=VALUE "
+                                  "(--no-rule removes it)"])
+
+    def value(v):
+        return _s(v) if isinstance(v, str) else _list(v)
+
+    def change(doc):
+        from tomlkit.items import InlineTable
+        table = doc["tags"][name]
+        if clear_rule:
+            table.pop("match", None)
+        elif match is not None:
+            current = table.get("match")
+            if isinstance(current, InlineTable) or current is None:
+                inner = ", ".join(f"{_key(k)} = {value(v)}" for k, v in match.items())
+                table["match"] = _tomlkit().parse(f"match = {{ {inner} }}\n")["match"]
+            else:                                       # a [tags.x.match] sub-table
+                for key in list(current.keys()):
+                    del current[key]
+                for key, v in match.items():
+                    current[key] = v if isinstance(v, str) else list(v)
+        if description is not None:
+            if description == "":
+                table.pop("description", None)
+            else:
+                table["description"] = description
+
+    def verify(c):
+        t = c.tags[name]
+        want = None if match is None else {k: (v,) if isinstance(v, str) else tuple(v)
+                                           for k, v in match.items()}
+        if (clear_rule and t.match) or (want is not None and dict(t.match) != want) or \
+                (description is not None and t.description != description):
+            raise cfgmod.ConfigError([f"the change to tag {name!r} did not take effect"])
+    _edit(path, _edited(path, change, f"tag {name!r}"), verify)
 
 
 # -- renames -----------------------------------------------------------------------------

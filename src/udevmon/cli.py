@@ -300,17 +300,20 @@ def cmd_actions_set(args):
         print("error: --timeout must be greater than 0", file=sys.stderr)
         return 1
     targets = _guard(configedit.set_action_options, args.config, args.name,
-                     unnamed=args.unnamed, on=on, timeout=args.timeout,
+                     unnamed=args.unnamed, on=on, timeout=args.timeout, run=args.cmd or None,
                      add_devices=args.add_device, remove_devices=args.remove_device,
                      add_tags=args.add_tag, remove_tags=args.remove_tag)
     retargeted = any((args.add_device, args.remove_device, args.add_tag, args.remove_tag))
-    if retargeted and targets is None and (args.unnamed, args.on, args.timeout) == (None,) * 3:
+    if (retargeted and targets is None and not args.cmd
+            and (args.unnamed, args.on, args.timeout) == (None,) * 3):
         print(f"Action {args.name!r} already targets that; nothing changed.")
         return 0
     print(f"Updated action {args.name!r}.")
     if targets is not None:
         kind = "devices" if (args.add_device or args.remove_device) else "tags"
         print(f"  It now targets {kind}: {', '.join(targets)}.")
+    if args.cmd:
+        print(f"  Its command is now: {' '.join(args.cmd)}")
     return 0
 
 
@@ -413,6 +416,18 @@ def cmd_tags_add(args):
     rule = _guard(_parse_matches, args.match or [], allow_lists=True)
     _guard(configedit.add_tag, args.config, args.name, rule, args.description or "")
     print(f"Added tag {args.name!r}" + (f" with a rule ({strength(rule)})." if rule else "."))
+    return 0
+
+
+@_reloads
+def cmd_tags_set(args):
+    rule = _guard(_parse_matches, args.match, allow_lists=True) if args.match else None
+    _guard(configedit.set_tag_fields, args.config, args.name, match=rule,
+           clear_rule=args.no_rule, description=args.description)
+    print(f"Updated tag {args.name!r}"
+          + (f" (rule {strength(rule)})." if rule else ".")
+          + (" It has no rule now: only devices that carry it belong to it." if args.no_rule
+             else ""))
     return 0
 
 
@@ -627,6 +642,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="rule pair; repeat a key to allow several values")
     x.add_argument("--description")
     x.set_defaults(fn=cmd_tags_add)
+    x = tg.add_parser("set", help="change a tag's rule or description", parents=[edits])
+    x.add_argument("name")
+    grp = x.add_mutually_exclusive_group()
+    grp.add_argument("--match", action="append", metavar="KEY=VALUE",
+                     help="replace the rule; repeat a key to allow several values")
+    grp.add_argument("--no-rule", action="store_true",
+                     help="remove the rule (only devices that carry the tag belong to it)")
+    x.add_argument("--description", metavar="TEXT", help="new description (empty removes it)")
+    x.set_defaults(fn=cmd_tags_set)
     x = tg.add_parser("rename", help="rename a tag wherever it is used", parents=[edits])
     x.add_argument("old"); x.add_argument("new"); x.set_defaults(fn=cmd_tags_rename)
     x = tg.add_parser("remove", parents=[edits]); x.add_argument("name"); x.set_defaults(fn=cmd_tags_remove)
@@ -654,7 +678,7 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("names", nargs="+", metavar="NAME"); x.set_defaults(fn=cmd_actions_disable)
     x = a.add_parser("enable", help="let disabled actions run again", parents=[edits])
     x.add_argument("names", nargs="+", metavar="NAME"); x.set_defaults(fn=cmd_actions_enable)
-    x = a.add_parser("set", help="change an action's targets, events, timeout or allow_unnamed",
+    x = a.add_parser("set", help="change an action's command, targets, events, timeout or allow_unnamed",
                      parents=[edits])
     x.add_argument("name")
     grp = x.add_mutually_exclusive_group()

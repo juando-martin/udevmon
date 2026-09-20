@@ -34,6 +34,7 @@ POSITIONALS = {
     ("devices", "untag"): ["device", "device-tag*"],
     ("tags", "show"): ["tag"],
     ("tags", "remove"): ["declared-tag"],
+    ("tags", "set"): ["declared-tag"],
     ("actions", "remove"): ["action"],
     ("devices", "disable"): ["device*"],
     ("devices", "ignore"): ["device*"],
@@ -255,7 +256,7 @@ def _option_value(st: _State, cur: str):
     if dest == "on":
         return WORDS, _events(cur)
     if dest in ("match", "prop"):
-        keys = RULE_KEYS if path == ("tags", "add") else MATCH_KEYS
+        keys = RULE_KEYS if path in (("tags", "add"), ("tags", "set")) else MATCH_KEYS
         return NOSPACE, _startswith([k + "=" for k in keys], cur)
     return WORDS, []                     # free text: --name, --timeout, --description
 

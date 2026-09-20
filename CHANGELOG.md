@@ -12,6 +12,15 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ## [Unreleased]
 
+### Added
+
+- **`actions set NAME -- COMMAND...`** replaces an action's command, as `actions add`
+  takes it. A placeholder the action's events don't provide is refused, and a
+  comment after the old `run` line is kept.
+- **`tags set NAME`** changes a declared tag: `--match` replaces its rule,
+  `--no-rule` removes it, `--description` changes the text. Comments and layout
+  are kept, and a rule with a property that changes from plug to plug is refused.
+
 ## [0.3.0] - 2026-09-21
 
 ### Added

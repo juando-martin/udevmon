@@ -83,7 +83,7 @@ class EngineTests(unittest.TestCase):
                           "show", "tag", "untag"])
         self.assertEqual(self.words("udevmon actions "),
                          ["add", "disable", "enable", "list", "remove", "rename", "set"])
-        self.assertEqual(self.words("udevmon tags "), ["add", "list", "remove", "rename", "show"])
+        self.assertEqual(self.words("udevmon tags "), ["add", "list", "remove", "rename", "set", "show"])
         self.assertEqual(self.words("udevmon service "), ["install", "uninstall"])
         self.assertEqual(self.words("udevmon completion "), ["bash", "install", "uninstall"])
         self.assertEqual(self.words("udevmon devices sh"), ["show"])
