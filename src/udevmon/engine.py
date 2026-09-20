@@ -6,6 +6,7 @@ import logging
 import time
 from typing import NamedTuple
 
+from . import pause as pause_flag
 from .config import Action, Config
 from .events import Event
 from .matching import resolve
@@ -32,10 +33,12 @@ class Plan(NamedTuple):
 
 
 class Engine:
-    def __init__(self, config: Config, runner, clock=time.monotonic):
+    def __init__(self, config: Config, runner, clock=time.monotonic, paused=None):
         self.config = config
         self.runner = runner
         self._clock = clock
+        self._paused = paused or pause_flag.is_paused        # a callable: injectable for tests
+        self._was_paused = False
         self._last: dict[tuple[str, str], float] = {}
 
     def set_config(self, config: Config) -> None:
@@ -88,7 +91,19 @@ class Engine:
             jobs.append(Job(action, res.named[0].name if named else None, tag))
         return jobs
 
+    def _pause_check(self) -> bool:
+        """True while automation is paused; logs when that starts and ends."""
+        paused = bool(self._paused())
+        if paused != self._was_paused:
+            log.info("automation paused: no action runs until `udevmon resume`" if paused
+                     else "automation resumed")
+            self._was_paused = paused
+        return paused
+
     def handle(self, event: Event) -> list[Job]:
+        if self._pause_check():                       # startup and shutdown are held back too
+            log.debug("%s: paused, skipped (%s)", event.kind, event.endpoint.key)
+            return []
         props = event.props
         res = resolve(self.config, props)
         if not res.named and not res.tags:

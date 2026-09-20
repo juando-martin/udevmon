@@ -170,6 +170,13 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.words("udevmon actions set log --timeout "), [])   # free text
         self.assertIn("--no-reload", self.words("udevmon devices ignore --"))
 
+    def test_pause_and_resume(self):
+        self.assertEqual(self.words("udevmon pa", config=False), ["pause"])
+        self.assertEqual(self.words("udevmon res", config=False), ["resume"])
+        self.assertEqual(set(self.words("udevmon pause --", config=False)), {"--for", "--help"})
+        self.assertEqual(self.comp("udevmon pause --for ", config=False), (WORDS, []))   # free text
+        self.assertEqual(self.words("udevmon resume ", config=False), [])
+
     def test_no_reload_flag(self):
         self.assertIn("--no-reload", self.words("udevmon devices add --"))
         self.assertIn("--no-reload", self.words("udevmon actions remove --"))

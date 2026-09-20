@@ -492,6 +492,30 @@ The list commands, `present`, `scan`, `explain` and `check` show what is switche
 off, and every one of these commands reloads a running daemon (`--no-reload`
 skips it), like the other editing commands.
 
+## Pausing everything
+
+`udevmon pause` stops every action without touching your config, and
+`udevmon resume` starts them again. Use it while you do a backup by hand, test
+with sticks that would otherwise trigger actions, or give a demonstration.
+
+```
+udevmon pause             # until you run `udevmon resume`
+udevmon pause --for 30m   # or for a while: 90s, 30m, 2h, 1d, 1h30m
+udevmon resume
+```
+
+- While paused **nothing runs**, not even `startup` and `shutdown` actions. The
+  daemon keeps receiving events and logs them; events that happen during a
+  pause are **not** replayed afterwards.
+- The pause is a small file in your runtime directory
+  (`$XDG_RUNTIME_DIR/udevmon.paused`), so it survives a daemon restart but not a
+  logout or reboot: a forgotten pause can't outlive your session. A pause with
+  `--for` ends by itself.
+- You can pause when no daemon is running; it applies once one starts.
+- `udevmon explain` and the editing commands say `Note: automation is paused`
+  so a paused daemon doesn't look broken, and the daemon's start-up log line
+  shows `[PAUSED]`.
+
 ## Configuration file
 
 The file is `~/.config/udevmon/config.toml` (respects `$XDG_CONFIG_HOME`). Use
@@ -612,6 +636,8 @@ udevmon actions set NAME [--allow-unnamed | --named-only
 udevmon actions disable | enable NAME...
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
                                         what would run (see above)
+udevmon pause [--for DURATION]          stop every action (see above)
+udevmon resume                          let actions run again
 udevmon check                           validate the config
 udevmon run [--dry-run]                 run the daemon in the foreground
 udevmon reload                          make the running daemon reload
@@ -719,7 +745,9 @@ trust the *contents* of the device without care.
   properties differ from what you saved. Compare with `udevmon present` or
   `udevmon scan`. Remember that a stick appears as both a USB device and a
   filesystem, and a device matches only one of those.
-- **An action doesn't run when I expect it to.** Run `udevmon explain`. It
+- **An action doesn't run when I expect it to.** First check you haven't paused
+  automation (`udevmon explain` says so; `udevmon resume` ends it). Then run
+  `udevmon explain`. It
   shows, for everything plugged in now, whether the thing is `unnamed` or a
   named `device:`, which `tags:` it has, and which actions would run or be
   skipped, with the reason. An unnamed thing runs only actions with

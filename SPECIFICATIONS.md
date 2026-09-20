@@ -411,6 +411,10 @@ printed by `check` only. Neither changes the exit status.
   stores the PID on the first line and the resolved config path on the second).
 - Starts sources, primes caches, emits `startup` events for things already present
   (udisks ones once it attaches), then loops.
+- **Pause (§8.5):** for every event, including `startup` and `shutdown`, first
+  check whether automation is paused; if so, log it (debug) and stop. The start and
+  the end of a pause are logged once each (info); the start-up line ends with
+  `[PAUSED]` when paused.
 - `SIGHUP`: re-read config; on error keep the old config and log. Changes to
   `udev_filters` need a restart (logged). Warnings (§6.2) are logged again.
 - The editing CLI commands, and `scan` after saving a device, send `SIGHUP` to the
@@ -479,6 +483,8 @@ udevmon actions set NAME [--allow-unnamed | --named-only
                     [--on EVENTS] [--timeout SECONDS]
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
                                         what would run (§8.4)
+udevmon pause [--for DURATION]          stop every action (§8.5)
+udevmon resume                          let actions run again
 udevmon check                           validate: errors, warnings, notes
 udevmon reload                          SIGHUP the running daemon
 udevmon service install [--now] [--dest DIR]
@@ -608,6 +614,28 @@ with the reason.
   Only the given properties are known, which the output says.
 - Exit status 0, or 1 for an unknown device or a malformed `--prop`.
 
+### 8.5 Pause
+
+`udevmon pause [--for DURATION]` stops all automation without touching the config;
+`udevmon resume` ends it.
+
+- The state is the file `pause.pause_path()`, `$XDG_RUNTIME_DIR/udevmon.paused`
+  (beside the lock file; mode 0600, written atomically). It is empty (paused until
+  `resume`) or holds the end time in seconds since the epoch (`--for`). The daemon
+  reads it for every event: one `open` on a file that usually does not exist. The
+  runtime directory is cleared at logout and reboot, so a pause cannot outlive the
+  session. A file whose time has passed is ignored and removed; one that is
+  unreadable or holds something else counts as paused until resumed.
+- `DURATION` is one or more `<number><unit>` groups with units `s`, `m`, `h`, `d`
+  (`90s`, `30m`, `1h30m`); anything else, or zero, is an error (exit 1).
+- While paused no action runs, including `startup` and `shutdown` ones (the
+  daemon's exit pass is held back too). Events keep arriving and are not replayed on
+  resume. `Engine.plan()` (and so `explain`) ignores the pause.
+- `pause` succeeds even when no daemon is running (and says so): the daemon obeys
+  the file once it starts. Pausing again replaces the previous pause.
+- `explain` prints `Note: automation is paused (...)`, and the editing commands and
+  `scan`, after a successful change, print the same note.
+
 ## 9. Resource expectations
 
 Event-driven; idle CPU ≈ 0 with no timers. Resident memory ≈ 20–35 MB.
@@ -655,7 +683,8 @@ No disk I/O apart from reading the config.
 pyproject.toml
 setup.py                          version from git (§13.1)
 src/udevmon/{__init__,__main__,cli,config,configedit,events,matching,
-             engine,actions,daemon,scan,service,completion,explain,_scm}.py
+             engine,actions,daemon,scan,service,completion,explain,pause,
+             runtime,_scm}.py
 src/udevmon/sources/{__init__,udev,udisks}.py
 tests/…   (unittest)
 ```

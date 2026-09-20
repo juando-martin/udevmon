@@ -49,6 +49,14 @@ def _reload_after_edit(args) -> None:
         print("Reloaded the running daemon.")
 
 
+def _pause_note() -> str | None:
+    from . import pause
+    paused, until = pause.status()
+    if not paused:
+        return None
+    return f"automation is paused ({pause.describe_until(until)}): nothing runs."
+
+
 def _reloads(fn):
     """Run an editing command, then reload the daemon if it succeeded."""
     @functools.wraps(fn)
@@ -56,6 +64,9 @@ def _reloads(fn):
         rc = fn(args)
         if not rc:
             _reload_after_edit(args)
+            note = _pause_note()
+            if note:
+                print(f"Note: {note}")
         return rc
     return wrapper
 
@@ -123,9 +134,39 @@ def _parse_props(pairs) -> dict:
     return props
 
 
+def cmd_pause(args):
+    from . import pause
+    from .daemon import running_pid
+    seconds = None
+    if args.duration is not None:
+        try:
+            seconds = pause.parse_duration(args.duration)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+    was_paused, _ = pause.status()
+    until = pause.pause(seconds)
+    print(("Already paused; now paused " if was_paused else "Automation paused ")
+          + pause.describe_until(until) + ".")
+    if until is not None:
+        print("Run `udevmon resume` to continue sooner.")
+    if running_pid() is None:
+        print("No daemon is running right now; the pause applies once one starts.")
+    return 0
+
+
+def cmd_resume(args):
+    from . import pause
+    print("Automation resumed." if pause.resume() else "Automation was not paused.")
+    return 0
+
+
 def cmd_explain(args):
     from . import explain
     cfg = _load(args)
+    note = _pause_note()
+    if note:
+        print(f"Note: {note}\n")
     props = _guard(_parse_props, args.prop)
     if args.device is not None and args.device not in cfg.devices:
         print(f"error: no such device {args.device!r}", file=sys.stderr)
@@ -569,6 +610,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--all", action="store_true",
                    help="also list system filesystems and things nothing matches")
     s.set_defaults(fn=cmd_explain)
+
+    s = sub.add_parser("pause", help="stop every action until `resume` (or for a while)")
+    s.add_argument("--for", dest="duration", metavar="DURATION",
+                   help="how long: 30m, 2h, 1h30m, 90s, 1d")
+    s.set_defaults(fn=cmd_pause)
+    s = sub.add_parser("resume", help="let actions run again after a pause")
+    s.set_defaults(fn=cmd_resume)
 
     s = sub.add_parser("check", help="validate the config"); s.set_defaults(fn=cmd_check)
     s = sub.add_parser("reload", help="tell the running daemon to reload"); s.set_defaults(fn=cmd_reload)

@@ -12,16 +12,11 @@ from . import config as cfgmod
 from .actions import ActionRunner
 from .engine import Engine
 from .events import SHUTDOWN, Event
+from .runtime import lock_path  # noqa: F401  (also used as daemon.lock_path)
 from .sources.udev import UdevSource
 from .sources.udisks import UdisksSource
 
 log = logging.getLogger("udevmon.daemon")
-
-
-def lock_path() -> Path:
-    base = os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/udevmon-{os.getuid()}"
-    Path(base).mkdir(mode=0o700, exist_ok=True)
-    return Path(base) / "udevmon.lock"
 
 
 def _is_udevmon(pid: int) -> bool:
@@ -74,6 +69,13 @@ class Daemon:
         os.write(fd, f"{os.getpid()}\n{os.path.realpath(self.config_path)}\n".encode())
         return fd                       # keep open for the process lifetime
 
+    def banner(self) -> str:
+        """The line logged when the daemon starts."""
+        from . import pause
+        return (f"udevmon running: {len(self.cfg.devices)} device(s), "
+                f"{len(self.cfg.actions)} action(s)" + (" [dry-run]" if self.dry_run else "")
+                + (" [PAUSED]" if pause.is_paused() else ""))
+
     def _emit(self, event: Event) -> None:
         try:
             self.engine.handle(event)
@@ -125,8 +127,7 @@ class Daemon:
                         UdisksSource(announce_present=True)]
         for s in self.sources:
             s.start(self._emit)
-        log.info("udevmon running: %d device(s), %d action(s)%s", len(self.cfg.devices),
-                 len(self.cfg.actions), " [dry-run]" if self.dry_run else "")
+        log.info("%s", self.banner())
         try:
             loop.run()
         finally:

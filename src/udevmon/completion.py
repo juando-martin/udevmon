@@ -53,7 +53,7 @@ NO_COMPLETION = {("devices", "add"), ("tags", "add")}
 
 # Options that take a value: those completed by _option_value, and free text.
 OPTION_VALUE_DESTS = {"config", "dest", "device", "tag", "match", "prop", "on"}
-FREE_TEXT_DESTS = {"name", "timeout", "description"}
+FREE_TEXT_DESTS = {"name", "timeout", "description", "duration"}
 
 HEADER = "# bash completion for udevmon"   # marks a file as ours (uninstall checks it)
 

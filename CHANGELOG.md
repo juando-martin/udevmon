@@ -20,6 +20,13 @@ to the version and date, and start a new empty **Unreleased** above it.
   ignore wins if a thing matches several devices. Both stay "named", so they never
   fall into the unnamed category. New commands: `devices disable`, `devices ignore`
   and `devices enable`, which take several names and change nothing unless all exist.
+- **Global pause.** `udevmon pause` stops every action without touching the config,
+  `udevmon pause --for 30m` (`90s`, `2h`, `1d`, `1h30m`) for a while, and
+  `udevmon resume` lets them run again. Nothing runs while paused, not even
+  `startup` and `shutdown` actions, and events during a pause are not replayed. The
+  state is a file in the runtime directory, so it survives a daemon restart but
+  not a logout or reboot. `explain` and the editing commands say when automation
+  is paused, and the daemon's start-up line shows `[PAUSED]`.
 - **Surprise removal.** A mounted filesystem that vanishes without being unmounted
   (a pulled stick) now fires a new **`removed`** event after `unmounted`, so an
   action can warn about it (`on = ["removed"]`). The new `surprise` value (`{surprise}`,
