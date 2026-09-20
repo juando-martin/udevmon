@@ -38,6 +38,7 @@ class Device:
     match: dict[str, str]
     description: str = ""
     tags: tuple[str, ...] = ()
+    status: str = "active"          # "active" | "disabled" | "ignored" (spec 5.7)
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,7 @@ class Action:
     run: tuple[str, ...]
     timeout: float = 60.0
     allow_unnamed: bool | None = None   # tag actions only; None = not stated (behaves as False)
+    enabled: bool = True
 
     @property
     def targets(self) -> tuple[str, ...]:
@@ -113,9 +115,9 @@ def expand(argv, props) -> list[str]:
 
 _TOP = {"daemon", "devices", "tags", "actions"}
 _DAEMON = {"debounce", "udev_filters", "max_workers"}
-_DEVICE = {"description", "match", "tags"}
+_DEVICE = {"description", "match", "tags", "status"}
 _TAG = {"description", "match"}
-_ACTION = {"name", "device", "tag", "on", "run", "timeout", "allow_unnamed"}
+_ACTION = {"name", "device", "tag", "on", "run", "timeout", "allow_unnamed", "enabled"}
 
 
 def _names(value, where: str, problems: list[str]) -> tuple[str, ...] | None:
@@ -178,7 +180,14 @@ def parse(data: dict) -> Config:
         tags: tuple[str, ...] = ()
         if "tags" in a:
             tags = _names(a["tags"], f"{where}: 'tags'", problems) or ()
-        cfg.devices[name] = Device(name, match, str(a.get("description", "")), tags)
+        status = a.get("status", "")
+        if status in ("", "active"):                    # absent or empty: the normal state
+            status = "active"
+        elif status not in ("disabled", "ignored"):
+            problems.append(f"{where}: 'status' must be \"disabled\", \"ignored\" or \"active\" "
+                            f"(or left out), not {status!r}")
+            continue
+        cfg.devices[name] = Device(name, match, str(a.get("description", "")), tags, status)
         if strength(match) == WEAK:
             cfg.warnings.append(f"device {name!r}: weak match {match} (matches every "
                                 "device/filesystem with these values)")
@@ -260,6 +269,10 @@ def parse(data: dict) -> Config:
             if not isinstance(allow, bool):
                 problems.append(f"{where}: 'allow_unnamed' must be true or false")
                 continue
+        enabled = a.get("enabled", True)
+        if not isinstance(enabled, bool):
+            problems.append(f"{where}: 'enabled' must be true or false")
+            continue
         on = a.get("on")
         on = (on,) if isinstance(on, str) else tuple(on or ())
         bad = [k for k in on if k not in VALID_KINDS]
@@ -292,7 +305,7 @@ def parse(data: dict) -> Config:
         except (TypeError, ValueError):
             problems.append(f"{where}: invalid timeout")
             continue
-        cfg.actions.append(Action(name, devices, tags, on, tuple(run), timeout, allow))
+        cfg.actions.append(Action(name, devices, tags, on, tuple(run), timeout, allow, enabled))
 
     if problems:
         raise ConfigError(problems)
@@ -304,6 +317,18 @@ def _advise(cfg: Config) -> None:
     """Warnings and notes that do not stop the config from loading (spec 6.2)."""
     carried = {t for d in cfg.devices.values() for t in d.tags}
     used = {t for a in cfg.actions for t in a.tags}
+    for d in cfg.devices.values():
+        if d.status == "disabled":
+            cfg.notes.append(f"device {d.name!r} is disabled: its own actions do not run "
+                             "(actions for its tags still do)")
+        elif d.status == "ignored":
+            cfg.notes.append(f"device {d.name!r} is ignored: nothing runs for it")
+    for a in cfg.actions:
+        if not a.enabled:
+            cfg.notes.append(f"action {a.name!r} is disabled and never runs")
+        elif a.devices and all(cfg.devices[n].status != "active" for n in a.devices):
+            cfg.notes.append(f"action {a.name!r} only targets disabled or ignored devices, "
+                             "so it never runs")
     for a in cfg.actions:
         if not a.tags:
             continue

@@ -9,8 +9,8 @@ from pathlib import Path
 from . import config as cfgmod
 from . import configedit
 from .events import STARTUP, Endpoint, Event, describe
-from .matching import (STRONG, build_match, default_match_keys, resolve, strength,
-                       strength_note)
+from .matching import (STRONG, build_match, default_match_keys, device_label, resolve,
+                       strength, strength_note)
 from .sources.udev import UdevSource
 from .sources.udisks import UdisksSource
 
@@ -21,7 +21,7 @@ SKIP_KEYS = ("syspath", "subsystem", "devtype")
 def status_text(cfg: cfgmod.Config, endpoint: Endpoint) -> str:
     """'device: NAME  tags: a, b' for named things, 'unnamed  tags: ...' otherwise."""
     res = resolve(cfg, endpoint.props)
-    who = f"device: {', '.join(d.name for d in res.named)}" if res.named else "unnamed"
+    who = f"device: {', '.join(device_label(d) for d in res.named)}" if res.named else "unnamed"
     return who + (f"  tags: {', '.join(res.tags)}" if res.tags else "")
 
 
@@ -84,13 +84,16 @@ class Scanner:
             print("\nDetected:")
             for i, d in enumerate(endpoints, 1):
                 print(f"  [{i}] {describe(d)}   {status_text(cfg, d)}")
-            ans = input("Number(s) to name (e.g. 2 or 1,2), "
+            ans = input("Number(s) to name, iN to ignore, "
                         "Enter = scan on, q = quit: ").strip().lower()
             if ans == "q":
                 self.loop.quit()
                 return
             if not ans:
                 return
+            ignore = ans.startswith("i")            # "i3" or "i1,3": ignore instead of name
+            if ignore:
+                ans = ans[1:].strip()
             try:
                 picks = list(dict.fromkeys(int(x) for x in ans.replace(" ", "").split(",")))
             except ValueError:
@@ -98,12 +101,14 @@ class Scanner:
             if not picks or not all(1 <= n <= len(endpoints) for n in picks):
                 print("Not a valid choice.")
                 continue
-            named = [n for n in picks if self._name_endpoint(endpoints[n - 1])]
+            named = [n for n in picks
+                     if self._name_endpoint(endpoints[n - 1], ignore=ignore)]
             endpoints = [e for i, e in enumerate(endpoints, 1) if i not in named]
         print("Waiting for more events (Ctrl+C to quit)...")
 
-    def _name_endpoint(self, endpoint: Endpoint) -> bool:
-        name = input("Device name (Enter to skip): ").strip()
+    def _name_endpoint(self, endpoint: Endpoint, ignore: bool = False) -> bool:
+        name = input("Device name to ignore (Enter to skip): " if ignore
+                     else "Device name (Enter to skip): ").strip()
         if not name:
             print("Skipped.")
             return False
@@ -132,25 +137,29 @@ class Scanner:
         if level != STRONG:
             if input("Save anyway? [y/N] ").strip().lower() != "y":
                 return False
-        existing = sorted(self._config().all_tag_names())
-        hint = f" [existing: {', '.join(existing)}]" if existing else ""
-        raw = input(f"Tags, comma-separated{hint} (Enter for none): ").strip()
-        tags = [t.strip() for t in raw.split(",") if t.strip()]
-        if not all(cfgmod.NAME_RE.match(t) for t in tags):
-            print("Tag names may contain only letters, digits, _ . -; nothing saved.")
-            return False
+        tags: list[str] = []
+        if not ignore:                              # nothing runs for an ignored device: no tags
+            existing = sorted(self._config().all_tag_names())
+            hint = f" [existing: {', '.join(existing)}]" if existing else ""
+            raw = input(f"Tags, comma-separated{hint} (Enter for none): ").strip()
+            tags = [t.strip() for t in raw.split(",") if t.strip()]
+            if not all(cfgmod.NAME_RE.match(t) for t in tags):
+                print("Tag names may contain only letters, digits, _ . -; nothing saved.")
+                return False
         try:
-            configedit.add_device(self.config_path, name, match, describe(endpoint), tags)
+            configedit.add_device(self.config_path, name, match, describe(endpoint), tags,
+                                  status="ignored" if ignore else None)
         except cfgmod.ConfigError as e:
             print(f"Could not save: {e}")
             return False
-        print(f"Saved device {name!r} to {self.config_path}")
+        print(f"Saved device {name!r} to {self.config_path}" + (" (ignored)" if ignore else ""))
         from .daemon import reload_running
         if reload_running(self.config_path):
             print("Reloaded the running daemon.")
-        print("Add an action with e.g.:\n  udevmon actions add --device "
-              f"{name} {'mounted' if endpoint.is_filesystem else 'connected'} "
-              "-- notify-send 'hello'")
+        if not ignore:
+            print("Add an action with e.g.:\n  udevmon actions add --device "
+                  f"{name} {'mounted' if endpoint.is_filesystem else 'connected'} "
+                  "-- notify-send 'hello'")
         return True
 
     def run(self) -> int:

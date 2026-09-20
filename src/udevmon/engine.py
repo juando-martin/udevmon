@@ -50,23 +50,40 @@ class Engine:
         """The actions that apply to this event, in config order (each at most once)."""
         named = {d.name for d in res.named}
         jobs: list[Job] = []
+
+        def skip(action, reason):
+            log.debug("%s: %r skipped: %s", event.kind, action.name, reason)
+            if skipped is not None:
+                skipped.append(Skip(action, reason))
+
+        if res.ignored:                               # an ignored device silences everything
+            log.debug("%s: ignored (%s)", event.kind, ", ".join(d.name for d in res.ignored))
+            return jobs
         for action in self.config.actions:
             if event.kind not in action.on:
                 continue
             if action.devices:
-                device = next((d.name for d in res.named if d.name in action.devices), None)
-                if device is not None:
-                    jobs.append(Job(action, device, None))
+                listed = [d for d in res.named if d.name in action.devices]
+                if not listed:
+                    continue
+                if not action.enabled:
+                    skip(action, "the action is disabled")
+                    continue
+                device = next((d.name for d in listed if d.status == "active"), None)
+                if device is None:                    # its own actions are off for a disabled device
+                    skip(action, f"device {listed[0].name!r} is disabled")
+                    continue
+                jobs.append(Job(action, device, None))
                 continue
             tag = next((t for t in action.tags if t in res.tags), None)
             if tag is None:
                 continue
+            if not action.enabled:
+                skip(action, "the action is disabled")
+                continue
             if not named and not action.allow_unnamed:
-                log.debug("%s: unnamed thing has tag %r but action %r does not allow unnamed",
-                          event.kind, tag, action.name)
-                if skipped is not None:
-                    skipped.append(Skip(action, "an unnamed thing, and the action does not "
-                                                "set allow_unnamed = true"))
+                skip(action, "an unnamed thing, and the action does not "
+                             "set allow_unnamed = true")
                 continue
             jobs.append(Job(action, res.named[0].name if named else None, tag))
         return jobs

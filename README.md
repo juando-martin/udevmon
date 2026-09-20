@@ -177,7 +177,7 @@ prints what it sees, then after a short pause asks you what to do:
 Detected:
   [1] USB SanDisk Cruzer [0781:5567]   unnamed
   [2] Filesystem BACKUP (ext4) on /dev/sdb1   unnamed
-Number(s) to name (e.g. 2 or 1,2), Enter = scan on, q = quit: 2
+Number(s) to name, iN to ignore, Enter = scan on, q = quit: 2
 Device name (Enter to skip): backup-disk
 Properties you can match on: fs_uuid, fs_label, fs_type, devnode
 Match on [fs_uuid] (Enter to accept, or type a list):
@@ -190,7 +190,10 @@ The prompts are asked in that order. If you type a property that doesn't
 exist (say, a device name at the "Match on" prompt), it tells you and asks
 again. When nothing more is left to name it prints `Waiting for more events`
 and keeps scanning; press Ctrl+C to leave (the `q` answer works only at the
-"Number(s) to name" prompt).
+"Number(s) to name" prompt). To silence something you never want to react to
+(a USB hub, an internal card reader), answer with `i` and its number (`i3`, or
+`i1,3`): it is saved as an ignored device, without asking for tags (see
+[Switching things off](#switching-things-off)).
 
 A physical stick usually shows up twice: as a **USB device** (identified by
 vendor/product ID and serial number) and as one or more **filesystems**
@@ -430,6 +433,59 @@ Filesystem X (ext4) at /media/x   unnamed   tags: storage
 Things that match no device and no tag are left out (a count says how many);
 `--all` lists them, and system filesystems too.
 
+## Switching things off
+
+You can stop things running without deleting them.
+
+**A device has a status.** Left out (or `""` or `"active"`) it works normally.
+
+- `disabled`: the device's *own* actions, the ones that name it
+  (`device = "stick"`), don't run. It is still recognised, so if it belongs to a
+  tag, the tag's actions still run for it.
+- `ignored`: nothing runs for it, whichever way an action would reach it
+  (its own actions, tag actions, `allow_unnamed` ones). If a thing matches two
+  devices and either is ignored, nothing runs.
+
+A disabled or ignored device still counts as *named*: it never falls back into
+the unnamed category, where a rule tag could start running `allow_unnamed`
+actions for it. `startup` and `shutdown` follow the same rules.
+
+```
+udevmon devices disable stick hub    # own actions off, tags still apply
+udevmon devices ignore hub           # nothing runs for it at all
+udevmon devices enable stick hub     # back to normal
+```
+
+```toml
+[devices.hub]
+match = { vendor_id = "1d6b", product_id = "0002", port_path = "usb1" }
+status = "ignored"          # or "disabled"; leave it out for normal
+```
+
+**An action can be disabled** with `enabled = false`, or with
+`udevmon actions disable NAME` and `actions enable NAME`. It stays in the file
+and in `udevmon explain`, marked as disabled, so it is never a mystery why it
+didn't run.
+
+**`udevmon actions set NAME`** changes an action without removing and adding it
+again:
+
+```
+udevmon actions set backup --timeout 900
+udevmon actions set backup --on mounted,startup
+udevmon actions set notify --allow-unnamed
+udevmon actions set notify --named-only
+udevmon actions set notify --default-unnamed   # clear it: not stated
+```
+
+`--default-unnamed` removes the `allow_unnamed` line; the action then behaves as
+named-only, and `check` notes it again if its tag has a rule. `--allow-unnamed`
+and the other two apply only to actions that use `tag`.
+
+The list commands, `present`, `scan`, `explain` and `check` show what is switched
+off, and every one of these commands reloads a running daemon (`--no-reload`
+skips it), like the other editing commands.
+
 ## Configuration file
 
 The file is `~/.config/udevmon/config.toml` (respects `$XDG_CONFIG_HOME`). Use
@@ -536,6 +592,8 @@ udevmon devices list | show NAME | remove NAME
 udevmon devices add NAME --match KEY=VALUE ...
                     [--tag TAG ...] [--description TEXT]
 udevmon devices tag NAME TAG...         add explicit tags to a device
+udevmon devices disable | ignore | enable NAME...
+                                        switch devices off (see above)
 udevmon devices untag NAME TAG...
 udevmon tags list | show NAME | remove NAME
 udevmon tags add NAME [--match KEY=VALUE ...] [--description TEXT]
@@ -543,6 +601,9 @@ udevmon actions list | remove NAME
 udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT...]
                     [--name NAME] [--timeout S]
                     [--allow-unnamed | --named-only] -- COMMAND...
+udevmon actions set NAME [--allow-unnamed | --named-only
+                          | --default-unnamed] [--on EVENTS] [--timeout S]
+udevmon actions disable | enable NAME...
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
                                         what would run (see above)
 udevmon check                           validate the config

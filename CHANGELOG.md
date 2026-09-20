@@ -12,6 +12,24 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ## [Unreleased]
 
+### Added
+
+- **Device status: `disabled` and `ignored`.** A `status` key on a device (absent
+  or empty means active). A disabled device's own actions don't run, but actions
+  reached through its tags still do; an ignored device runs nothing at all, and
+  ignore wins if a thing matches several devices. Both stay "named", so they never
+  fall into the unnamed category. New commands: `devices disable`, `devices ignore`
+  and `devices enable`, which take several names and change nothing unless all exist.
+- **`enabled = false` on actions**, with `actions disable` and `actions enable`.
+- **`actions set NAME`** changes `allow_unnamed` (`--allow-unnamed`, `--named-only`,
+  `--default-unnamed` to clear it), the events (`--on`) or the `--timeout` of an
+  action without removing and re-adding it.
+- **`scan` can ignore things:** answer `i3` (or `i1,3`) instead of a number to save
+  them as ignored devices, without asking for tags.
+- `devices list`, `devices show`, `actions list`, `present`, `scan` and `explain`
+  mark what is switched off; `explain` says why an action was skipped (disabled
+  action, disabled device) and `check` notes it.
+
 ## [0.2.0] - 2026-09-20
 
 ### Added

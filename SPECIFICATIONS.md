@@ -238,6 +238,32 @@ the `UDEVMON_*` environment as untrusted. `startup` and `shutdown` follow the sa
 rules, so an allowed action on a broad rule fires once for every present matching
 thing, including system filesystems.
 
+### 5.7 Device status and disabled actions
+
+A device has a **status**: `active` (the default), `disabled` or `ignored`. In the
+file it is the `status` key of the device: absent, `""` or `"active"` mean active;
+any other value than `"disabled"` and `"ignored"` is an error. An action has
+`enabled` (a boolean, default `true`).
+
+- A thing that matches a device is *named* whatever that device's status, so a
+  disabled or ignored device never makes it unnamed (which would let it run
+  `allow_unnamed` actions, §5.6).
+- **disabled:** the actions that list this device in `device` do not run for it.
+  Actions that reach it through a tag (explicit or by rule) run as for any named
+  device.
+- **ignored:** nothing runs. If a thing matches several devices and *any* is ignored,
+  nothing runs for it (an ignore cannot be overridden by another definition).
+  `disabled` never conflicts across devices: it only turns off that device's own
+  actions, and another matching device's actions carry on.
+- **`enabled = false`:** the action never runs.
+- `startup` and `shutdown` follow the same rules.
+
+`check` lists what is switched off (notes, §6.2). `explain` marks `[disabled]` /
+`[ignored]` in the device list, prints `ignored (NAME): nothing runs for this thing`,
+and reports an action that would have applied as skipped, with the reason
+(`the action is disabled`, `device 'X' is disabled`); actions that would not have
+applied anyway are not mentioned.
+
 ## 6. Configuration
 
 Path: `$XDG_CONFIG_HOME/udevmon/config.toml` (default `~/.config/udevmon/`),
@@ -253,6 +279,7 @@ max_workers = 4
 description = "Weekly backup drive"
 match = { fs_uuid = "3F2A-91BC" }
 tags = ["backup", "storage"]           # explicit tags (optional)
+# status = "disabled"   # or "ignored"; absent = active (§5.7)
 
 [devices.yubikey]
 match = { vendor_id = "1050", product_id = "0407", serial = "A1B2C3D4E5" }
@@ -336,7 +363,9 @@ reload keeps the previous configuration:
 - a tag rule with an empty list, a non-string value, or a volatile key;
 - a placeholder unavailable for the action's event kinds (`{mountpoint}` on
   `connected`; `{tag}` on a `device` action);
-- an invalid `timeout`.
+- an invalid `timeout`;
+- a device `status` other than `"disabled"`, `"ignored"`, `"active"` or `""`, or a
+  non-boolean `enabled` (§5.7).
 
 ### 6.2 Warnings and notes
 
@@ -360,7 +389,9 @@ printed by `check` only. Neither changes the exit status.
   for named devices in tag X; set `allow_unnamed` to choose";
 - note: an `allow_unnamed = true` action on a tag whose rule is not strong — "any
   hardware presenting these properties can trigger it";
-- note: a tag carried by devices but used by no action.
+- note: a tag carried by devices but used by no action;
+- note: a disabled or ignored device, a disabled action, and an action that only
+  targets disabled or ignored devices (so never runs).
 
 ## 7. Daemon (`udevmon run`)
 
@@ -378,11 +409,13 @@ printed by `check` only. Neither changes the exit status.
 - `SIGTERM`/`SIGINT`: emit `shutdown` events, wait for those actions (bounded by each
   action's `timeout`), stop cleanly.
 - For each event, in this order:
-  1. Resolve `N(E)` and `T(E)` (§5.5). Unnamed things with no tags stop here (debug log).
+  1. Resolve `N(E)` and `T(E)` (§5.5). Unnamed things with no tags stop here (debug
+     log). If any device in `N(E)` is `ignored`, stop: nothing runs (§5.7).
   2. Walk the actions in file order and select those whose `on` includes the kind and
-     that apply:
-     - `device` actions apply when a listed device is in `N(E)`; `{device}` is the
-       first such device in `N(E)` (config file order);
+     that apply. A `enabled = false` action is skipped (with a reason, for `explain`):
+     - `device` actions apply when a listed device is in `N(E)` and at least one such
+       device is `active` (a `disabled` device's own actions are skipped); `{device}` is
+       the first such active device in `N(E)` (config file order);
      - `tag` actions apply when one of the action's tags is in `T(E)`, and either
        *E* is named or the action has `allow_unnamed = true`. `{tag}` is the first of
        the action's tags (in the order written) that is in `T(E)`; `{device}` is the
@@ -418,6 +451,7 @@ udevmon devices add NAME --match KEY=VALUE ...
                     [--tag TAG ...] [--description TEXT]
 udevmon devices remove NAME
 udevmon devices tag NAME TAG [TAG ...]  add explicit tags to a device
+udevmon devices disable|ignore|enable NAME...   (§5.7)
 udevmon devices untag NAME TAG [TAG ...]
 udevmon tags list|show
 udevmon tags add NAME [--match KEY=VALUE ...] [--description TEXT]
@@ -427,6 +461,10 @@ udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT ...]
                     [--name NAME] [--timeout SECONDS]
                     [--allow-unnamed | --named-only] -- COMMAND [ARG ...]
 udevmon actions remove NAME
+udevmon actions disable|enable NAME...
+udevmon actions set NAME [--allow-unnamed | --named-only
+                          | --default-unnamed]
+                    [--on EVENTS] [--timeout SECONDS]
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
                                         what would run (§8.4)
 udevmon check                           validate: errors, warnings, notes
@@ -471,7 +509,8 @@ The editing commands (`devices add|remove|tag|untag`, `tags add|remove`,
    once) → for each, enter a name → confirm or edit the match keys
    (default per §5.3, weak/medium warnings shown) → optionally enter tags
    (existing tags are suggested) → device appended to the config.
-   Repeat, Enter to continue scanning, `q` to quit.
+   `iN` (`i3`, `i1,3`) does the same but saves the devices as `ignored` and asks
+   for no tags. Repeat, Enter to continue scanning, `q` to quit.
 5. `--no-prompt` (also automatic when stdin is not a TTY) only prints events.
 6. `--present` also offers things that are **already present** when the scan
    starts (printed as `present`, one line each, and included in the naming

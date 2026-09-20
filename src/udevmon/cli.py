@@ -12,7 +12,7 @@ from . import __version__
 from . import config as cfgmod
 from . import configedit
 from .events import VALID_KINDS, describe
-from .matching import build_match, resolve, strength
+from .matching import build_match, device_label, resolve, strength
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -166,7 +166,7 @@ def cmd_devices_list(args):
         print("No devices. Run `udevmon scan` to create some.")
     for d in cfg.devices.values():
         tags = f"  tags: {', '.join(d.tags)}" if d.tags else ""
-        print(f"{d.name:<20} {strength(d.match):<7} {d.match}{tags}  "
+        print(f"{device_label(d):<20} {strength(d.match):<7} {d.match}{tags}  "
               f"({len(_actions_for(cfg, d))} action(s))")
     return 0
 
@@ -178,6 +178,8 @@ def cmd_devices_show(args):
         print(f"error: no such device {args.name!r}", file=sys.stderr)
         return 1
     print(f"{d.name}: {d.description}\n  match: {d.match}  ({strength(d.match)})")
+    if d.status != "active":
+        print(f"  status: {d.status}")
     if d.tags:
         print(f"  tags: {', '.join(d.tags)}")
     for x in _actions_for(cfg, d):
@@ -198,6 +200,67 @@ def cmd_devices_add(args):
 def cmd_devices_remove(args):
     _guard(configedit.remove_device, args.config, args.name)
     print(f"Removed device {args.name!r}.")
+    return 0
+
+
+def _say_changed(changed, names, done, already) -> None:
+    if changed:
+        print(f"{done}: {', '.join(changed)}.")
+    same = [n for n in dict.fromkeys(names) if n not in changed]
+    if same:
+        print(f"Already {already}: {', '.join(same)}.")
+
+
+@_reloads
+def cmd_devices_disable(args):
+    changed = _guard(configedit.set_device_status, args.config, args.names, "disabled")
+    _say_changed(changed, args.names, "Disabled", "disabled")
+    return 0
+
+
+@_reloads
+def cmd_devices_ignore(args):
+    changed = _guard(configedit.set_device_status, args.config, args.names, "ignored")
+    _say_changed(changed, args.names, "Ignored", "ignored")
+    return 0
+
+
+@_reloads
+def cmd_devices_enable(args):
+    changed = _guard(configedit.set_device_status, args.config, args.names, None)
+    _say_changed(changed, args.names, "Enabled", "enabled")
+    return 0
+
+
+@_reloads
+def cmd_actions_disable(args):
+    changed = _guard(configedit.set_action_enabled, args.config, args.names, False)
+    _say_changed(changed, args.names, "Disabled", "disabled")
+    return 0
+
+
+@_reloads
+def cmd_actions_enable(args):
+    changed = _guard(configedit.set_action_enabled, args.config, args.names, True)
+    _say_changed(changed, args.names, "Enabled", "enabled")
+    return 0
+
+
+@_reloads
+def cmd_actions_set(args):
+    on = None
+    if args.on is not None:
+        on = [k.strip() for k in args.on.split(",") if k.strip()]
+        bad = [k for k in on if k not in VALID_KINDS]
+        if bad or not on:
+            print(f"error: events must be from {sorted(VALID_KINDS)}", file=sys.stderr)
+            return 1
+    if args.timeout is not None and args.timeout <= 0:
+        print("error: --timeout must be greater than 0", file=sys.stderr)
+        return 1
+    _guard(configedit.set_action_options, args.config, args.name,
+           unnamed=args.unnamed, on=on, timeout=args.timeout)
+    print(f"Updated action {args.name!r}.")
     return 0
 
 
@@ -270,7 +333,8 @@ def cmd_actions_list(args):
     for x in cfg.actions:
         target = f"device:{','.join(x.devices)}" if x.devices else f"tag:{','.join(x.tags)}"
         flag = {True: " [allow_unnamed]", False: " [named only]", None: ""}[x.allow_unnamed]
-        print(f"{x.name:<24} {target:<22} on {','.join(x.on):<24} {list(x.run)}{flag}")
+        off = " [disabled]" if not x.enabled else ""
+        print(f"{x.name:<24} {target:<22} on {','.join(x.on):<24} {list(x.run)}{flag}{off}")
     if not cfg.actions:
         print("No actions.")
     return 0
@@ -439,6 +503,14 @@ def build_parser() -> argparse.ArgumentParser:
     x = g.add_parser("untag", help="remove explicit tags from a device", parents=[edits])
     x.add_argument("name"); x.add_argument("tags", nargs="+", metavar="TAG")
     x.set_defaults(fn=cmd_devices_untag)
+    x = g.add_parser("disable", help="turn off the device's own actions (its tags' still run)",
+                     parents=[edits])
+    x.add_argument("names", nargs="+", metavar="NAME"); x.set_defaults(fn=cmd_devices_disable)
+    x = g.add_parser("ignore", help="run nothing at all for these devices", parents=[edits])
+    x.add_argument("names", nargs="+", metavar="NAME"); x.set_defaults(fn=cmd_devices_ignore)
+    x = g.add_parser("enable", help="back to normal (clears disabled or ignored)",
+                     parents=[edits])
+    x.add_argument("names", nargs="+", metavar="NAME"); x.set_defaults(fn=cmd_devices_enable)
     dev.set_defaults(fn=cmd_devices_list)              # bare `udevmon devices` lists them
 
     tg = sub.add_parser("tags", help="manage tags and tag rules").add_subparsers(
@@ -470,6 +542,23 @@ def build_parser() -> argparse.ArgumentParser:
                      help="run for named devices only (explicit)")
     x.set_defaults(fn=cmd_actions_add)
     x = a.add_parser("remove", parents=[edits]); x.add_argument("name"); x.set_defaults(fn=cmd_actions_remove)
+    x = a.add_parser("disable", help="stop actions running without deleting them", parents=[edits])
+    x.add_argument("names", nargs="+", metavar="NAME"); x.set_defaults(fn=cmd_actions_disable)
+    x = a.add_parser("enable", help="let disabled actions run again", parents=[edits])
+    x.add_argument("names", nargs="+", metavar="NAME"); x.set_defaults(fn=cmd_actions_enable)
+    x = a.add_parser("set", help="change an action's allow_unnamed, events or timeout",
+                     parents=[edits])
+    x.add_argument("name")
+    grp = x.add_mutually_exclusive_group()
+    grp.add_argument("--allow-unnamed", dest="unnamed", action="store_const", const="allow",
+                     help="also run for unnamed things matching the tag")
+    grp.add_argument("--named-only", dest="unnamed", action="store_const", const="named-only",
+                     help="run for named devices only")
+    grp.add_argument("--default-unnamed", dest="unnamed", action="store_const", const="default",
+                     help="clear the setting (named devices only, `check` will note it)")
+    x.add_argument("--on", metavar="EVENTS", help="replace the events (comma-separated)")
+    x.add_argument("--timeout", type=float, metavar="SECONDS")
+    x.set_defaults(fn=cmd_actions_set, unnamed=None)
 
     s = sub.add_parser("explain", help="show what would run for a thing (present or simulated)")
     s.add_argument("event", nargs="?", choices=sorted(VALID_KINDS), metavar="EVENT",

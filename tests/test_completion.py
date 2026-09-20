@@ -79,7 +79,10 @@ class EngineTests(unittest.TestCase):
 
     def test_groups_and_subcommands(self):
         self.assertEqual(self.words("udevmon devices "),
-                         ["add", "list", "remove", "show", "tag", "untag"])
+                         ["add", "disable", "enable", "ignore", "list", "remove", "show", "tag",
+                          "untag"])
+        self.assertEqual(self.words("udevmon actions "),
+                         ["add", "disable", "enable", "list", "remove", "set"])
         self.assertEqual(self.words("udevmon tags "), ["add", "list", "remove", "show"])
         self.assertEqual(self.words("udevmon service "), ["install", "uninstall"])
         self.assertEqual(self.words("udevmon completion "), ["bash", "install", "uninstall"])
@@ -149,6 +152,22 @@ class EngineTests(unittest.TestCase):
         self.assertIn("mountpoint=", self.comp("udevmon explain --prop ")[1])   # any property
         self.assertEqual(set(self.words("udevmon explain --")),
                          {"--device", "--prop", "--all", "--help"})
+
+    def test_status_and_action_commands(self):
+        self.assertEqual(self.words("udevmon devices disable "), ["stick", "disk"])
+        self.assertEqual(self.words("udevmon devices ignore stick "), ["stick", "disk"])   # repeats
+        self.assertEqual(self.words("udevmon devices enable d"), ["disk"])
+        self.assertEqual(self.words("udevmon actions disable "), ["log", "note"])
+        self.assertEqual(self.words("udevmon actions enable n"), ["note"])
+        self.assertEqual(self.words("udevmon actions set "), ["log", "note"])
+        self.assertEqual(self.words("udevmon actions set log --on mo"), ["mounted"])
+        self.assertEqual(self.words("udevmon actions set log --on connected,dis"),
+                         ["connected,disconnected"])
+        self.assertEqual(set(self.words("udevmon actions set log --")),
+                         {"--allow-unnamed", "--named-only", "--default-unnamed", "--on",
+                          "--timeout", "--no-reload", "--help"})
+        self.assertEqual(self.words("udevmon actions set log --timeout "), [])   # free text
+        self.assertIn("--no-reload", self.words("udevmon devices ignore --"))
 
     def test_no_reload_flag(self):
         self.assertIn("--no-reload", self.words("udevmon devices add --"))

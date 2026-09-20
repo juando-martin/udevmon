@@ -105,6 +105,16 @@ class Resolution:
     def is_named(self) -> bool:
         return bool(self.named)
 
+    @property
+    def ignored(self) -> list:
+        """The matching devices that are ignored (any one silences the whole thing)."""
+        return [d for d in self.named if d.status == "ignored"]
+
+
+def device_label(device) -> str:
+    """The device's name, followed by [disabled] or [ignored] when it is not active."""
+    return device.name if device.status == "active" else f"{device.name} [{device.status}]"
+
 
 def resolve(cfg, props: Mapping[str, str]) -> Resolution:
     """Find the named devices and tags that apply to an endpoint with ``props``."""

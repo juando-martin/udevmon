@@ -11,6 +11,7 @@ import shlex
 
 from . import config as cfgmod
 from .engine import Engine
+from .matching import device_label
 from .events import (CONNECTED, DISCONNECTED, MOUNTED, SHUTDOWN, STARTUP, UNMOUNTED,
                      Endpoint, Event, describe)
 
@@ -46,7 +47,7 @@ def simulated(cfg: cfgmod.Config, device: str | None, props: dict[str, str],
 
 def _status(cfg: cfgmod.Config, plan) -> str:
     res = plan.resolution
-    who = f"device: {', '.join(d.name for d in res.named)}" if res.named else "unnamed"
+    who = f"device: {', '.join(device_label(d) for d in res.named)}" if res.named else "unnamed"
     return who + (f"   tags: {', '.join(res.tags)}" if res.tags else "")
 
 
@@ -70,6 +71,10 @@ def explain_endpoint(cfg: cfgmod.Config, endpoint: Endpoint, kinds=None,
     lines, quiet = [], []
     first_plan = engine.plan(Event(kinds[0], endpoint))
     lines.append(f"{header or describe(endpoint)}   {_status(cfg, first_plan)}")
+    if first_plan.resolution.ignored:
+        names = ", ".join(d.name for d in first_plan.resolution.ignored)
+        lines.append(f"  ignored ({names}): nothing runs for this thing")
+        return lines
     for kind in kinds:
         event = Event(kind, endpoint)
         plan = engine.plan(event)

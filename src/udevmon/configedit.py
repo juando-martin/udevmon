@@ -27,7 +27,7 @@ def _name_or_list(items) -> str:
     return _s(items[0]) if len(items) == 1 else _list(items)
 
 
-def render_device(name, match, description="", tags=()) -> str:
+def render_device(name, match, description="", tags=(), status=None) -> str:
     lines = [f"[devices.{name}]"]
     if description:
         lines.append(f"description = {_s(description)}")
@@ -35,6 +35,8 @@ def render_device(name, match, description="", tags=()) -> str:
     lines.append(f"match = {{ {inner} }}")
     if tags:
         lines.append(f"tags = {_list(tags)}")
+    if status:
+        lines.append(f"status = {_s(status)}")
     return "\n".join(lines) + "\n"
 
 
@@ -103,14 +105,15 @@ def _check_name(kind: str, name: str) -> None:
         raise cfgmod.ConfigError([f"invalid {kind} name {name!r} (use letters, digits, _ . -)"])
 
 
-def add_device(path: Path, name, match, description="", tags=()) -> None:
+def add_device(path: Path, name, match, description="", tags=(), status=None) -> None:
     _check_name("device", name)
     for t in tags:
         _check_name("tag", t)
     existing = cfgmod.load(path)
     if name in existing.devices:
         raise cfgmod.ConfigError([f"device {name!r} already exists"])
-    _edit(path, _append(path, render_device(name, match, description, list(dict.fromkeys(tags)))),
+    _edit(path, _append(path, render_device(name, match, description,
+                                             list(dict.fromkeys(tags)), status)),
           lambda c: c.devices[name])
 
 
@@ -165,6 +168,15 @@ def _edited(path: Path, change) -> str:
     return tk.dumps(doc)
 
 
+def _find_action(doc, name: str, verb: str):
+    """(index, item) of the action with this explicit name in the tomlkit document."""
+    for index, action in enumerate(doc["actions"]):
+        if action.get("name") == name:
+            return index, action
+    raise cfgmod.ConfigError([f"action {name!r} has no explicit name in the file; "
+                              f"edit config.toml by hand to {verb} it"])
+
+
 def remove_device(path: Path, name: str) -> None:
     cfg = cfgmod.load(path, must_exist=True)
     if name not in cfg.devices:
@@ -201,13 +213,8 @@ def remove_action(path: Path, name: str) -> None:
         raise cfgmod.ConfigError([f"no such action {name!r}"])
 
     def change(doc):
-        actions = doc["actions"]
-        for i, action in enumerate(actions):
-            if action.get("name") == name:                  # explicit names only
-                del actions[i]
-                return
-        raise cfgmod.ConfigError([f"action {name!r} has no explicit name in the file; "
-                                  "edit config.toml by hand to remove it"])
+        index, _ = _find_action(doc, name, "remove")
+        del doc["actions"][index]
 
     def verify(c):
         if name in {a.name for a in c.actions}:
@@ -251,4 +258,103 @@ def set_device_tags(path: Path, name: str, add=(), remove=()) -> None:
     def verify(c):
         if list(c.devices[name].tags) != new_tags:
             raise cfgmod.ConfigError([f"tag edit on {name!r} did not take effect"])
+    _edit(path, _edited(path, change), verify)
+
+
+def _unique(names) -> list[str]:
+    return list(dict.fromkeys(names))
+
+
+def set_device_status(path: Path, names, status: str | None) -> list[str]:
+    """Make devices "disabled" or "ignored", or (``status=None``) active again.
+
+    All the names are checked first, so nothing changes unless every one exists.
+    Returns the names whose state actually changed.
+    """
+    cfg = cfgmod.load(path, must_exist=True)
+    names = _unique(names)
+    missing = [n for n in names if n not in cfg.devices]
+    if missing:
+        raise cfgmod.ConfigError([f"no such device(s): {', '.join(map(repr, missing))}"])
+    want = status or "active"
+    changed = [n for n in names if cfg.devices[n].status != want]
+
+    def change(doc):
+        for n in names:
+            table = doc["devices"][n]
+            if status is None:
+                table.pop("status", None)               # active is the absence of the key
+            else:
+                table["status"] = status
+
+    def verify(c):
+        wrong = [n for n in names if c.devices[n].status != want]
+        if wrong:
+            raise cfgmod.ConfigError([f"status change on {wrong} did not take effect"])
+    _edit(path, _edited(path, change), verify)
+    return changed
+
+
+def set_action_enabled(path: Path, names, enabled: bool) -> list[str]:
+    """Enable or disable actions (``enabled = false``). Returns the names that changed."""
+    cfg = cfgmod.load(path, must_exist=True)
+    names = _unique(names)
+    by_name = {a.name: a for a in cfg.actions}
+    missing = [n for n in names if n not in by_name]
+    if missing:
+        raise cfgmod.ConfigError([f"no such action(s): {', '.join(map(repr, missing))}"])
+    changed = [n for n in names if by_name[n].enabled != enabled]
+
+    def change(doc):
+        for n in names:
+            _, item = _find_action(doc, n, "change")
+            if enabled:
+                item.pop("enabled", None)
+            else:
+                item["enabled"] = False
+
+    def verify(c):
+        wrong = [a.name for a in c.actions if a.name in names and a.enabled != enabled]
+        if wrong:
+            raise cfgmod.ConfigError([f"change of {wrong} did not take effect"])
+    _edit(path, _edited(path, change), verify)
+    return changed
+
+
+def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
+                       on=None, timeout: float | None = None) -> None:
+    """Change an action's ``allow_unnamed``, events or timeout.
+
+    ``unnamed`` is "allow", "named-only" or "default" (back to not stated).
+    """
+    cfg = cfgmod.load(path, must_exist=True)
+    if name not in {a.name for a in cfg.actions}:
+        raise cfgmod.ConfigError([f"no such action {name!r}"])
+    if unnamed is None and on is None and timeout is None:
+        raise cfgmod.ConfigError(["nothing to change: give --allow-unnamed, --named-only, "
+                                  "--default-unnamed, --on or --timeout"])
+
+    def change(doc):
+        _, item = _find_action(doc, name, "change")
+        if unnamed == "allow":
+            item["allow_unnamed"] = True
+        elif unnamed == "named-only":
+            item["allow_unnamed"] = False
+        elif unnamed == "default":
+            item.pop("allow_unnamed", None)
+        if on is not None:
+            array = _tomlkit().array()
+            for kind in on:
+                array.append(kind)
+            item["on"] = array
+        if timeout is not None:
+            item["timeout"] = int(timeout) if float(timeout).is_integer() else float(timeout)
+
+    def verify(c):
+        a = next(x for x in c.actions if x.name == name)
+        want_unnamed = {"allow": True, "named-only": False, "default": None}.get(unnamed, a.allow_unnamed)
+        if (a.allow_unnamed != want_unnamed
+                or (on is not None and a.on != tuple(on))
+                or (timeout is not None and a.timeout != float(timeout))):
+            raise cfgmod.ConfigError([f"the change to {name!r} did not take effect"])
     _edit(path, _edited(path, change), verify)
