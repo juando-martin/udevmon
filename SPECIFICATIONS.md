@@ -308,6 +308,15 @@ Rules:
   lines so comments and formatting elsewhere are preserved; a change that fails
   re-parsing is rolled back. A `config.toml.bak` is written before each edit.
   Hand-formatted multi-line `tags = [...]` arrays are not edited by the CLI.
+- The editor finds a table by its header line however it is written: indented, with
+  spaces inside the brackets, the key bare or in single or double quotes, and a
+  trailing comment (`[devices.x]  # note`); the same for `[[actions]]` and for the
+  `name = "x"` line of an action. A block runs from its header to the next line
+  that starts a table (a `[` after optional indentation), blank lines and comments
+  inside it included. Known limits: a device written as `[devices.x]` plus
+  `[devices.x.match]` is not removed by the CLI (the sub-table would be left
+  behind, which the re-parse catches), and a line of a multi-line string that starts
+  with `[` is taken for a header. Both fail safe.
 
 ### 6.1 Errors
 

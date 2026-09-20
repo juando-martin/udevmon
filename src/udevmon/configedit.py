@@ -131,20 +131,33 @@ def add_action(path: Path, name, devices, tags, on, run, timeout=None, allow_unn
     return name
 
 
-def _remove_block(text: str, header_re: str, extra_re: str | None = None) -> str | None:
+# What a table header can look like in a hand-written file: indented, spaces inside
+# the brackets, the key bare or in either kind of quotes, and a comment after it.
+_TRAILER = r"\s*(?:#.*)?$"
+_ANY_HEADER = re.compile(r"^\s*\[")
+
+
+def _table_header(table: str, name: str) -> re.Pattern:
+    """Matches the header line of ``[table.name]``."""
+    n = re.escape(name)
+    return re.compile(rf"^\s*\[\s*{table}\s*\.\s*(?:{n}|\"{n}\"|'{n}')\s*\]{_TRAILER}")
+
+
+_ACTIONS_HEADER = re.compile(rf"^\s*\[\[\s*actions\s*\]\]{_TRAILER}")
+
+
+def _block_end(lines: list[str], start: int) -> int:
+    """Index of the first line after the block that starts at ``start`` (the next header)."""
+    return next((j for j in range(start + 1, len(lines)) if _ANY_HEADER.match(lines[j])),
+                len(lines))
+
+
+def _remove_block(text: str, header: re.Pattern) -> str | None:
     lines = text.splitlines(keepends=True)
-    start = None
-    for i, line in enumerate(lines):
-        if re.match(header_re, line):
-            start = i
-            break
+    start = next((i for i, line in enumerate(lines) if header.match(line)), None)
     if start is None:
         return None
-    end = len(lines)
-    for j in range(start + 1, len(lines)):
-        if re.match(r"\[", lines[j]):
-            end = j
-            break
+    end = _block_end(lines, start)
     while start > 0 and lines[start - 1].strip() == "":
         start -= 1
     return "".join(lines[:start] + lines[end:])
@@ -158,7 +171,7 @@ def remove_device(path: Path, name: str) -> None:
     if users:
         raise cfgmod.ConfigError([f"device {name!r} is used by action(s): {', '.join(users)}"])
     text = path.read_text()
-    new = _remove_block(text, rf"\[devices\.(?:{re.escape(name)}|\"{re.escape(name)}\")\]\s*$")
+    new = _remove_block(text, _table_header("devices", name))
     if new is None:
         raise cfgmod.ConfigError([f"could not locate [devices.{name}] block to remove"])
 
@@ -177,7 +190,7 @@ def remove_tag(path: Path, name: str) -> None:
     users = [a.name for a in cfg.actions if name in a.tags]
     if users:
         raise cfgmod.ConfigError([f"tag {name!r} is used by action(s): {', '.join(users)}"])
-    new = _remove_block(path.read_text(), rf"\[tags\.(?:{re.escape(name)}|\"{re.escape(name)}\")\]\s*$")
+    new = _remove_block(path.read_text(), _table_header("tags", name))
     if new is None:
         raise cfgmod.ConfigError([f"could not locate [tags.{name}] block to remove"])
 
@@ -203,11 +216,11 @@ def set_device_tags(path: Path, name: str, add=(), remove=()) -> None:
     new_tags += [t for t in dict.fromkeys(add) if t not in new_tags]
 
     lines = path.read_text().splitlines(keepends=True)
-    header = re.compile(rf"\[devices\.(?:{re.escape(name)}|\"{re.escape(name)}\")\]\s*$")
+    header = _table_header("devices", name)
     start = next((i for i, l in enumerate(lines) if header.match(l)), None)
     if start is None:
         raise cfgmod.ConfigError([f"could not locate [devices.{name}] block"])
-    end = next((j for j in range(start + 1, len(lines)) if lines[j].startswith("[")), len(lines))
+    end = _block_end(lines, start)
     idx = next((i for i in range(start + 1, end) if re.match(r"\s*tags\s*=", lines[i])), None)
     if idx is not None and not re.match(r"\s*tags\s*=\s*\[.*\]\s*(#.*)?$", lines[idx]):
         raise cfgmod.ConfigError([f"the tags of {name!r} span several lines; edit the file by hand"])
@@ -233,11 +246,11 @@ def remove_action(path: Path, name: str) -> None:
     text = path.read_text()
     lines = text.splitlines(keepends=True)
     # find the [[actions]] block whose name line matches (explicit names only)
-    starts = [i for i, l in enumerate(lines) if re.match(r"\[\[actions\]\]\s*$", l)]
+    starts = [i for i, l in enumerate(lines) if _ACTIONS_HEADER.match(l)]
+    name_line = re.compile(rf"\s*name\s*=\s*(\"{re.escape(name)}\"|'{re.escape(name)}'){_TRAILER}")
     for s in starts:
-        e = next((j for j in range(s + 1, len(lines)) if lines[j].startswith("[")), len(lines))
-        if any(re.match(rf"\s*name\s*=\s*(\"{re.escape(name)}\"|'{re.escape(name)}')\s*$", l)
-               for l in lines[s:e]):
+        e = _block_end(lines, s)
+        if any(name_line.match(l) for l in lines[s:e]):
             b = s
             while b > 0 and lines[b - 1].strip() == "":
                 b -= 1
