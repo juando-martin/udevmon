@@ -264,6 +264,10 @@ Notes:
   for a pulled stick, `0` for a clean unmount, so one action on `unmounted` can
   behave differently (`{surprise}` in the command, `$UDEVMON_SURPRISE` in the
   environment). To act only on pulled sticks, use `on = ["removed"]`.
+- A `removed` action cannot use the stick: it is already gone, so the mount
+  point no longer exists and any command that reads or writes there fails.
+  `{mountpoint}` is still filled in, but only as text (for a message or a log
+  line). Use it to warn, log or clean up something of your own.
 - Events for the same device and kind that repeat within one second are
   dropped (`debounce`, configurable).
 - `shutdown` actions run when udevmon receives a normal stop signal
@@ -738,6 +742,18 @@ udevmon actions add --device backup-disk removed -- \
   notify-send -u critical "Drive pulled without ejecting" "{fs_label}"
 ```
 
+One action can handle both cases by looking at `surprise`. This logs a clean
+eject quietly and warns loudly about a pull:
+
+```
+udevmon actions add --device backup-disk unmounted -- sh -c '
+  if [ "$1" = 1 ]; then
+    notify-send -u critical "Pulled without ejecting" "$2"
+  else
+    echo "$2 ejected cleanly" >> ~/eject.log
+  fi' sh {surprise} {fs_label}
+```
+
 Lock the screen when a security key is removed:
 
 ```
@@ -840,6 +856,25 @@ PYTHONPATH=src python3 -m unittest discover -s tests -t .
 
 Running from the source tree needs the dependencies installed too, `tomlkit`
 included (`pip install --user tomlkit`, or `apt install python3-tomlkit`).
+
+### Real-hardware test
+
+The unit tests use synthetic events. To check the real thing, including a
+stick pulled out while mounted, run the guided script with a USB stick you
+don't mind plugging in and out:
+
+```
+systemctl --user stop udevmon     # only if you use the service
+python3 tools/usb-test.py
+```
+
+It asks you to plug the stick in, pull it out without ejecting it (nothing
+should be writing to it) and plug it in again, and does everything else. It
+uses a throwaway config and runtime folder, switches off the desktop's "open a
+window when a volume is mounted" setting while it runs and restores it, and
+prints PASS or FAIL for each check. If one fails it writes
+`usb-test-report.txt` in the current folder. `--keep-popups` leaves the
+desktop setting alone.
 
 `SPECIFICATIONS.md` describes the design, data model and behaviour in detail.
 `CHANGELOG.md` records what changed in each version; add a line under

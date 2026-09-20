@@ -57,6 +57,14 @@ to the version and date, and start a new empty **Unreleased** above it.
 - **Clearer reasons** when an edit cannot proceed: the message names the entry it could
   not find, and says how to give an unnamed action a name so it can be changed.
 
+### Internal
+
+- **`tools/usb-test.py`**, a guided real-hardware test: it asks you to plug a
+  stick in, pull it out and plug it in again, and checks events, status, pause,
+  the unnamed gate and surprise removal (16 checks) on a throwaway config.
+- The test suite no longer leaves temporary folders behind: it works in one
+  per-run folder that is removed on exit, and a test guards this.
+
 ## [0.2.0] - 2026-09-20
 
 ### Added
