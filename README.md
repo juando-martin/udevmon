@@ -35,6 +35,12 @@ Concepts:
   already installed.
 - On Python 3.10 only: the `tomli` package (system package `python3-tomli`),
   which `pip` pulls in automatically when you install udevmon.
+- The `tomlkit` package, version 0.11.4 or newer. Only the commands that
+  change something already in your config (`remove`, `tag`, `untag`) use it;
+  adding new entries, `check`, `explain` and the daemon don't. `pip` pulls it
+  in automatically. The system package `python3-tomlkit` is recent enough on
+  Debian 13 and Ubuntu 24.04, but too old on Ubuntu 22.04 (it leaves stray
+  lines in the file), where `pip` fetches a current one instead.
 
 ## Installation
 
@@ -153,7 +159,8 @@ pip install --user --break-system-packages udevmon-*.whl
 ```
 
 Add `--no-deps` if it has no network access and already has `python3-pyudev`
-and `python3-gi` (and, on Python 3.10, `python3-tomli`) installed.
+and `python3-gi` (and, on Python 3.10, `python3-tomli`; and a recent enough
+`python3-tomlkit`) installed.
 
 ## Quick start
 
@@ -684,5 +691,8 @@ trust the *contents* of the device without care.
 ```
 PYTHONPATH=src python3 -m unittest discover -s tests -t .
 ```
+
+Running from the source tree needs the dependencies installed too, `tomlkit`
+included (`pip install --user tomlkit`, or `apt install python3-tomlkit`).
 
 `SPECIFICATIONS.md` describes the design, data model and behaviour in detail.

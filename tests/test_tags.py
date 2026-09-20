@@ -297,11 +297,13 @@ class ConfigEditTagTests(unittest.TestCase):
             E.set_device_tags(self.path, "data-disk", add=["bad name"])
         self.assertEqual(self.path.read_text(), before)
 
-    def test_multiline_tags_left_to_the_user(self):
-        self.path.write_text('[devices.d]\nmatch = { serial = "S9x7" }\ntags = [\n  "a",\n]\n')
-        with self.assertRaises(C.ConfigError) as cm:
-            E.set_device_tags(self.path, "d", add=["b"])
-        self.assertIn("by hand", str(cm.exception))
+    def test_multiline_tags_are_edited_in_place(self):
+        self.path.write_text('[devices.d]\nmatch = { serial = "S9x7a" }\ntags = [\n  "a",\n  "b",\n]\n')
+        E.set_device_tags(self.path, "d", add=["c"])
+        self.assertEqual(self.tags("d"), ("a", "b", "c"))
+        self.assertIn('tags = [\n  "a",\n  "b",\n  "c",\n]', self.path.read_text())   # layout kept
+        E.set_device_tags(self.path, "d", remove=["a"])
+        self.assertEqual(self.tags("d"), ("b", "c"))
 
     def test_tag_rules_and_actions(self):
         E.add_tag(self.path, "flash", {"vendor_id": ["0781", "058f"], "fs_type": "vfat"}, "usb sticks")

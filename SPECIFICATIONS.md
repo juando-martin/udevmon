@@ -35,6 +35,13 @@ unprivileged user.
 
 - Linux, Python >= 3.10. TOML is read with the standard library's `tomllib`
   (3.11+) or, on 3.10, the `tomli` package (same API).
+- `tomlkit` >= 0.11.4, only for the commands that change an existing device, tag or
+  action (`devices remove|tag|untag`, `tags remove`, `actions remove`). It reads
+  and writes TOML keeping comments and layout. It is imported when such a command
+  runs, so the daemon, `check`, `explain` and the `add` commands do not need it; a
+  missing `tomlkit` gives a message saying to install it. Older releases (0.9.2,
+  the one in Ubuntu 22.04's apt) leave artifacts (a stray `[devices]` header, a
+  repeated comment), and the whole test suite passes from 0.11.4 up.
 - `pyudev` — udev netlink monitor (readable by unprivileged users).
 - PyGObject (`gi`: `GLib`, `Gio`) — main loop and D-Bus client for
   `org.freedesktop.UDisks2` on the system bus. No extra D-Bus library.
@@ -304,19 +311,19 @@ Rules:
   cwd = `$HOME`, stdin = `/dev/null`.
 - Because actions execute commands, the daemon **refuses to load** a config
   that is not owned by the user or is group/world-writable.
-- The CLI edits the file by appending/removing/changing whole blocks or single
-  lines so comments and formatting elsewhere are preserved; a change that fails
-  re-parsing is rolled back. A `config.toml.bak` is written before each edit.
-  Hand-formatted multi-line `tags = [...]` arrays are not edited by the CLI.
-- The editor finds a table by its header line however it is written: indented, with
-  spaces inside the brackets, the key bare or in single or double quotes, and a
-  trailing comment (`[devices.x]  # note`); the same for `[[actions]]` and for the
-  `name = "x"` line of an action. A block runs from its header to the next line
-  that starts a table (a `[` after optional indentation), blank lines and comments
-  inside it included. Known limits: a device written as `[devices.x]` plus
-  `[devices.x.match]` is not removed by the CLI (the sub-table would be left
-  behind, which the re-parse catches), and a line of a multi-line string that starts
-  with `[` is taken for a header. Both fail safe.
+- The CLI edits the file so that comments and formatting elsewhere are preserved,
+  however it was written by hand. New entries (`devices add`, `tags add`,
+  `actions add`) are appended as text in the CLI's own style. Changes to existing
+  entries (remove, tag, untag) are made with `tomlkit`, which finds a table by its
+  parsed name, so it does not matter how the header is spelled (indented, spaces
+  inside the brackets, quoted key, trailing comment), whether a device is an inline
+  table or a sub-table (`[devices.x.match]`), or whether an array or string spans
+  several lines. An array is edited in place, keeping its layout; when no tags are
+  left the `tags` key is removed (never an emptied array).
+- Every edit is written only if the result re-parses with the strict reader and
+  does what was asked; otherwise the file is left byte for byte as it was. A
+  `config.toml.bak` is written before each edit. Line endings (LF or CRLF) and a
+  missing final newline are preserved. A comment above a removed block stays.
 
 ### 6.1 Errors
 
@@ -628,7 +635,8 @@ Tests build throwaway repositories for each case above. The outputs were also
 compared with the real setuptools-scm 10.2.3 on 19 repository states and were
 identical.
 
-Automated tests cover: auto-reload and the lock file, the missing-program check,
+Automated tests cover: editing hand-formatted files (sub-tables, multi-line values,
+commented headers, CRLF, rollback, a missing `tomlkit`), auto-reload and the lock file, the missing-program check,
 `explain` and the engine's `plan()`, the docs' renderability (balanced code fences,
 code lines that fit an 80-column glow), service and completion uninstall (never touching the real
 systemd), shell completion (engine, helper protocol, the real

@@ -62,17 +62,23 @@ def render_action(name, devices, tags, on, run, timeout=None, allow_unnamed=None
     return "\n".join(lines) + "\n"
 
 
+def _read(path: Path) -> str:
+    """The file's text exactly as stored (no newline translation, so CRLF survives)."""
+    with open(path, newline="", encoding="utf-8") as f:
+        return f.read()
+
+
 def _write(path: Path, text: str) -> None:
     tmp = path.with_name(path.name + ".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
+    with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
         f.write(text)
     os.replace(tmp, path)
 
 
 def _edit(path: Path, new_text: str, verify) -> None:
     """Write ``new_text`` (keeping a .bak); roll back if it fails validation."""
-    old = path.read_text() if path.exists() else None
+    old = _read(path) if path.exists() else None
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if old is not None:
         shutil.copy2(path, path.with_name(path.name + ".bak"))
@@ -131,36 +137,32 @@ def add_action(path: Path, name, devices, tags, on, run, timeout=None, allow_unn
     return name
 
 
-# What a table header can look like in a hand-written file: indented, spaces inside
-# the brackets, the key bare or in either kind of quotes, and a comment after it.
-_TRAILER = r"\s*(?:#.*)?$"
-_ANY_HEADER = re.compile(r"^\s*\[")
+# -- edits to existing entries ---------------------------------------------------------
+#
+# These go through tomlkit, which keeps comments and layout whatever way the file was
+# written by hand (sub-tables, multi-line arrays, commented headers, ...). The `add`
+# commands above keep appending text in the CLI's own style. Every edit is still
+# re-parsed with the strict reader and rolled back if the result is not what was asked.
+
+def _tomlkit():
+    try:
+        import tomlkit
+    except ImportError:
+        raise cfgmod.ConfigError(["changing an existing entry needs the 'tomlkit' package "
+                                  "(pip install tomlkit); adding new ones does not"]) from None
+    return tomlkit
 
 
-def _table_header(table: str, name: str) -> re.Pattern:
-    """Matches the header line of ``[table.name]``."""
-    n = re.escape(name)
-    return re.compile(rf"^\s*\[\s*{table}\s*\.\s*(?:{n}|\"{n}\"|'{n}')\s*\]{_TRAILER}")
-
-
-_ACTIONS_HEADER = re.compile(rf"^\s*\[\[\s*actions\s*\]\]{_TRAILER}")
-
-
-def _block_end(lines: list[str], start: int) -> int:
-    """Index of the first line after the block that starts at ``start`` (the next header)."""
-    return next((j for j in range(start + 1, len(lines)) if _ANY_HEADER.match(lines[j])),
-                len(lines))
-
-
-def _remove_block(text: str, header: re.Pattern) -> str | None:
-    lines = text.splitlines(keepends=True)
-    start = next((i for i, line in enumerate(lines) if header.match(line)), None)
-    if start is None:
-        return None
-    end = _block_end(lines, start)
-    while start > 0 and lines[start - 1].strip() == "":
-        start -= 1
-    return "".join(lines[:start] + lines[end:])
+def _edited(path: Path, change) -> str:
+    """The file's text after ``change(doc)`` has been applied to its tomlkit document."""
+    tk = _tomlkit()
+    doc = tk.parse(_read(path))
+    try:
+        change(doc)
+    except (KeyError, IndexError, TypeError, AttributeError) as e:
+        raise cfgmod.ConfigError([f"could not find that entry in {path} ({type(e).__name__}); "
+                                  "edit the file by hand"]) from None
+    return tk.dumps(doc)
 
 
 def remove_device(path: Path, name: str) -> None:
@@ -170,15 +172,11 @@ def remove_device(path: Path, name: str) -> None:
     users = [a.name for a in cfg.actions if name in a.devices]
     if users:
         raise cfgmod.ConfigError([f"device {name!r} is used by action(s): {', '.join(users)}"])
-    text = path.read_text()
-    new = _remove_block(text, _table_header("devices", name))
-    if new is None:
-        raise cfgmod.ConfigError([f"could not locate [devices.{name}] block to remove"])
 
     def verify(c):
         if name in c.devices:
             raise cfgmod.ConfigError([f"removal of {name!r} did not take effect"])
-    _edit(path, new, verify)
+    _edit(path, _edited(path, lambda doc: doc["devices"].__delitem__(name)), verify)
 
 
 def remove_tag(path: Path, name: str) -> None:
@@ -190,18 +188,35 @@ def remove_tag(path: Path, name: str) -> None:
     users = [a.name for a in cfg.actions if name in a.tags]
     if users:
         raise cfgmod.ConfigError([f"tag {name!r} is used by action(s): {', '.join(users)}"])
-    new = _remove_block(path.read_text(), _table_header("tags", name))
-    if new is None:
-        raise cfgmod.ConfigError([f"could not locate [tags.{name}] block to remove"])
 
     def verify(c):
         if name in c.tags:
             raise cfgmod.ConfigError([f"removal of {name!r} did not take effect"])
-    _edit(path, new, verify)
+    _edit(path, _edited(path, lambda doc: doc["tags"].__delitem__(name)), verify)
+
+
+def remove_action(path: Path, name: str) -> None:
+    cfg = cfgmod.load(path, must_exist=True)
+    if name not in {a.name for a in cfg.actions}:
+        raise cfgmod.ConfigError([f"no such action {name!r}"])
+
+    def change(doc):
+        actions = doc["actions"]
+        for i, action in enumerate(actions):
+            if action.get("name") == name:                  # explicit names only
+                del actions[i]
+                return
+        raise cfgmod.ConfigError([f"action {name!r} has no explicit name in the file; "
+                                  "edit config.toml by hand to remove it"])
+
+    def verify(c):
+        if name in {a.name for a in c.actions}:
+            raise cfgmod.ConfigError([f"removal of {name!r} did not take effect"])
+    _edit(path, _edited(path, change), verify)
 
 
 def set_device_tags(path: Path, name: str, add=(), remove=()) -> None:
-    """Add/remove explicit tags on a device by editing its single ``tags = [...]`` line."""
+    """Add/remove explicit tags on a device, keeping however its ``tags`` array is written."""
     cfg = cfgmod.load(path, must_exist=True)
     device = cfg.devices.get(name)
     if device is None:
@@ -215,52 +230,25 @@ def set_device_tags(path: Path, name: str, add=(), remove=()) -> None:
     new_tags = [t for t in device.tags if t not in remove]
     new_tags += [t for t in dict.fromkeys(add) if t not in new_tags]
 
-    lines = path.read_text().splitlines(keepends=True)
-    header = _table_header("devices", name)
-    start = next((i for i, l in enumerate(lines) if header.match(l)), None)
-    if start is None:
-        raise cfgmod.ConfigError([f"could not locate [devices.{name}] block"])
-    end = _block_end(lines, start)
-    idx = next((i for i in range(start + 1, end) if re.match(r"\s*tags\s*=", lines[i])), None)
-    if idx is not None and not re.match(r"\s*tags\s*=\s*\[.*\]\s*(#.*)?$", lines[idx]):
-        raise cfgmod.ConfigError([f"the tags of {name!r} span several lines; edit the file by hand"])
-    new_line = f"tags = {_list(new_tags)}\n"
-    if idx is not None:
-        lines[idx:idx + 1] = [new_line] if new_tags else []
-    elif new_tags:
-        last = max(i for i in range(start, end) if lines[i].strip())
-        if not lines[last].endswith("\n"):
-            lines[last] += "\n"
-        lines.insert(last + 1, new_line)
+    def change(doc):
+        table = doc["devices"][name]
+        if not new_tags:
+            table.pop("tags", None)                         # never leave an emptied array behind
+            return
+        current = table.get("tags")
+        if hasattr(current, "append") and hasattr(current, "remove"):
+            for t in remove:                                # edit in place: keeps its layout
+                current.remove(t)
+            for t in new_tags:
+                if t not in current:
+                    current.append(t)
+        else:                                               # no tags yet (or a bare string)
+            array = _tomlkit().array()
+            for t in new_tags:
+                array.append(t)
+            table["tags"] = array
 
     def verify(c):
         if list(c.devices[name].tags) != new_tags:
             raise cfgmod.ConfigError([f"tag edit on {name!r} did not take effect"])
-    _edit(path, "".join(lines), verify)
-
-
-def remove_action(path: Path, name: str) -> None:
-    cfg = cfgmod.load(path, must_exist=True)
-    if name not in {a.name for a in cfg.actions}:
-        raise cfgmod.ConfigError([f"no such action {name!r}"])
-    text = path.read_text()
-    lines = text.splitlines(keepends=True)
-    # find the [[actions]] block whose name line matches (explicit names only)
-    starts = [i for i, l in enumerate(lines) if _ACTIONS_HEADER.match(l)]
-    name_line = re.compile(rf"\s*name\s*=\s*(\"{re.escape(name)}\"|'{re.escape(name)}'){_TRAILER}")
-    for s in starts:
-        e = _block_end(lines, s)
-        if any(name_line.match(l) for l in lines[s:e]):
-            b = s
-            while b > 0 and lines[b - 1].strip() == "":
-                b -= 1
-            new = "".join(lines[:b] + lines[e:])
-
-            def verify(c):
-                if name in {a.name for a in c.actions}:
-                    raise cfgmod.ConfigError([f"removal of {name!r} did not take effect"])
-            _edit(path, new, verify)
-            return
-    raise cfgmod.ConfigError([f"action {name!r} has no explicit name in the file; "
-                              "edit config.toml by hand to remove it"])
-
+    _edit(path, _edited(path, change), verify)
