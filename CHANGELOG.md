@@ -12,6 +12,8 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-21
+
 ### Changed
 
 - **Devices without a serial number are no longer given a suggested match.** `scan`
