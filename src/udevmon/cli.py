@@ -105,6 +105,17 @@ def _actions_for(cfg, device) -> list:
             if device.name in x.devices or set(x.tags) & set(device.tags)]
 
 
+def _parse_vars(pairs) -> dict:
+    """NAME=VALUE pairs -> dict (the last one wins; the value may be empty)."""
+    out: dict = {}
+    for pair in pairs or []:
+        key, eq, value = pair.partition("=")
+        if not eq or not key:
+            raise cfgmod.ConfigError([f"expected NAME=VALUE, got {pair!r}"])
+        out[key] = value
+    return out
+
+
 def _parse_matches(pairs, *, allow_lists: bool) -> dict:
     """KEY=VALUE pairs -> dict. A repeated key becomes a list (tags) or an error (devices)."""
     match: dict = {}
@@ -223,6 +234,10 @@ def cmd_devices_show(args):
         print(f"  status: {d.status}")
     if d.tags:
         print(f"  tags: {', '.join(d.tags)}")
+    if d.exclude_tags:
+        print(f"  opts out of rule tags: {', '.join(d.exclude_tags)}")
+    for key, value in d.vars.items():
+        print(f"  variable {key} = {value}")
     for x in _actions_for(cfg, d):
         print(f"  action {x.name}: on {list(x.on)} run {list(x.run)} (timeout {x.timeout:g}s)")
     return 0
@@ -231,8 +246,9 @@ def cmd_devices_show(args):
 @_reloads
 def cmd_devices_add(args):
     match = _guard(_parse_matches, args.match, allow_lists=False)
+    variables = _guard(_parse_vars, args.var)
     _guard(configedit.add_device, args.config, args.name, match, args.description or "",
-           args.tag or [])
+           args.tag or [], exclude_tags=args.exclude_tag or [], variables=variables)
     print(f"Added device {args.name!r} ({strength(match)}).")
     return 0
 
@@ -301,11 +317,12 @@ def cmd_actions_set(args):
         return 1
     targets = _guard(configedit.set_action_options, args.config, args.name,
                      unnamed=args.unnamed, on=on, timeout=args.timeout, run=args.cmd or None,
+                     tag_mode=args.tag_mode,
                      add_devices=args.add_device, remove_devices=args.remove_device,
                      add_tags=args.add_tag, remove_tags=args.remove_tag)
     retargeted = any((args.add_device, args.remove_device, args.add_tag, args.remove_tag))
     if (retargeted and targets is None and not args.cmd
-            and (args.unnamed, args.on, args.timeout) == (None,) * 3):
+            and (args.unnamed, args.on, args.timeout, args.tag_mode) == (None,) * 4):
         print(f"Action {args.name!r} already targets that; nothing changed.")
         return 0
     print(f"Updated action {args.name!r}.")
@@ -357,7 +374,8 @@ def cmd_actions_rename(args):
 def cmd_devices_set(args):
     match = _guard(_parse_matches, args.match, allow_lists=False) if args.match else None
     _guard(configedit.set_device_fields, args.config, args.name, match=match,
-           description=args.description)
+           description=args.description, set_vars=_guard(_parse_vars, args.var),
+           unset_vars=args.unset_var)
     print(f"Updated device {args.name!r}" + (f" ({strength(match)})." if match else "."))
     return 0
 
@@ -366,6 +384,20 @@ def cmd_devices_set(args):
 def cmd_devices_tag(args):
     _guard(configedit.set_device_tags, args.config, args.name, add=args.tags)
     print(f"Tagged {args.name!r}: {', '.join(args.tags)}.")
+    return 0
+
+
+@_reloads
+def cmd_devices_exclude(args):
+    _guard(configedit.set_device_exclusions, args.config, args.name, add=args.tags)
+    print(f"{args.name!r} now opts out of the rule tag(s): {', '.join(args.tags)}.")
+    return 0
+
+
+@_reloads
+def cmd_devices_include(args):
+    _guard(configedit.set_device_exclusions, args.config, args.name, remove=args.tags)
+    print(f"{args.name!r} no longer opts out of: {', '.join(args.tags)}.")
     return 0
 
 
@@ -402,7 +434,7 @@ def cmd_tags_show(args):
     tag = cfg.tags.get(args.name)
     print(f"{args.name}: {tag.description if tag else ''}")
     print(f"  rule: {_rule_text(tag.match) if tag else '(none; explicit members only)'}"
-          + (f"  ({strength(tag.match)})" if tag and tag.match else ""))
+          + (f"  ({strength(tag.match, wild=True)})" if tag and tag.match else ""))
     print(f"  explicit members: {', '.join(d.name for d in cfg.devices.values() if args.name in d.tags) or '-'}")
     for x in cfg.actions:
         if args.name in x.tags:
@@ -415,7 +447,7 @@ def cmd_tags_show(args):
 def cmd_tags_add(args):
     rule = _guard(_parse_matches, args.match or [], allow_lists=True)
     _guard(configedit.add_tag, args.config, args.name, rule, args.description or "")
-    print(f"Added tag {args.name!r}" + (f" with a rule ({strength(rule)})." if rule else "."))
+    print(f"Added tag {args.name!r}" + (f" with a rule ({strength(rule, wild=True)})." if rule else "."))
     return 0
 
 
@@ -425,7 +457,7 @@ def cmd_tags_set(args):
     _guard(configedit.set_tag_fields, args.config, args.name, match=rule,
            clear_rule=args.no_rule, description=args.description)
     print(f"Updated tag {args.name!r}"
-          + (f" (rule {strength(rule)})." if rule else ".")
+          + (f" (rule {strength(rule, wild=True)})." if rule else ".")
           + (" It has no rule now: only devices that carry it belong to it." if args.no_rule
              else ""))
     return 0
@@ -441,8 +473,10 @@ def cmd_tags_remove(args):
 def cmd_actions_list(args):
     cfg = _load(args)
     for x in cfg.actions:
-        target = f"device:{','.join(x.devices)}" if x.devices else f"tag:{','.join(x.tags)}"
+        target = (f"device:{','.join(x.devices)}" if x.devices
+                  else f"tag:{('+' if x.tag_mode == 'all' else ',').join(x.tags)}")
         flag = {True: " [allow_unnamed]", False: " [named only]", None: ""}[x.allow_unnamed]
+        flag += " [all tags]" if x.tag_mode == "all" else ""
         off = " [disabled]" if not x.enabled else ""
         print(f"{x.name:<24} {target:<22} on {','.join(x.on):<24} {list(x.run)}{flag}{off}")
     if not cfg.actions:
@@ -467,8 +501,11 @@ def cmd_actions_add(args):
     if not args.cmd:
         print("error: no command given (put it after --)", file=sys.stderr)
         return 1
+    if args.tag_mode and not args.tag:
+        print("error: --all-tags only applies with --tag", file=sys.stderr)
+        return 1
     name = _guard(configedit.add_action, args.config, args.name, args.device or (),
-                  args.tag or (), on, args.cmd, args.timeout, args.allow_unnamed)
+                  args.tag or (), on, args.cmd, args.timeout, args.allow_unnamed, args.tag_mode)
     print(f"Added action {name!r}.")
     return 0
 
@@ -604,6 +641,10 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("name")
     x.add_argument("--match", action="append", required=True, metavar="KEY=VALUE")
     x.add_argument("--tag", action="append", metavar="TAG", help="explicit tag (repeatable)")
+    x.add_argument("--exclude-tag", action="append", metavar="TAG",
+                   help="rule tag to opt out of (repeatable)")
+    x.add_argument("--var", action="append", metavar="NAME=VALUE",
+                   help="a variable for actions, used as {var_NAME} (repeatable)")
     x.add_argument("--description")
     x.set_defaults(fn=cmd_devices_add)
     x = g.add_parser("remove", parents=[edits]); x.add_argument("name"); x.set_defaults(fn=cmd_devices_remove)
@@ -613,11 +654,21 @@ def build_parser() -> argparse.ArgumentParser:
     x = g.add_parser("untag", help="remove explicit tags from a device", parents=[edits])
     x.add_argument("name"); x.add_argument("tags", nargs="+", metavar="TAG")
     x.set_defaults(fn=cmd_devices_untag)
+    x = g.add_parser("exclude", help="opt a device out of rule tags", parents=[edits])
+    x.add_argument("name"); x.add_argument("tags", nargs="+", metavar="TAG")
+    x.set_defaults(fn=cmd_devices_exclude)
+    x = g.add_parser("include", help="stop opting a device out of rule tags", parents=[edits])
+    x.add_argument("name"); x.add_argument("tags", nargs="+", metavar="TAG")
+    x.set_defaults(fn=cmd_devices_include)
     x = g.add_parser("set", help="change a device's match keys or description", parents=[edits])
     x.add_argument("name")
     x.add_argument("--match", action="append", metavar="KEY=VALUE",
                    help="replace the match (repeat for several keys)")
     x.add_argument("--description", metavar="TEXT", help="new description (empty removes it)")
+    x.add_argument("--var", action="append", metavar="NAME=VALUE",
+                   help="set a variable (repeatable); the others stay")
+    x.add_argument("--unset-var", action="append", default=[], metavar="NAME",
+                   help="remove a variable (repeatable)")
     x.set_defaults(fn=cmd_devices_set)
     x = g.add_parser("rename", help="rename a device and everything that names it",
                      parents=[edits])
@@ -665,6 +716,9 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("--tag", action="append", metavar="NAME", help="target tag (repeatable)")
     x.add_argument("--name")
     x.add_argument("--timeout", type=float)
+    x.add_argument("--all-tags", dest="tag_mode", action="store_const", const="all",
+                   help="with several --tag: run only for things that have all of them "
+                        "(default: any of them)")
     grp = x.add_mutually_exclusive_group()
     grp.add_argument("--allow-unnamed", dest="allow_unnamed", action="store_const", const=True,
                      default=None, help="also run for unnamed things matching the tag")
@@ -690,6 +744,11 @@ def build_parser() -> argparse.ArgumentParser:
                      help="clear the setting (named devices only, `check` will note it)")
     x.add_argument("--on", metavar="EVENTS", help="replace the events (comma-separated)")
     x.add_argument("--timeout", type=float, metavar="SECONDS")
+    mode = x.add_mutually_exclusive_group()
+    mode.add_argument("--all-tags", dest="tag_mode", action="store_const", const="all",
+                      help="run only for things that have all of the action's tags")
+    mode.add_argument("--any-tags", dest="tag_mode", action="store_const", const="any",
+                      help="run for things that have any of them (the default)")
     for verb, past in (("add", "to"), ("remove", "from")):
         for kind in ("device", "tag"):
             x.add_argument(f"--{verb}-{kind}", dest=f"{verb}_{kind}", action="append", default=[],

@@ -17,6 +17,8 @@ CONFIG = """
 [devices.stick]
 match = { serial = "S9x7a" }
 tags = ["usbtest", "backup"]
+exclude_tags = ["storage"]
+vars = { dest = "/srv/x", keep = "7" }
 
 [devices.disk]
 match = { fs_uuid = "U1" }
@@ -79,8 +81,8 @@ class EngineTests(unittest.TestCase):
 
     def test_groups_and_subcommands(self):
         self.assertEqual(self.words("udevmon devices "),
-                         ["add", "disable", "enable", "ignore", "list", "remove", "rename", "set",
-                          "show", "tag", "untag"])
+                         ["add", "disable", "enable", "exclude", "ignore", "include", "list",
+                          "remove", "rename", "set", "show", "tag", "untag"])
         self.assertEqual(self.words("udevmon actions "),
                          ["add", "disable", "enable", "list", "remove", "rename", "set"])
         self.assertEqual(self.words("udevmon tags "), ["add", "list", "remove", "rename", "set", "show"])
@@ -168,7 +170,7 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(set(self.words("udevmon actions set log --")),
                          {"--allow-unnamed", "--named-only", "--default-unnamed", "--on",
                           "--timeout", "--no-reload", "--help", "--add-device",
-                          "--remove-device", "--add-tag", "--remove-tag"})
+                          "--remove-device", "--add-tag", "--remove-tag", "--all-tags", "--any-tags"})
         self.assertEqual(self.words("udevmon actions set log --timeout "), [])   # free text
         self.assertIn("--no-reload", self.words("udevmon devices ignore --"))
 
@@ -259,7 +261,8 @@ def drift_problems(parser, cfg_path):
     problems = []
     seen = set()
     fill = {"device": "stick", "tag": "usbtest", "declared-tag": "storage", "action": "log",
-            "device-tag": "usbtest", "events": "connected", "event": "connected"}
+            "device-tag": "usbtest", "events": "connected", "event": "connected",
+            "rule-tag": "storage", "device-exclusion": "storage"}
     for path, node in [((), parser), *_commands(parser)]:      # the top level has options too
         seen.add(path)
         positionals = _positionals(node)

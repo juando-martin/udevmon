@@ -6,11 +6,12 @@ import os
 import re
 import shlex
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .events import KNOWN_KEYS, TRUSTED_PLACEHOLDERS, VALID_KINDS, VOLATILE_KEYS
-from .matching import STRONG, WEAK, strength
+from .events import KNOWN_KEYS, TRUSTED_PLACEHOLDERS, VALID_KINDS, VOLATILE_KEYS, is_variable
+from .matching import STRONG, WEAK, has_wildcard, strength
 
 try:
     import tomllib
@@ -18,6 +19,7 @@ except ModuleNotFoundError:                 # Python < 3.11: same parser, packag
     import tomli as tomllib
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+VAR_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 
 class ConfigError(Exception):
@@ -39,6 +41,8 @@ class Device:
     description: str = ""
     tags: tuple[str, ...] = ()
     status: str = "active"          # "active" | "disabled" | "ignored" (spec 5.7)
+    exclude_tags: tuple[str, ...] = ()   # rule tags this device opts out of (spec 5.8)
+    vars: Mapping[str, str] = field(default_factory=dict)   # {var_NAME} values (spec 5.9)
 
 
 @dataclass(frozen=True)
@@ -59,6 +63,7 @@ class Action:
     timeout: float = 60.0
     allow_unnamed: bool | None = None   # tag actions only; None = not stated (behaves as False)
     enabled: bool = True
+    tag_mode: str = "any"           # tag actions: "any" of the tags, or "all" of them
 
     @property
     def targets(self) -> tuple[str, ...]:
@@ -115,9 +120,10 @@ def expand(argv, props) -> list[str]:
 
 _TOP = {"daemon", "devices", "tags", "actions"}
 _DAEMON = {"debounce", "udev_filters", "max_workers"}
-_DEVICE = {"description", "match", "tags", "status"}
+_DEVICE = {"description", "match", "tags", "status", "exclude_tags", "vars"}
 _TAG = {"description", "match"}
-_ACTION = {"name", "device", "tag", "on", "run", "timeout", "allow_unnamed", "enabled"}
+_ACTION = {"name", "device", "tag", "on", "run", "timeout", "allow_unnamed", "enabled",
+           "tag_mode"}
 
 
 def _names(value, where: str, problems: list[str]) -> tuple[str, ...] | None:
@@ -180,6 +186,28 @@ def parse(data: dict) -> Config:
         tags: tuple[str, ...] = ()
         if "tags" in a:
             tags = _names(a["tags"], f"{where}: 'tags'", problems) or ()
+        variables: dict[str, str] = {}
+        if "vars" in a:
+            raw = a["vars"]
+            if not isinstance(raw, dict):
+                problems.append(f"{where}: 'vars' must be a table of NAME = \"value\"")
+                continue
+            bad = [k for k in raw if not VAR_RE.match(str(k))]
+            if bad:
+                problems.append(f"{where}: variable name(s) {bad} must be lowercase letters, "
+                                "digits and _, not starting with a digit")
+                continue
+            variables = {str(k): _scalar_str(v) for k, v in raw.items()}
+            if any(v is None for v in variables.values()):
+                problems.append(f"{where}: variable values must be strings")
+                continue
+        exclude: tuple[str, ...] = ()
+        if "exclude_tags" in a:
+            exclude = _names(a["exclude_tags"], f"{where}: 'exclude_tags'", problems) or ()
+            both = sorted(set(exclude) & set(tags))
+            if both:
+                problems.append(f"{where}: {both} is in both 'tags' and 'exclude_tags'")
+                continue
         status = a.get("status", "")
         if status in ("", "active"):                    # absent or empty: the normal state
             status = "active"
@@ -187,10 +215,16 @@ def parse(data: dict) -> Config:
             problems.append(f"{where}: 'status' must be \"disabled\", \"ignored\" or \"active\" "
                             f"(or left out), not {status!r}")
             continue
-        cfg.devices[name] = Device(name, match, str(a.get("description", "")), tags, status)
+        cfg.devices[name] = Device(name, match, str(a.get("description", "")), tags, status,
+                                   exclude, variables)
         if strength(match) == WEAK:
             cfg.warnings.append(f"device {name!r}: weak match {match} (matches every "
                                 "device/filesystem with these values)")
+        wild = sorted(k for k, v in match.items() if has_wildcard(v))
+        if wild:
+            cfg.warnings.append(f"device {name!r}: {wild} contain(s) * or ?, which are not "
+                                "wildcards in a device match (only in a tag rule); they are "
+                                "compared literally")
         volatile = sorted(set(match) & VOLATILE_KEYS)
         if volatile:
             cfg.warnings.append(f"device {name!r}: match uses volatile key(s) {volatile} "
@@ -269,6 +303,13 @@ def parse(data: dict) -> Config:
             if not isinstance(allow, bool):
                 problems.append(f"{where}: 'allow_unnamed' must be true or false")
                 continue
+        tag_mode = a.get("tag_mode", "any")
+        if tag_mode not in ("any", "all"):
+            problems.append(f"{where}: 'tag_mode' must be \"any\" or \"all\", not {tag_mode!r}")
+            continue
+        if "tag_mode" in a and devices:
+            problems.append(f"{where}: 'tag_mode' only applies to actions that use 'tag'")
+            continue
         enabled = a.get("enabled", True)
         if not isinstance(enabled, bool):
             problems.append(f"{where}: 'enabled' must be true or false")
@@ -293,8 +334,14 @@ def parse(data: dict) -> Config:
         if "tag" in names and not tags:
             problems.append(f"{where}: placeholder '{{tag}}' is only available for actions that "
                             "use 'tag'")
+        defined = {k for d in cfg.devices.values() for k in d.vars}
+        unknown_vars = sorted(n for n in names if is_variable(n) and n[4:] not in defined)
+        if unknown_vars:
+            problems.append(f"{where}: {{{unknown_vars[0]}}} is not defined: no device has a "
+                            f"variable {unknown_vars[0][4:]!r} (set one with `devices set NAME "
+                            f"--var {unknown_vars[0][4:]}=VALUE`)")
         for kind in on:
-            missing = names - KNOWN_KEYS[kind] - {"device", "tag"}
+            missing = {n for n in names if not is_variable(n)} - KNOWN_KEYS[kind] - {"device", "tag"}
             if missing:
                 problems.append(f"{where}: placeholder(s) {sorted(missing)} not available "
                                 f"for event {kind!r}")
@@ -305,7 +352,8 @@ def parse(data: dict) -> Config:
         except (TypeError, ValueError):
             problems.append(f"{where}: invalid timeout")
             continue
-        cfg.actions.append(Action(name, devices, tags, on, tuple(run), timeout, allow, enabled))
+        cfg.actions.append(Action(name, devices, tags, on, tuple(run), timeout, allow, enabled,
+                                  tag_mode))
 
     if problems:
         raise ConfigError(problems)
@@ -332,6 +380,9 @@ def _advise(cfg: Config) -> None:
     for a in cfg.actions:
         if not a.tags:
             continue
+        if a.tag_mode == "all" and len(a.tags) == 1:
+            cfg.notes.append(f"action {a.name!r}: tag_mode = \"all\" with one tag is the same as "
+                             "the default")
         for t in a.tags:
             rule = cfg.tags[t].match if t in cfg.tags else {}
             if t not in carried and not rule:
@@ -343,22 +394,43 @@ def _advise(cfg: Config) -> None:
             cfg.notes.append(f"action {a.name!r}: tag {', '.join(rule_tags)} has a rule, so "
                              "things you have not named can match it; this action runs only "
                              "for named devices. Set allow_unnamed = true or false to choose.")
+        used_vars = sorted(n[4:] for n in names if is_variable(n))
+        if used_vars and a.allow_unnamed:
+            cfg.warnings.append(f"action {a.name!r}: uses variable(s) {used_vars}, which unnamed "
+                                "things do not have; it is skipped for them")
         if a.allow_unnamed:
             if "device" in names:
                 cfg.warnings.append(f"action {a.name!r}: uses {{device}}, which does not exist "
                                     "for unnamed things; it is skipped for them")
-            hw = sorted(names - TRUSTED_PLACEHOLDERS)
+            hw = sorted(n for n in names - TRUSTED_PLACEHOLDERS if not is_variable(n))
             if hw:
                 cfg.warnings.append(f"action {a.name!r}: allow_unnamed is true and it uses "
                                     f"hardware-supplied value(s) {hw} that the maker of an "
                                     "unvetted device controls")
             for t in rule_tags:
-                if strength(cfg.tags[t].match) != STRONG:
+                if strength(cfg.tags[t].match, wild=True) != STRONG:
                     cfg.notes.append(f"action {a.name!r}: tag {t!r} has a rule that is not "
                                      "strong; any hardware presenting these properties can "
                                      "trigger this action")
+    for a in cfg.actions:
+        used_vars = sorted({n[4:] for arg in a.run for n in placeholders(arg) if is_variable(n)})
+        if not used_vars:
+            continue
+        targets = ([cfg.devices[n] for n in a.devices] if a.devices else
+                   [d for d in cfg.devices.values() if set(d.tags) & set(a.tags)])
+        for d in targets:
+            lacking = [v for v in used_vars if v not in d.vars]
+            if lacking:
+                cfg.warnings.append(f"action {a.name!r} uses variable(s) {lacking} that device "
+                                    f"{d.name!r} does not define; it is skipped for that device")
     for t in sorted(carried - used):
         cfg.notes.append(f"tag {t!r} is set on devices but no action uses it")
+    for d in cfg.devices.values():
+        for t in d.exclude_tags:
+            if t not in cfg.tags or not cfg.tags[t].match:
+                cfg.notes.append(f"device {d.name!r} excludes tag {t!r}, which has no rule, so "
+                                 "there is nothing to opt out of (explicit tags are not "
+                                 "affected)")
 
 
 def command_problems(cfg: Config, path: str | None = None) -> list[str]:

@@ -14,7 +14,8 @@ from .events import Event
 log = logging.getLogger("udevmon.actions")
 
 
-def build_env(event: Event, device: str | None, tag: str | None = None) -> dict[str, str]:
+def build_env(event: Event, device: str | None, tag: str | None = None,
+              variables=None) -> dict[str, str]:
     env = dict(os.environ)
     env["UDEVMON_EVENT"] = event.kind
     if device:
@@ -23,13 +24,16 @@ def build_env(event: Event, device: str | None, tag: str | None = None) -> dict[
         env["UDEVMON_TAG"] = tag
     for k, v in event.endpoint.props.items():
         env[f"UDEVMON_{k.upper()}"] = v
+    for k, v in (variables or {}).items():
+        env[f"UDEVMON_VAR_{k.upper()}"] = v
     return env
 
 
 def run_action(action: Action, event: Event, device: str | None, tag: str | None = None, *,
-               dry_run: bool = False) -> int | None:
+               dry_run: bool = False, variables=None) -> int | None:
     """Run one action; returns exit status (None if skipped/timeout-killed)."""
     props = dict(event.props)
+    props.update({f"var_{k}": v for k, v in (variables or {}).items()})
     if device:
         props["device"] = device
     if tag:
@@ -46,7 +50,7 @@ def run_action(action: Action, event: Event, device: str | None, tag: str | None
     log.info("action %r: running %s", action.name, argv)
     try:
         proc = subprocess.Popen(
-            argv, cwd=os.path.expanduser("~"), env=build_env(event, device, tag),
+            argv, cwd=os.path.expanduser("~"), env=build_env(event, device, tag, variables),
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, errors="replace", start_new_session=True)
     except OSError as e:
@@ -88,15 +92,16 @@ class ActionRunner:
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="action")
 
     def submit(self, event: Event, jobs):
-        """Run (action, device, tag) jobs sequentially in one worker."""
+        """Run the jobs (engine.Job) sequentially in one worker."""
         return self._pool.submit(self._run_all, event, jobs)
 
     def _run_all(self, event, jobs):
-        for action, device, tag in jobs:
+        for job in jobs:
             try:
-                run_action(action, event, device, tag, dry_run=self.dry_run)
+                run_action(job.action, event, job.device, job.tag, dry_run=self.dry_run,
+                           variables=job.vars)
             except Exception:
-                log.exception("action %r crashed", action.name)
+                log.exception("action %r crashed", job.action.name)
 
     def shutdown(self, wait=False):
         self._pool.shutdown(wait=wait, cancel_futures=not wait)

@@ -382,6 +382,76 @@ except ones that change from plug to plug (`mountpoint`, `devnode`, `syspath`, a
 raw udev ones); `udevmon check` rejects those. `udevmon tags list` and `udevmon tags show NAME`
 show what each tag contains and which actions use it.
 
+**Wildcards.** In a tag rule (not in a device's `match`), `*` stands for any run of
+characters and `?` for exactly one, and the whole value must match, ignoring
+capitals:
+
+```
+udevmon tags add backups --match "fs_label=BACKUP*"
+```
+
+```toml
+[tags.backups]
+match = { fs_label = "BACKUP*" }     # BACKUP, backup-2024, Backup_x ...
+```
+
+Nothing else is special (`.`, `[`, `(` mean themselves), so a label that really
+contains a `*` or `?` cannot be matched literally. A pattern can select many
+things, so a rule that uses one is rated **weak**, like a list, and `check` notes it
+for an `allow_unnamed` action. A `*` or `?` in a device's own `match` is compared
+literally, and `check` warns about it.
+
+### Several tags: any of, or all of
+
+An action with several tags runs when the thing has **any** of them. To require
+**all** of them, say so:
+
+```
+udevmon actions add --tag backup --tag offsite --all-tags mounted -- \
+  ~/bin/copy.sh "{mountpoint}"
+udevmon actions set copy --all-tags     # or --any-tags for the default
+```
+
+```toml
+[[actions]]
+tag = ["backup", "offsite"]
+tag_mode = "all"           # "any" is the default
+on = ["mounted"]
+run = ["~/bin/copy.sh", "{mountpoint}"]
+```
+
+The tags may come from any mix of explicit tags and rules. `{tag}` (and
+`$UDEVMON_TAG`) is the first tag in the list. `tag_mode` only applies to actions
+that use `tag`, and `explain` shows `tags backup + offsite` for such an action.
+
+### Opting a device out of a rule tag
+
+A rule tag selects things you never named, which is what you want for most
+drives. A device of yours that a rule happens to select, but which should be left
+out, opts out of that tag:
+
+```
+udevmon devices exclude my-disk storage
+udevmon devices include my-disk storage     # back to normal
+```
+
+```toml
+[devices.my-disk]
+match = { fs_uuid = "3F2A-91BC" }
+exclude_tags = ["storage"]
+```
+
+Now `my-disk` does not get the tag `storage` from its rule, so none of that tag's
+actions run for it, but it is still a **named** device: it never falls back into
+the unnamed category, and its own actions (`device = "my-disk"`) still run. This is
+different from `status = "ignored"`, which silences the device completely.
+
+An opt-out only stops a *rule* from selecting the thing. A tag the device carries
+explicitly (`tags = [...]`) is never affected: listing the same tag in both
+`tags` and `exclude_tags` is an error, and an explicit tag that *another* device
+matching the same thing carries is kept. `udevmon explain` shows
+`excluded from: storage`. `devices add` takes `--exclude-tag TAG` (repeatable).
+
 ### Named and unnamed things
 
 A rule can select things you never named, for example any ext4 drive someone plugs in.
@@ -429,6 +499,52 @@ Things to know:
   fires once for every matching thing that is present, including system filesystems.
 - `udevmon present` shows, for everything plugged in now, whether it is named and which
   tags it has, which is the quickest way to check a rule.
+
+## Variables per device
+
+A device can carry values of its own, so one action can behave differently for
+each device it applies to. Instead of one action per drive:
+
+```toml
+[devices.photos]
+match = { fs_uuid = "3F2A-91BC" }
+tags = ["backup"]
+vars = { dest = "/srv/backups/photos", keep = "30" }
+
+[devices.music]
+match = { fs_uuid = "7B10-44E0" }
+tags = ["backup"]
+vars = { dest = "/srv/backups/music", keep = "7" }
+
+[[actions]]
+tag = "backup"
+on = ["mounted"]
+run = ["~/bin/backup.sh", "{mountpoint}", "{var_dest}", "{var_keep}"]
+```
+
+`{var_NAME}` in a command is replaced by the value of the variable `NAME` of the
+device the action runs for, and the environment gets `UDEVMON_VAR_NAME`. A
+fourth drive is one more device; the action never changes.
+
+```
+udevmon devices add music --match fs_uuid=7B10-44E0 --var dest=/srv/m
+udevmon devices set music --var keep=14 --unset-var old
+```
+
+`--var NAME=VALUE` sets (or changes) a variable and keeps the others; use it
+more than once for several. Names are lowercase letters, digits and `_`.
+
+- **Only named devices have variables.** A thing matched only by a tag rule has
+  none, so an action that uses one is skipped for it, and `check` warns when an
+  `allow_unnamed` action uses a variable.
+- **A device that lacks the value** is skipped with an error (as for any missing
+  placeholder), never run with an empty value. `check` warns about every device an
+  action can reach that does not define a variable it uses, and rejects one that
+  no device defines at all (usually a typo).
+- The values are yours, not the hardware's, so unlike a label or serial number
+  they count as safe in the checks for `allow_unnamed` actions.
+- When a thing matches several devices, the first one's variables are used.
+- `devices show` lists them, and `explain` shows the command with them filled in.
 
 ## Checking what will run
 
@@ -691,6 +807,8 @@ use letters, digits, `_`, `.` and `-`.
   the command itself. If you need a shell, ask for one explicitly:
   `run = ["sh", "-c", "cd \"$1\" && ls | wc -l >> ~/count.log", "sh", "{mountpoint}"]`
 - A leading `~` in an argument is expanded to your home directory.
+- `{var_NAME}` is a variable of the device (see
+  [Variables per device](#variables-per-device)).
 - `{name}` is replaced by a property value: `{mountpoint}`, `{serial}`,
   `{fs_uuid}`, `{devnode}`, and so on, plus `{event}`, `{device}` (the name of the device
   that applies; not available for unnamed things) and `{tag}` (tag actions only). Values
@@ -719,26 +837,30 @@ udevmon scan [--present] [--no-prompt]  watch events and name things
 udevmon present [--all]                 list what is plugged in now
 udevmon devices list | show NAME | remove NAME
 udevmon devices add NAME --match KEY=VALUE ...
-                    [--tag TAG ...] [--description TEXT]
+                    [--tag TAG ...] [--exclude-tag TAG ...]
+                    [--var NAME=VALUE ...] [--description TEXT]
 udevmon devices tag NAME TAG...         add explicit tags to a device
 udevmon devices set NAME [--match KEY=VALUE ...] [--description TEXT]
+                    [--var NAME=VALUE ...] [--unset-var NAME ...]
 udevmon devices|tags|actions rename OLD NEW
 udevmon devices disable | ignore | enable NAME...
                                         switch devices off (see above)
 udevmon devices untag NAME TAG...
+udevmon devices exclude NAME TAG...     opt a device out of rule tags
+udevmon devices include NAME TAG...     stop opting it out
 udevmon tags list | show NAME | remove NAME
 udevmon tags add NAME [--match KEY=VALUE ...] [--description TEXT]
 udevmon tags set NAME [--match KEY=VALUE ... | --no-rule]
                       [--description TEXT]
 udevmon actions list | remove NAME
 udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT...]
-                    [--name NAME] [--timeout S]
+                    [--name NAME] [--timeout S] [--all-tags]
                     [--allow-unnamed | --named-only] -- COMMAND...
 udevmon actions set NAME [--allow-unnamed | --named-only
                           | --default-unnamed] [--on EVENTS] [--timeout S]
                     [--add-device NAME ...] [--remove-device NAME ...]
                     [--add-tag NAME ...] [--remove-tag NAME ...]
-                    [-- COMMAND...]
+                    [--all-tags | --any-tags] [-- COMMAND...]
 udevmon actions disable | enable NAME...
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
                                         what would run (see above)
@@ -904,8 +1026,8 @@ trust the *contents* of the device without care.
   the daemon watch other kinds of udev devices, matched through the
   `udev_<name>` properties, but this is experimental and only the default
   USB filter has been tested.
-- Tags mean "any of" only, a named device can't be excluded from a rule tag, and rule
-  values are strings (capitals ignored) or lists of them (no wildcards). Narrow the rule instead.
+- Rule values are strings, lists of them, or patterns with `*` and `?` (capitals
+  ignored); there are no regular expressions. Variables belong to devices, not to tags.
 - No GUI or TUI yet; configuration is the TOML file plus the CLI.
 
 ## Development

@@ -22,7 +22,8 @@ def status_text(cfg: cfgmod.Config, endpoint: Endpoint) -> str:
     """'device: NAME  tags: a, b' for named things, 'unnamed  tags: ...' otherwise."""
     res = resolve(cfg, endpoint.props)
     who = f"device: {', '.join(device_label(d) for d in res.named)}" if res.named else "unnamed"
-    return who + (f"  tags: {', '.join(res.tags)}" if res.tags else "")
+    return (who + (f"  tags: {', '.join(res.tags)}" if res.tags else "")
+            + (f"  excluded from: {', '.join(res.excluded)}" if res.excluded else ""))
 
 
 def format_props(endpoint: Endpoint) -> str:

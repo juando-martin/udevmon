@@ -230,13 +230,20 @@ actions that use each.
 .B udevmon devices show \fINAME\fR
 Show one device: match, strength, status, tags and its actions.
 .TP
-.B udevmon devices add \fINAME\fR \fB\-\-match \fIKEY=VALUE\fR ... [\fB\-\-tag \fITAG\fR ...] [\fB\-\-description \fITEXT\fR]
+.B udevmon devices add \fINAME\fR \fB\-\-match \fIKEY=VALUE\fR ... [\fB\-\-tag \fITAG\fR ...] [\fB\-\-exclude\-tag \fITAG\fR ...] [\fB\-\-var \fINAME=VALUE\fR ...] [\fB\-\-description \fITEXT\fR]
 Add a device without scanning.
 .B \-\-match
 is required and can be repeated for several keys; a device match is exact, so
 repeating a key is an error.
 .B \-\-tag
 sets an explicit tag (repeatable).
+.B \-\-exclude\-tag
+makes the device opt out of a rule tag (see
+.BR "devices exclude" ).
+.B \-\-var
+sets a variable that actions can use as
+.BI { var_NAME }
+(repeatable).
 It prints a warning if the match is weak.
 .TP
 .B udevmon devices remove \fINAME\fR
@@ -249,9 +256,24 @@ Add explicit tags to a device.
 .B udevmon devices untag \fINAME TAG\fR...
 Remove explicit tags from a device.
 .TP
-.B udevmon devices set \fINAME\fR [\fB\-\-match \fIKEY=VALUE\fR ...] [\fB\-\-description \fITEXT\fR]
+.B udevmon devices exclude \fINAME TAG\fR...
+Make the device opt out of rule tags: the rule no longer selects it for those
+tags, so their actions do not run for it.
+The device stays named and keeps its own actions.
+A tag the device carries explicitly, or that another matching device carries, is
+not affected; carrying and excluding the same tag is an error.
+.TP
+.B udevmon devices include \fINAME TAG\fR...
+Stop opting the device out of those tags.
+.TP
+.B udevmon devices set \fINAME\fR [\fB\-\-match \fIKEY=VALUE\fR ...] [\fB\-\-description \fITEXT\fR] [\fB\-\-var \fINAME=VALUE\fR ...] [\fB\-\-unset\-var \fINAME\fR ...]
 Replace the device's whole match, and/or its description (an empty text
 removes it).
+.B \-\-var
+sets or changes a variable and leaves the others alone (repeatable);
+.B \-\-unset\-var
+removes one.
+Removing the only definition of a variable that an action uses is refused.
 A comment after the old
 .B match
 value is kept.
@@ -299,6 +321,13 @@ Rules cannot use properties that change from plug to plug
 .BR syspath ,
 .B surprise
 and a few raw udev ones).
+In a rule
+.B *
+matches any run of characters and
+.B ?
+exactly one, as in
+.BR "\-\-match fs_label=BACKUP*" ;
+such a rule is rated weak.
 .TP
 .B udevmon tags set \fINAME\fR [\fB\-\-match \fIKEY=VALUE\fR ... | \fB\-\-no\-rule\fR] [\fB\-\-description \fITEXT\fR]
 Change a declared tag (one with a
@@ -333,7 +362,7 @@ Rename a tag wherever it is used.
 .B udevmon actions list
 List the actions with their targets, events and command.
 .TP
-.B udevmon actions add (\-\-device \fINAME\fR ... | \-\-tag \fINAME\fR ...) \fIEVENT\fR[,\fIEVENT\fR...] [\fB\-\-name \fINAME\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR] \-\- \fICOMMAND\fR [\fIARG\fR...]
+.B udevmon actions add (\-\-device \fINAME\fR ... | \-\-tag \fINAME\fR ...) \fIEVENT\fR[,\fIEVENT\fR...] [\fB\-\-name \fINAME\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-all\-tags\fR] [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR] \-\- \fICOMMAND\fR [\fIARG\fR...]
 Add an action.
 Options go before the
 .BR \-\- ;
@@ -342,6 +371,9 @@ everything after it is the command, verbatim.
 and
 .B \-\-tag
 can be repeated, and an action has devices or tags, never both.
+With several tags the action runs when the thing has any of them;
+.B \-\-all\-tags
+requires all of them.
 .I EVENT
 is one or more of
 .BR connected ,
@@ -371,7 +403,7 @@ An action created by hand without a
 .B name
 line cannot be removed this way; edit the file.
 .TP
-.B udevmon actions set \fINAME\fR [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR | \fB\-\-default\-unnamed\fR] [\fB\-\-on \fIEVENTS\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-add\-device \fINAME\fR ...] [\fB\-\-remove\-device \fINAME\fR ...] [\fB\-\-add\-tag \fINAME\fR ...] [\fB\-\-remove\-tag \fINAME\fR ...] [\fB\-\- \fICOMMAND\fR ...]
+.B udevmon actions set \fINAME\fR [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR | \fB\-\-default\-unnamed\fR] [\fB\-\-on \fIEVENTS\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-add\-device \fINAME\fR ...] [\fB\-\-remove\-device \fINAME\fR ...] [\fB\-\-add\-tag \fINAME\fR ...] [\fB\-\-remove\-tag \fINAME\fR ...] [\fB\-\-all\-tags\fR | \fB\-\-any\-tags\fR] [\fB\-\- \fICOMMAND\fR ...]
 Change an action without removing and adding it again.
 .B \-\-on
 replaces the events (comma\-separated).
@@ -405,6 +437,12 @@ for that).
 Adding what is already there changes nothing.
 A single name stays a plain string, a list is edited in place, and comments and
 layout are kept.
+.IP
+.B \-\-all\-tags
+makes an action with several tags run only for things that have all of them, and
+.B \-\-any\-tags
+goes back to the default of any of them.
+They apply only to actions that use tags.
 .IP
 A command after
 .B \-\-
@@ -607,7 +645,9 @@ Commands started by actions receive your environment plus
 .B UDEVMON_DEVICE
 (when the thing is named),
 .B UDEVMON_TAG
-(tag actions) and one
+(tag actions), one
+.BI UDEVMON_VAR_ NAME
+per variable of the device, and one
 .BI UDEVMON_ PROPERTY
 per property, for example
 .B UDEVMON_MOUNTPOINT
@@ -700,8 +740,12 @@ Filesystem events come from udisks2, so mounts done with
 are not seen.
 Only USB devices and udisks2 filesystems are supported out of the box; other
 udev filters are experimental.
-Tags mean \(lqany of\(rq only, and rule values are exact strings, with no
-wildcards.
+Rule values are strings, lists of them, or patterns with
+.B *
+and
+.BR ? ;
+there are no regular expressions.
+Variables belong to devices, not to tags.
 .SH BUGS
 None known beyond the limitations above.
 .SH SEE ALSO

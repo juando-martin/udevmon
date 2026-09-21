@@ -109,6 +109,30 @@ Optional text.
 .B tags
 Optional explicit tags: a name or a list of names.
 .TP
+.B exclude_tags
+Optional: a name or a list of names of rule tags this device opts out of.
+A rule that would select a thing matching this device leaves that tag out, so the
+tag's actions do not run for it.
+The device stays named and its own actions still run.
+Only rule selection is affected: a tag the device carries in
+.BR tags ,
+or that another matching device carries, is kept, and the same tag in both
+.B tags
+and
+.B exclude_tags
+is an error.
+.TP
+.B vars
+Optional table of variables,
+.BR "vars = { dest = \\"/srv/x\\" }" ,
+which actions use as
+.BR {var_dest} .
+Names are lowercase letters, digits and
+.BR _ ,
+not starting with a digit; values are strings (integers become text).
+See
+.BR VARIABLES .
+.TP
 .B status
 Optional.
 Left out, empty or
@@ -170,6 +194,19 @@ one.
 A table of property names and values.
 A value can be a list, meaning \(lqany of\(rq.
 Every key must match, and capitals do not matter.
+In a rule (not in a device's
+.BR match )
+a value may use wildcards:
+.B *
+matches any run of characters (including none) and
+.B ?
+exactly one, and the whole value must match.
+Everything else is literal, so a value that really contains a
+.B *
+or
+.B ?
+cannot be matched literally.
+A value with a wildcard, like a list, never makes a rule strong.
 Rules may use any property except those that change from plug to plug:
 .BR mountpoint ,
 .BR devnode ,
@@ -193,8 +230,8 @@ Optional text.
 A tag without a
 .B match
 is valid, and contains only the devices that carry it explicitly.
-Tags mean \(lqany of\(rq only: an action on two tags runs if the thing has
-either.
+An action on several tags runs if the thing has any of them, unless it sets
+.BR "tag_mode = \\"all\\"" .
 .PP
 .nf
 [tags.storage]
@@ -256,6 +293,19 @@ Boolean, only for actions that use
 Left out, it behaves as false.
 See
 .BR "NAMED AND UNNAMED THINGS" .
+.TP
+.B tag_mode
+.B "any"
+(the default) or
+.BR "all" ,
+only for actions that use
+.BR tag .
+With
+.B "all"
+the action runs only for things that have every tag it lists, whether explicit or
+selected by a rule.
+.B {tag}
+is then the first tag in the list.
 .TP
 .B enabled
 Boolean, default true.
@@ -423,6 +473,57 @@ A property that is missing from a thing (a stick without a serial number, a
 filesystem without a label) simply does not match.
 .B udevmon present
 lists everything present with these values.
+.SH VARIABLES
+A device's
+.B vars
+are values of your own that its actions can use:
+.PP
+.nf
+[devices.photos]
+match = { fs_uuid = "3F2A-91BC" }
+tags = ["backup"]
+vars = { dest = "/srv/backups/photos" }
+
+[devices.music]
+match = { fs_uuid = "7B10-44E0" }
+tags = ["backup"]
+vars = { dest = "/srv/backups/music" }
+
+[[actions]]
+tag = "backup"
+on = ["mounted"]
+run = ["~/bin/backup.sh", "{mountpoint}", "{var_dest}"]
+.fi
+.PP
+.BI { var_NAME }
+in a command is replaced by the variable
+.I NAME
+of the device the action runs for, and the environment gets
+.BI UDEVMON_VAR_ NAME
+(in capitals).
+Which device that is: the listed device that applies, for an action with
+.BR device ;
+the first matching named device, for an action with
+.BR tag .
+.IP \(bu 3
+A thing that matches no device (only a tag rule) has no variables, so an action
+that uses one is skipped for it, and
+.B check
+warns about an
+.B allow_unnamed
+action that uses one.
+.IP \(bu 3
+A device that lacks a variable an action uses gets the action skipped, with an
+error, never run with an empty value.
+.B check
+warns about every device an action can reach that does not define it.
+.IP \(bu 3
+A variable that no device defines is an error when the file is loaded, which
+catches typos.
+.IP \(bu 3
+The values are yours, not the hardware's, so they count as safe in the
+.B allow_unnamed
+checks.
 .SH "NAMED AND UNNAMED THINGS"
 A tag rule can select things you never named, for example any ext4 drive that
 someone plugs in.
@@ -507,6 +608,10 @@ A leading
 .B ~
 in an argument is replaced by your home directory.
 .IP \(bu 3
+.BI { var_NAME }
+is a variable of the device (see
+.BR VARIABLES ).
+.IP \(bu 3
 .BI { name }
 in an argument is replaced by the value of a property (see
 .BR PROPERTIES ),
@@ -549,6 +654,8 @@ The same information is in the environment:
 (when the thing is named),
 .B UDEVMON_TAG
 (tag actions) and
+.BI UDEVMON_VAR_ NAME
+for every variable of the device, and
 .BI UDEVMON_ PROPERTY
 for every property, for example
 .BR UDEVMON_MOUNTPOINT ,

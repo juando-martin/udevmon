@@ -13,7 +13,7 @@ class FakeRunner:
         self.calls = []
 
     def submit(self, event, jobs):
-        self.calls.append((event.kind, [(a.name, device) for a, device, _tag in jobs]))
+        self.calls.append((event.kind, [(j.action.name, j.device) for j in jobs]))
 
 
 def cfg(text_dict):

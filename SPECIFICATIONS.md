@@ -165,7 +165,8 @@ Three concepts, plus the actions that use them:
 A device's `match` is a table of `key = "value"` pairs. An endpoint matches the
 device when **every** pair equals the corresponding endpoint property
 (case-insensitive). A missing property never matches. Device matches are exact
-values only (no lists or wildcards): a device identifies one thing.
+values only (no lists or wildcards; a `*` or `?` is an ordinary character there and
+`check` warns about it): a device identifies one thing.
 
 ### 5.2 Match strength
 
@@ -203,11 +204,28 @@ event time, so a rule can use any stable key, including ones the device's own
 `match` does not mention. Volatile keys (§4.2) are rejected. A `[tags.NAME]`
 without `match` only carries a `description`.
 
-A rule's strength is computed as in §5.2, except that a key with a list value never
-counts as identity-grade or as location (a list can match many things).
+**Wildcards.** In a rule (only), `*` matches any run of characters (including none)
+and `?` exactly one; the whole value must match, case-insensitively, and every other
+character is literal. A value may be a list mixing patterns and plain values.
+
+A rule's strength is computed as in §5.2, except that a key with a list value or a
+wildcard pattern never counts as identity-grade or as location (either can match
+many things).
 
 Tag names use the device-name character set and live in their own namespace
 (a tag and a device may share a name).
+
+**Opting out.** A device may list rule tags in `exclude_tags` (a name or a non-empty
+list of names). During resolution (§5.5) a rule tag that would select the thing is
+left out, and reported as *excluded*, when **any** device matching the thing lists
+it. Only rule selection is affected: a tag carried explicitly by a matching device
+is always kept, and a device listing the same tag in `tags` and `exclude_tags` is
+an error. The device stays named. `check` notes an excluded tag that has no rule.
+
+**All of.** An action's `tag_mode` is `"any"` (the default: one of its tags is
+enough) or `"all"` (the thing needs every tag it lists, whether explicit or from a
+rule). It is valid only with `tag`. `{tag}` and `UDEVMON_TAG` are then the first
+tag in the list.
 
 ### 5.5 Resolution and trust
 
@@ -275,6 +293,20 @@ any other value than `"disabled"` and `"ignored"` is an error. An action has
 and reports an action that would have applied as skipped, with the reason
 (`the action is disabled`, `device 'X' is disabled`); actions that would not have
 applied anyway are not mentioned.
+
+### 5.8 Variables
+
+A device may have `vars`, a table of `name = "value"` (names: lowercase letters,
+digits and `_`, not starting with a digit; integer values become text). A command
+may use `{var_NAME}`, and the environment gets `UDEVMON_VAR_NAME`, with the values of
+the device the job runs for: the listed device that applies for a `device` action,
+the first matching named device for a `tag` action. A thing that matches no device
+has none, so `{var_NAME}` is unavailable and the action is skipped (logged like any
+missing placeholder). Loading the configuration fails when a command uses
+`{var_NAME}` and no device defines `NAME`; `check` warns for each device the action
+can reach (its own devices, or the devices that carry its tags explicitly) that does
+not, and for an `allow_unnamed` action that uses a variable. Variables are written
+by the user, so they are counted as trusted placeholders for that warning (§6.2).
 
 ## 6. Configuration
 
@@ -484,11 +516,14 @@ udevmon present [--all]                 list what is present now, with
                                         strength, device name and tags
 udevmon devices list|show               (bare `devices` = `devices list`)
 udevmon devices add NAME --match KEY=VALUE ...
-                    [--tag TAG ...] [--description TEXT]
+                    [--tag TAG ...] [--exclude-tag TAG ...]
+                    [--var NAME=VALUE ...] [--description TEXT]
 udevmon devices remove NAME
 udevmon devices tag NAME TAG [TAG ...]  add explicit tags to a device
 udevmon devices disable|ignore|enable NAME...   (§5.7)
 udevmon devices set NAME [--match KEY=VALUE ...] [--description TEXT]
+                    [--var NAME=VALUE ...] [--unset-var NAME ...]  (§5.8)
+udevmon devices exclude|include NAME TAG...    (§5.4)
 udevmon devices|tags|actions rename OLD NEW
 udevmon devices untag NAME TAG [TAG ...]
 udevmon tags list|show
@@ -498,7 +533,7 @@ udevmon tags set NAME [--match KEY=VALUE ... | --no-rule]
 udevmon tags remove NAME
 udevmon actions list
 udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT ...]
-                    [--name NAME] [--timeout SECONDS]
+                    [--name NAME] [--timeout SECONDS] [--all-tags]
                     [--allow-unnamed | --named-only] -- COMMAND [ARG ...]
 udevmon actions remove NAME
 udevmon actions disable|enable NAME...
@@ -506,7 +541,8 @@ udevmon actions set NAME [--allow-unnamed | --named-only
                           | --default-unnamed]
                     [--on EVENTS] [--timeout SECONDS]
                     [--add-device N ...] [--remove-device N ...]
-                    [--add-tag N ...] [--remove-tag N ...] [-- COMMAND ...]
+                    [--add-tag N ...] [--remove-tag N ...]
+                    [--all-tags | --any-tags] [-- COMMAND ...]
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
                                         what would run (§8.4)
 udevmon pause [--for DURATION]          stop every action (§8.5)
@@ -699,9 +735,7 @@ No disk I/O apart from reading the config.
   service for zero idle footprint / device permission tweaks.
 - Control socket (live scan through the daemon, no SIGHUP).
 - Per-action environment/cwd, `enabled = false`, startup replay option.
-- Tags: an exclusion list so a named device can opt out of a rule tag
-  (`exclude = [...]`), "all of" semantics for multiple tags, wildcards in rules,
-  per-device variables for use in actions.
+- Tag-level default variables that devices override.
 
 ## 13. Layout and testing
 

@@ -28,7 +28,8 @@ def _name_or_list(items) -> str:
     return _s(items[0]) if len(items) == 1 else _list(items)
 
 
-def render_device(name, match, description="", tags=(), status=None) -> str:
+def render_device(name, match, description="", tags=(), status=None, exclude_tags=(),
+                  variables=None) -> str:
     lines = [f"[devices.{_key(name)}]"]
     if description:
         lines.append(f"description = {_s(description)}")
@@ -36,6 +37,11 @@ def render_device(name, match, description="", tags=(), status=None) -> str:
     lines.append(f"match = {{ {inner} }}")
     if tags:
         lines.append(f"tags = {_list(tags)}")
+    if exclude_tags:
+        lines.append(f"exclude_tags = {_list(exclude_tags)}")
+    if variables:
+        inner = ", ".join(f"{_key(k)} = {_s(v)}" for k, v in variables.items())
+        lines.append(f"vars = {{ {inner} }}")
     if status:
         lines.append(f"status = {_s(status)}")
     return "\n".join(lines) + "\n"
@@ -53,13 +59,16 @@ def render_tag(name, match, description="") -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_action(name, devices, tags, on, run, timeout=None, allow_unnamed=None) -> str:
+def render_action(name, devices, tags, on, run, timeout=None, allow_unnamed=None,
+                  tag_mode=None) -> str:
     lines = ["[[actions]]", f"name = {_s(name)}"]
     lines.append(f"device = {_name_or_list(devices)}" if devices
                  else f"tag = {_name_or_list(tags)}")
     lines += [f"on = {_list(on)}", f"run = {_list(run)}"]
     if timeout is not None:
         lines.append(f"timeout = {timeout:g}")
+    if tag_mode:
+        lines.append(f"tag_mode = {_s(tag_mode)}")
     if allow_unnamed is not None:
         lines.append(f"allow_unnamed = {'true' if allow_unnamed else 'false'}")
     return "\n".join(lines) + "\n"
@@ -106,15 +115,25 @@ def _check_name(kind: str, name: str) -> None:
         raise cfgmod.ConfigError([f"invalid {kind} name {name!r} (use letters, digits, _ . -)"])
 
 
-def add_device(path: Path, name, match, description="", tags=(), status=None) -> None:
+def _check_variable(name: str) -> None:
+    if not cfgmod.VAR_RE.match(name):
+        raise cfgmod.ConfigError([f"invalid variable name {name!r} (lowercase letters, digits "
+                                  "and _, not starting with a digit)"])
+
+
+def add_device(path: Path, name, match, description="", tags=(), status=None,
+               exclude_tags=(), variables=None) -> None:
     _check_name("device", name)
-    for t in tags:
+    for t in (*tags, *exclude_tags):
         _check_name("tag", t)
+    for k in variables or {}:
+        _check_variable(k)
     existing = cfgmod.load(path)
     if name in existing.devices:
         raise cfgmod.ConfigError([f"device {name!r} already exists"])
     _edit(path, _append(path, render_device(name, match, description,
-                                             list(dict.fromkeys(tags)), status)),
+                                             list(dict.fromkeys(tags)), status,
+                                             list(dict.fromkeys(exclude_tags)), variables)),
           lambda c: c.devices[name])
 
 
@@ -126,7 +145,8 @@ def add_tag(path: Path, name, match, description="") -> None:
     _edit(path, _append(path, render_tag(name, match, description)), lambda c: c.tags[name])
 
 
-def add_action(path: Path, name, devices, tags, on, run, timeout=None, allow_unnamed=None) -> str:
+def add_action(path: Path, name, devices, tags, on, run, timeout=None, allow_unnamed=None,
+               tag_mode=None) -> str:
     existing = cfgmod.load(path)
     if not name:
         base = f"{(devices or tags)[0]}-{'-'.join(on)}"
@@ -136,7 +156,8 @@ def add_action(path: Path, name, devices, tags, on, run, timeout=None, allow_unn
             name, n = f"{base}-{n}", n + 1
     elif name in {a.name for a in existing.actions}:
         raise cfgmod.ConfigError([f"action {name!r} already exists"])
-    _edit(path, _append(path, render_action(name, devices, tags, on, run, timeout, allow_unnamed)),
+    _edit(path, _append(path, render_action(name, devices, tags, on, run, timeout, allow_unnamed,
+                                            tag_mode)),
           lambda c: [a for a in c.actions if a.name == name][0])
     return name
 
@@ -226,43 +247,67 @@ def remove_action(path: Path, name: str) -> None:
     _edit(path, _edited(path, change), verify)
 
 
-def set_device_tags(path: Path, name: str, add=(), remove=()) -> None:
-    """Add/remove explicit tags on a device, keeping however its ``tags`` array is written."""
+def _edit_device_names(path: Path, name: str, key: str, add=(), remove=()) -> None:
+    """Add/remove names in a device's ``tags`` or ``exclude_tags`` array, keeping however it is
+    written."""
+    attr = {"tags": "tags", "exclude_tags": "exclude_tags"}[key]
     cfg = cfgmod.load(path, must_exist=True)
     device = cfg.devices.get(name)
     if device is None:
         raise cfgmod.ConfigError([f"no such device {name!r}"])
     for t in add:
         _check_name("tag", t)
-    missing = [t for t in remove if t not in device.tags]
+    current_names = list(getattr(device, attr))
+    other = device.exclude_tags if key == "tags" else device.tags
+    clash = [t for t in dict.fromkeys(add) if t in other]
+    if clash and key == "tags":
+        raise cfgmod.ConfigError([f"device {name!r} excludes {clash}: run `devices include "
+                                  f"{name} ...` first"])
+    if clash:
+        raise cfgmod.ConfigError([f"device {name!r} carries {clash} as an explicit tag; an "
+                                  "explicit tag is never affected by an exclusion, so remove "
+                                  "the tag first (`devices untag`)"])
+    missing = [t for t in remove if t not in current_names]
     if missing:
-        raise cfgmod.ConfigError([f"device {name!r} has no explicit tag(s) {missing} "
-                                  "(tags that come from a rule cannot be removed here)"])
-    new_tags = [t for t in device.tags if t not in remove]
-    new_tags += [t for t in dict.fromkeys(add) if t not in new_tags]
+        hint = (" (tags that come from a rule cannot be removed here)" if key == "tags"
+                else " (nothing to include back)")
+        label = "explicit tag(s)" if key == "tags" else "exclusion(s)"
+        raise cfgmod.ConfigError([f"device {name!r} has no {label} {missing}{hint}"])
+    new_names = [t for t in current_names if t not in remove]
+    new_names += [t for t in dict.fromkeys(add) if t not in new_names]
 
     def change(doc):
         table = doc["devices"][name]
-        if not new_tags:
-            table.pop("tags", None)                         # never leave an emptied array behind
+        if not new_names:
+            table.pop(key, None)                            # never leave an emptied array behind
             return
-        current = table.get("tags")
+        current = table.get(key)
         if hasattr(current, "append") and hasattr(current, "remove"):
             for t in remove:                                # edit in place: keeps its layout
                 current.remove(t)
-            for t in new_tags:
+            for t in new_names:
                 if t not in current:
                     current.append(t)
-        else:                                               # no tags yet (or a bare string)
+        else:                                               # none yet (or a bare string)
             array = _tomlkit().array()
-            for t in new_tags:
+            for t in new_names:
                 array.append(t)
-            table["tags"] = array
+            table[key] = array
 
     def verify(c):
-        if list(c.devices[name].tags) != new_tags:
-            raise cfgmod.ConfigError([f"tag edit on {name!r} did not take effect"])
+        if list(getattr(c.devices[name], attr)) != new_names:
+            raise cfgmod.ConfigError([f"the {key} edit on {name!r} did not take effect"])
     _edit(path, _edited(path, change), verify)
+
+
+def set_device_tags(path: Path, name: str, add=(), remove=()) -> None:
+    """Add/remove explicit tags on a device."""
+    _edit_device_names(path, name, "tags", add, remove)
+
+
+def set_device_exclusions(path: Path, name: str, add=(), remove=()) -> None:
+    """Add/remove the rule tags a device opts out of (``exclude_tags``)."""
+    _edit_device_names(path, name, "exclude_tags", add, remove)
 
 
 def _unique(names) -> list[str]:
@@ -344,7 +389,7 @@ def _retarget(kind: str, what: str, current, add, remove, action: str) -> list[s
 
 
 def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
-                       on=None, timeout: float | None = None, run=None,
+                       on=None, timeout: float | None = None, run=None, tag_mode=None,
                        add_devices=(), remove_devices=(), add_tags=(), remove_tags=()):
     """Change an action's ``allow_unnamed``, events, timeout, command or targets.
 
@@ -359,12 +404,15 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
     device_edit, tag_edit = bool(add_devices or remove_devices), bool(add_tags or remove_tags)
     if run is not None and not (run and all(isinstance(x, str) for x in run)):
         raise cfgmod.ConfigError(["the command must not be empty"])
-    if (unnamed is None and on is None and timeout is None and run is None
+    if tag_mode is not None and action.devices:
+        raise cfgmod.ConfigError([f"action {name!r} targets devices; --all-tags/--any-tags only "
+                                  "apply to actions that use tags"])
+    if (unnamed is None and on is None and timeout is None and run is None and tag_mode is None
             and not (device_edit or tag_edit)):
         raise cfgmod.ConfigError(["nothing to change: give --allow-unnamed, --named-only, "
                                   "--default-unnamed, --on, --timeout, --add-device, "
-                                  "--remove-device, --add-tag, --remove-tag or a new command "
-                                  "after --"])
+                                  "--remove-device, --add-tag, --remove-tag, --all-tags, "
+                                  "--any-tags or a new command after --"])
     key = None
     targets = None
     if device_edit and tag_edit:
@@ -389,7 +437,8 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
         if targets == current:
             targets = None                                  # already as asked: no edit
             key = None
-            if unnamed is None and on is None and timeout is None and run is None:
+            if (unnamed is None and on is None and timeout is None and run is None
+                    and tag_mode is None):
                 return None
 
     def change(doc):
@@ -407,6 +456,10 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
             item["on"] = array
         if timeout is not None:
             item["timeout"] = int(timeout) if float(timeout).is_integer() else float(timeout)
+        if tag_mode == "all":
+            item["tag_mode"] = "all"
+        elif tag_mode == "any":
+            item.pop("tag_mode", None)
         if run is not None:
             array = _tomlkit().array()
             for word in run:
@@ -435,25 +488,52 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
                 or (on is not None and a.on != tuple(on))
                 or (timeout is not None and a.timeout != float(timeout))
                 or (run is not None and a.run != tuple(run))
+                or (tag_mode is not None and a.tag_mode != tag_mode)
                 or (key is not None and list(a.targets) != targets)):
             raise cfgmod.ConfigError([f"the change to {name!r} did not take effect"])
     _edit(path, _edited(path, change), verify)
     return targets
 
 
-def set_device_fields(path: Path, name: str, *, match=None, description=None) -> None:
-    """Replace a device's match keys and/or change its description.
+def set_device_fields(path: Path, name: str, *, match=None, description=None,
+                      set_vars=None, unset_vars=()) -> None:
+    """Replace a device's match keys, change its description and/or its variables.
 
     ``match`` replaces the whole match (a device match is exact values); an empty
-    ``description`` removes the line.
+    ``description`` removes the line. ``set_vars`` (name -> value) adds or changes
+    variables and ``unset_vars`` removes some; the others stay.
     """
     cfg = cfgmod.load(path, must_exist=True)
-    if name not in cfg.devices:
+    device = cfg.devices.get(name)
+    if device is None:
         raise cfgmod.ConfigError([f"no such device {name!r}"])
-    if match is None and description is None:
-        raise cfgmod.ConfigError(["nothing to change: give --match or --description"])
+    set_vars, unset_vars = dict(set_vars or {}), list(dict.fromkeys(unset_vars))
+    if match is None and description is None and not set_vars and not unset_vars:
+        raise cfgmod.ConfigError(["nothing to change: give --match, --description, --var or "
+                                  "--unset-var"])
     if match is not None and not match:
         raise cfgmod.ConfigError(["a device needs at least one --match KEY=VALUE"])
+    for k in set_vars:
+        _check_variable(k)
+    both = [k for k in unset_vars if k in set_vars]
+    if both:
+        raise cfgmod.ConfigError([f"{both} is in both --var and --unset-var"])
+    missing = [k for k in unset_vars if k not in device.vars]
+    if missing:
+        raise cfgmod.ConfigError([f"device {name!r} has no variable(s) {missing}"
+                                  + (f" (it has: {', '.join(device.vars)})" if device.vars
+                                     else "")])
+    new_vars = {k: v for k, v in device.vars.items() if k not in unset_vars}
+    new_vars.update(set_vars)
+    if unset_vars:                                       # a variable an action uses stays needed
+        still_used = {n[4:] for a in cfg.actions for arg in a.run
+                      for n in cfgmod.placeholders(arg) if n.startswith("var_")}
+        gone = [k for k in unset_vars if k in still_used
+                and not any(k in d.vars for n, d in cfg.devices.items() if n != name)
+                and k not in new_vars]
+        if gone:
+            raise cfgmod.ConfigError([f"variable(s) {gone} are used by an action and no other "
+                                      "device defines them; edit the action first"])
 
     def change(doc):
         from tomlkit.items import InlineTable
@@ -477,11 +557,25 @@ def set_device_fields(path: Path, name: str, *, match=None, description=None) ->
                 table.pop("description", None)
             else:
                 table["description"] = description
+        if set_vars or unset_vars:
+            if not new_vars:
+                table.pop("vars", None)
+                return
+            current = table.get("vars")
+            if current is None:
+                inner = ", ".join(f"{_key(k)} = {_s(v)}" for k, v in new_vars.items())
+                table["vars"] = _tomlkit().parse(f"vars = {{ {inner} }}\n")["vars"]
+            else:                                       # inline table or sub-table: edit in place
+                for key in unset_vars:
+                    del current[key]
+                for key, value in set_vars.items():
+                    current[key] = value
 
     def verify(c):
         d = c.devices[name]
         if (match is not None and d.match != match) or \
-                (description is not None and d.description != description):
+                (description is not None and d.description != description) or \
+                ((set_vars or unset_vars) and dict(d.vars) != new_vars):
             raise cfgmod.ConfigError([f"the change to {name!r} did not take effect"])
     _edit(path, _edited(path, change, f"device {name!r}"), verify)
 
@@ -574,7 +668,8 @@ def _expected_after_rename(cfg, raw_actions, kind: str, old: str, new: str):
 
     def tag(t):
         return new if kind == "tags" and t == old else t
-    devices = [(dev(n), replace(d, name=dev(n), tags=tuple(tag(t) for t in d.tags)))
+    devices = [(dev(n), replace(d, name=dev(n), tags=tuple(tag(t) for t in d.tags),
+                                exclude_tags=tuple(tag(t) for t in d.exclude_tags)))
                for n, d in cfg.devices.items()]
     tags = [(tag(n), replace(t, name=tag(n))) for n, t in cfg.tags.items()]
     actions = []
@@ -614,6 +709,7 @@ def _rename(path: Path, kind: str, old: str, new: str) -> RenameReport:
         elif kind == "tags":                             # explicit tags on devices, tag actions
             for _, device in doc.get("devices", {}).items():
                 _swap(device, "tags", old, new)
+                _swap(device, "exclude_tags", old, new)
             for action in doc.get("actions", []):
                 _swap(action, "tag", old, new)
         else:

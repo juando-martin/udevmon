@@ -32,6 +32,8 @@ POSITIONALS = {
     ("devices", "remove"): ["device"],
     ("devices", "tag"): ["device", "tag*"],
     ("devices", "untag"): ["device", "device-tag*"],
+    ("devices", "exclude"): ["device", "rule-tag*"],
+    ("devices", "include"): ["device", "device-exclusion*"],
     ("tags", "show"): ["tag"],
     ("tags", "remove"): ["declared-tag"],
     ("tags", "set"): ["declared-tag"],
@@ -51,7 +53,8 @@ POSITIONALS = {
 }
 
 # Every kind a positional slot above may use (tests check these tables against the CLI).
-SLOT_KINDS = {"device", "tag", "declared-tag", "action", "device-tag", "events", "event", "new"}
+SLOT_KINDS = {"device", "tag", "declared-tag", "action", "device-tag", "events", "event", "new",
+              "rule-tag", "device-exclusion"}
 
 # Slots that take a new name typed by the user: nothing to complete.
 FREE_SLOT_KINDS = {"new"}
@@ -61,7 +64,8 @@ NO_COMPLETION = {("devices", "add"), ("tags", "add")}
 
 # Options that take a value: those completed by _option_value, and free text.
 OPTION_VALUE_DESTS = {"config", "dest", "device", "tag", "match", "prop", "on",
-                      "add_device", "remove_device", "add_tag", "remove_tag"}
+                      "add_device", "remove_device", "add_tag", "remove_tag", "exclude_tag",
+                      "var", "unset_var"}
 FREE_TEXT_DESTS = {"name", "timeout", "description", "duration"}
 
 HEADER = "# bash completion for udevmon"   # marks a file as ours (uninstall checks it)
@@ -186,6 +190,11 @@ def _names(kind: str, cfg, positionals=()) -> list[str]:
         return sorted(cfg.all_tag_names())
     if kind == "declared-tag":
         return sorted(cfg.tags)
+    if kind == "rule-tag":               # tags a rule can select (the ones worth opting out of)
+        return sorted(t for t, tag in cfg.tags.items() if tag.match)
+    if kind == "device-exclusion":       # the rule tags the device typed just before opts out of
+        device = cfg.devices.get(positionals[0]) if positionals else None
+        return list(device.exclude_tags) if device else []
     if kind == "action":
         return [a.name for a in cfg.actions]
     if kind == "device-tag":             # the explicit tags of the device typed just before
@@ -202,6 +211,15 @@ def _targets(kind: str, cfg, positionals=()) -> list[str]:
         or cfg.actions
     names = [n for a in actions for n in (a.devices if kind == "device" else a.tags)]
     return list(dict.fromkeys(names))
+
+
+def _variables(cfg, positionals=()) -> list[str]:
+    """Variable names: the device's own (when its name was typed), else every device's."""
+    if cfg is None:
+        return []
+    devices = [cfg.devices[positionals[0]]] if positionals and positionals[0] in cfg.devices \
+        else list(cfg.devices.values())
+    return list(dict.fromkeys(k for d in devices for k in d.vars))
 
 
 def _events(cur: str) -> list[str]:
@@ -248,6 +266,12 @@ def _option_value(st: _State, cur: str):
     if dest in ("device", "tag"):
         cfg = _config(st.config)
         return WORDS, _startswith(_names("device" if dest == "device" else "tag", cfg), cur)
+    if dest == "var":                    # NAME=VALUE: offer the names in use, then free text
+        return NOSPACE, _startswith([f"{k}=" for k in _variables(_config(st.config))], cur)
+    if dest == "unset_var":
+        return WORDS, _startswith(_variables(_config(st.config), st.positionals), cur)
+    if dest == "exclude_tag":
+        return WORDS, _startswith(_names("rule-tag", _config(st.config)), cur)
     if dest in ("add_device", "add_tag"):
         cfg = _config(st.config)
         return WORDS, _startswith(_names(dest[4:], cfg), cur)

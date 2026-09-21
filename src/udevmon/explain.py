@@ -48,11 +48,13 @@ def simulated(cfg: cfgmod.Config, device: str | None, props: dict[str, str],
 def _status(cfg: cfgmod.Config, plan) -> str:
     res = plan.resolution
     who = f"device: {', '.join(device_label(d) for d in res.named)}" if res.named else "unnamed"
-    return who + (f"   tags: {', '.join(res.tags)}" if res.tags else "")
+    return (who + (f"   tags: {', '.join(res.tags)}" if res.tags else "")
+            + (f"   excluded from: {', '.join(res.excluded)}" if res.excluded else ""))
 
 
 def _command(job, event) -> str:
     props = dict(event.props)
+    props.update({f"var_{k}": v for k, v in job.vars.items()})
     if job.device:
         props["device"] = job.device
     if job.tag:
@@ -82,7 +84,12 @@ def explain_endpoint(cfg: cfgmod.Config, endpoint: Endpoint, kinds=None,
             quiet.append(kind)
             continue
         for job in plan.jobs:
-            via = f"device {job.device}" if job.action.devices else f"tag {job.tag}"
+            if job.action.devices:
+                via = f"device {job.device}"
+            elif job.action.tag_mode == "all":
+                via = f"tags {' + '.join(job.action.tags)}"
+            else:
+                via = f"tag {job.tag}"
             unnamed = "" if job.device else ", unnamed"
             lines.append(f"  {kind:<13} runs {job.action.name!r} ({via}{unnamed})")
             lines.append(f"                  {_command(job, event)}")

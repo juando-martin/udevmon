@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Mapping
 from typing import NamedTuple
 
 from . import pause as pause_flag
@@ -18,6 +19,7 @@ class Job(NamedTuple):
     action: Action
     device: str | None      # name of the named device that applies (None: unnamed thing)
     tag: str | None         # for tag actions: the tag that selected it
+    vars: Mapping = {}      # that device's variables, for {var_NAME} (empty when unnamed)
 
 
 class Skip(NamedTuple):
@@ -76,9 +78,12 @@ class Engine:
                 if device is None:                    # its own actions are off for a disabled device
                     skip(action, f"device {listed[0].name!r} is disabled")
                     continue
-                jobs.append(Job(action, device, None))
+                jobs.append(Job(action, device, None, self._vars(device)))
                 continue
-            tag = next((t for t in action.tags if t in res.tags), None)
+            if action.tag_mode == "all":                  # every listed tag is needed
+                tag = action.tags[0] if all(t in res.tags for t in action.tags) else None
+            else:
+                tag = next((t for t in action.tags if t in res.tags), None)
             if tag is None:
                 continue
             if not action.enabled:
@@ -88,8 +93,13 @@ class Engine:
                 skip(action, "an unnamed thing, and the action does not "
                              "set allow_unnamed = true")
                 continue
-            jobs.append(Job(action, res.named[0].name if named else None, tag))
+            device = res.named[0].name if named else None
+            jobs.append(Job(action, device, tag, self._vars(device)))
         return jobs
+
+    def _vars(self, device: str | None) -> Mapping:
+        d = self.config.devices.get(device) if device else None
+        return dict(d.vars) if d else {}
 
     def _pause_check(self) -> bool:
         """True while automation is paused; logs when that starts and ends."""

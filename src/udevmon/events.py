@@ -89,3 +89,8 @@ def describe(endpoint: Endpoint) -> str:
     name = " ".join(x for x in (p.get("vendor"), p.get("model")) if x) or "USB device"
     ids = ":".join(x for x in (p.get("vendor_id"), p.get("product_id")) if x)
     return f"USB {name}" + (f" [{ids}]" if ids else "")
+
+
+def is_variable(name: str) -> bool:
+    """A ``{var_NAME}`` placeholder: a value the user wrote on a device."""
+    return name.startswith("var_")

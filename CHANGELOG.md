@@ -14,6 +14,25 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ### Added
 
+- **Wildcards in tag rules.** `*` (any run of characters) and `?` (one) in a rule
+  value, for example `fs_label = "BACKUP*"`. The whole value must match, ignoring
+  capitals; nothing else is special. A rule with a pattern is rated weak. In a
+  device's own `match` they stay ordinary characters, and `check` warns.
+- **"All of" for tags.** An action with several tags can require every one of them:
+  `tag_mode = "all"` (default `"any"`), `actions add --all-tags`, and
+  `actions set --all-tags` / `--any-tags`. `actions list` and `explain` show it.
+- **Opting a device out of a rule tag.** `exclude_tags` on a device, and
+  `devices exclude` / `devices include` (also `devices add --exclude-tag`). The
+  device stays named and keeps its own actions; explicit tags are never affected.
+  `explain`, `scan` and `present` show `excluded from: TAG`, and renaming a tag
+  updates `exclude_tags`.
+- **Per-device variables.** `vars = { dest = "..." }` on a device, used as
+  `{var_dest}` in commands and as `UDEVMON_VAR_DEST` in the environment, so one
+  action can serve several devices differently. `devices add --var NAME=VALUE`,
+  `devices set --var NAME=VALUE --unset-var NAME`, listed by `devices show`. A
+  variable no device defines is an error; `check` warns about devices that lack
+  one, and about `allow_unnamed` actions that use one (unnamed things have none).
+
 - **`actions set NAME -- COMMAND...`** replaces an action's command, as `actions add`
   takes it. A placeholder the action's events don't provide is refused, and a
   comment after the old `run` line is kept.

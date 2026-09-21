@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
@@ -24,36 +25,59 @@ def is_suspicious_serial(serial: str) -> bool:
     return len(set(s)) == 1
 
 
-def _scalar(value) -> str | None:
-    """The single value of ``value``, or None for a real list (a list can match many things)."""
-    if isinstance(value, str):
-        return value
+def has_wildcard(value) -> bool:
+    """True for a tag-rule value that uses ``*`` (any run of characters) or ``?`` (one)."""
+    return isinstance(value, str) and ("*" in value or "?" in value)
+
+
+def _glob(pattern: str):
+    """A pattern with only ``*`` and ``?`` as wildcards (everything else is literal)."""
+    return re.compile("".join(".*" if c == "*" else "." if c == "?" else re.escape(c)
+                              for c in pattern.casefold()), re.DOTALL)
+
+
+def _scalar(value, wild: bool = False) -> str | None:
+    """The single value of ``value``, or None for a real list (a list can match many things)
+    and, in a tag rule, for a wildcard pattern (it can match many things too)."""
     if isinstance(value, (tuple, list)) and len(value) == 1:
-        return str(value[0])
-    return None
+        value = value[0]
+    if not isinstance(value, str) or (wild and has_wildcard(value)):
+        return None
+    return value
 
 
 def _wanted(value) -> list[str]:
     return [value] if isinstance(value, str) else [str(v) for v in value]
 
 
-def matches(match: Mapping[str, Any], props: Mapping[str, str]) -> bool:
+def matches(match: Mapping[str, Any], props: Mapping[str, str], wild: bool = False) -> bool:
     """True when every pair in ``match`` matches the property (case-insensitive).
 
-    A value is a string (equals) or a list/tuple of strings (equals any of them).
+    A value is a string (equals) or a list/tuple of strings (equals any of them). With
+    ``wild`` (tag rules) ``*`` and ``?`` in a value are wildcards.
     """
     if not match:
         return False
     for key, want in match.items():
         got = props.get(key)
-        if got is None or got.casefold() not in {w.casefold() for w in _wanted(want)}:
+        if got is None:
+            return False
+        got = got.casefold()
+        if wild:
+            if not any(_glob(w).fullmatch(got) for w in _wanted(want)):
+                return False
+        elif got not in {w.casefold() for w in _wanted(want)}:
             return False
     return True
 
 
-def strength(match: Mapping[str, Any]) -> str:
-    """Strength of a device match or tag rule; list values never count as identity/location."""
-    scalars = {k: v for k, v in ((k, _scalar(v)) for k, v in match.items()) if v is not None}
+def strength(match: Mapping[str, Any], wild: bool = False) -> str:
+    """Strength of a device match or tag rule (``wild``: a rule, where patterns are wildcards).
+
+    List values and wildcard patterns never count as identity or location.
+    """
+    scalars = {k: v for k, v in ((k, _scalar(v, wild)) for k, v in match.items())
+               if v is not None}
     for key in _IDENTITY_KEYS:
         value = scalars.get(key)
         if value is None:
@@ -100,6 +124,7 @@ class Resolution:
     """What an endpoint is, in terms of the configuration (spec 5.5)."""
     named: list = field(default_factory=list)   # config Devices matching, in file order
     tags: list[str] = field(default_factory=list)  # explicit tags, then matching rule tags
+    excluded: list[str] = field(default_factory=list)  # rule tags a matching device opted out of
 
     @property
     def is_named(self) -> bool:
@@ -119,13 +144,16 @@ def device_label(device) -> str:
 def resolve(cfg, props: Mapping[str, str]) -> Resolution:
     """Find the named devices and tags that apply to an endpoint with ``props``."""
     res = Resolution()
+    opted_out: set[str] = set()
     for device in cfg.devices.values():
         if matches(device.match, props):
             res.named.append(device)
+            opted_out.update(device.exclude_tags)
             for tag in device.tags:
                 if tag not in res.tags:
                     res.tags.append(tag)
     for tag in cfg.tags.values():
-        if tag.match and tag.name not in res.tags and matches(tag.match, props):
-            res.tags.append(tag.name)
+        if tag.match and tag.name not in res.tags and matches(tag.match, props, wild=True):
+            # an opt-out only stops a rule from selecting the thing; an explicit tag stays
+            (res.excluded if tag.name in opted_out else res.tags).append(tag.name)
     return res
