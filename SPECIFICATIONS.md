@@ -126,7 +126,10 @@ USB devices (udev, `usb/usb_device`):
 - `vendor`, `model` — `ID_VENDOR_FROM_DATABASE`/`ID_VENDOR`, `ID_MODEL_FROM_DATABASE`/`ID_MODEL`
 - `port_path` — sysfs device name, e.g. `2-1.3` (physical port)
 - `devnode`, `syspath`, `subsystem`, `devtype` — as reported
-- `udev_<prop>` — every raw udev property, lowercased (e.g. `udev_id_input_keyboard`) — an escape hatch for device classes with no normalized keys
+- `udev_<prop>` — every raw udev property, lowercased (e.g. `udev_id_input_keyboard`) — an escape hatch for device classes with no normalized keys. As a placeholder
+`{udev_<prop>}` is accepted for every event (whether the thing has it is known only at
+run time: a missing one skips the action, like any unavailable placeholder); it is
+hardware-supplied, so it is not trusted for the `allow_unnamed` warning (§6.2)
 
 Filesystems (udisks):
 

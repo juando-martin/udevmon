@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .events import KNOWN_KEYS, TRUSTED_PLACEHOLDERS, VALID_KINDS, VOLATILE_KEYS, is_variable
+from .events import KNOWN_KEYS, TRUSTED_PLACEHOLDERS, VALID_KINDS, VOLATILE_KEYS, is_raw, is_variable
 from .matching import STRONG, WEAK, has_wildcard, strength
 
 try:
@@ -341,7 +341,8 @@ def parse(data: dict) -> Config:
                             f"variable {unknown_vars[0][4:]!r} (set one with `devices set NAME "
                             f"--var {unknown_vars[0][4:]}=VALUE`)")
         for kind in on:
-            missing = {n for n in names if not is_variable(n)} - KNOWN_KEYS[kind] - {"device", "tag"}
+            missing = ({n for n in names if not is_variable(n) and not is_raw(n)}
+                       - KNOWN_KEYS[kind] - {"device", "tag"})
             if missing:
                 problems.append(f"{where}: placeholder(s) {sorted(missing)} not available "
                                 f"for event {kind!r}")

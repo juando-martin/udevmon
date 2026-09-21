@@ -12,6 +12,13 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`{udev_NAME}` placeholders** (for example `{udev_id_model}`) in a command made the
+  configuration fail to load, although the documentation said raw udev properties can
+  be used. They are accepted for every event; a thing that lacks the property makes the
+  action be skipped, with an error in the log, as for any unavailable placeholder.
+
 ## [0.4.1] - 2026-09-21
 
 ### Changed

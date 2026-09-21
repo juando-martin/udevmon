@@ -303,6 +303,9 @@ USB devices:
 - `port_path` — e.g. `3-1.2`; the physical port/hub position.
 - `devnode`, `syspath` — e.g. `/dev/bus/usb/003/007`.
 - `udev_<name>` — e.g. `udev_id_input_keyboard`; every raw udev property, lowercased.
+  In a command, `{udev_id_model}` is filled in from the event; whether a thing has
+  the property is only known when it arrives, so the action is skipped, with an
+  error in the log, for a thing that lacks it. `check` cannot catch a typo there.
 
 Filesystems:
 

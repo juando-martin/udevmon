@@ -91,6 +91,11 @@ def describe(endpoint: Endpoint) -> str:
     return f"USB {name}" + (f" [{ids}]" if ids else "")
 
 
+def is_raw(name: str) -> bool:
+    """A ``{udev_NAME}`` placeholder: a raw udev property, known only when an event arrives."""
+    return name.startswith("udev_")
+
+
 def is_variable(name: str) -> bool:
     """A ``{var_NAME}`` placeholder: a value the user wrote on a device."""
     return name.startswith("var_")

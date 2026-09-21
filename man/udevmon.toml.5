@@ -442,6 +442,12 @@ The udev subsystem and device type.
 .BI udev_ name
 Every raw udev property, lowercased (for example
 .BR udev_id_input_keyboard ).
+In a command,
+.BI { udev_NAME }
+is filled in from the event; a thing that lacks the property makes the action be
+skipped, with an error in the log, and
+.B check
+cannot catch a typo there.
 .PP
 Filesystems (events
 .BR mounted ,
