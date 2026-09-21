@@ -12,6 +12,17 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ## [Unreleased]
 
+### Changed
+
+- **Devices without a serial number are no longer given a suggested match.** `scan`
+  used to pre-select `vendor_id`, `product_id` and `port_path`, which ties the rule to
+  a USB port (it silently stops matching in another port or behind a hub, and matches
+  any unit of the model in that port). It now says nothing identifies the unit and asks
+  you to choose between "this model, in this port only" and "this model, in any port",
+  or type a list.
+- `present` and the scan list mark such a device `[medium: no serial, matches the
+  port]`, and `check` notes any device or tag rule that uses `port_path`.
+
 ## [0.4.0] - 2026-09-21
 
 ### Added

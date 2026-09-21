@@ -162,7 +162,10 @@ It identifies exactly this device.
 Vendor ID, product ID and physical port
 .RB ( port_path ).
 It matches any device of that model in that port.
-This is what you get for devices without a serial number.
+It says where the device is plugged in, not which device it is, so
+.B scan
+never suggests it (see
+.BR "Devices without a serial number" ).
 .TP
 .B weak
 Anything else, such as a filesystem label or only the model.
@@ -177,6 +180,36 @@ A device match that uses a property which changes from plug to plug
 .BR devnode ,
 .BR syspath )
 also draws a warning.
+.SS "Devices without a serial number"
+Some devices, YubiKeys for one, report no serial number, so nothing tells one unit from
+another.
+For them
+.B udevmon scan
+pre-selects nothing; it offers
+.IP 1) 4
+this model, in this port only
+.RB ( vendor_id ,
+.BR product_id ,
+.BR port_path ):
+another unit of the model in that port matches too, and the device stops matching in
+another port or behind a hub;
+.IP 2) 4
+this model, in any port
+.RB ( vendor_id ,
+.BR product_id ):
+it matches every unit of the model.
+.PP
+or a list of properties you type.
+Neither is strong, so
+.B scan
+asks before saving.
+.B udevmon present
+marks such a device
+.BR "[medium: no serial, matches the port]" ,
+and
+.B udevmon check
+notes any device or tag rule that uses
+.BR port_path .
 .SH "[tags.NAME]"
 A tag is a label that lets one action cover several devices.
 There are two ways to give things a tag.

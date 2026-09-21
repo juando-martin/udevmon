@@ -211,7 +211,7 @@ and keeps scanning; press Ctrl+C to leave (the `q` answer works only at the
 [Switching things off](#switching-things-off)).
 
 A physical stick usually shows up twice: as a **USB device** (identified by
-vendor/product ID and serial number) and as one or more **filesystems**
+vendor/product ID and serial number, when it has one) and as one or more **filesystems**
 (identified by UUID). Name whichever you want to react to. Name the USB
 device to react to it being plugged in at all; name the filesystem to react
 to it being mounted and unmounted.
@@ -328,13 +328,38 @@ When you create a device, udevmon tells you how precisely it identifies things:
 - **strong**: includes a serial number or a UUID. Identifies exactly this
   device.
 - **medium**: model plus physical port (`vendor_id` + `product_id` +
-  `port_path`). Matches *any* device of that model in *that port*. This is
-  what you get for devices without a serial number.
+  `port_path`). Matches *any* device of that model in *that port*. It says where
+  the device is plugged in, not which device it is, so it is never suggested
+  for you; see [Devices without a serial number](#devices-without-a-serial-number).
 - **weak**: anything else, for example a filesystem label or just the model.
   Matches every device with those values.
 
 Some cheap devices report fake serials (`0000000`, `1234567890`, ...). udevmon
 treats those as weak. Prefer strong matches for anything that runs a script.
+
+### Devices without a serial number
+
+Some devices, YubiKeys for one, report no serial number, so nothing tells one unit
+from another. When you name one with `scan` there is no pre-selected answer:
+
+```
+This device has no serial number, so nothing identifies
+this particular unit. Choose what to match on:
+  1) this model, in this port only   (vendor_id, product_id, port_path)
+  2) this model, in any port         (vendor_id, product_id)
+Number, or a list of properties:
+```
+
+Neither choice identifies the unit. **1** ties the device to that USB port: another
+unit of the same model in that port matches too, and the device stops matching in
+another port or behind a hub. **2** matches every unit of the model, in any port.
+Pick the one that fits how the device is used, or type your own list. Both are
+below strong, so `scan` asks before saving.
+
+`udevmon present` marks these devices `[medium: no serial, matches the port]`, and
+`udevmon check` notes any device or tag rule that uses `port_path`, so a rule that
+depends on a port is never a surprise. To tell such units apart you need something
+outside udev, for example a script that asks the device itself.
 
 ## Tags: one action for several devices
 

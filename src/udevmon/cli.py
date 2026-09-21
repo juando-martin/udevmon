@@ -87,14 +87,12 @@ def cmd_present(args):
     from .sources.udev import UdevSource
     from .sources.udisks import UdisksSource
     from .scan import format_props, status_text
-    from .matching import default_match_keys
+    from .matching import level_label
     cfg = _load(args)
     endpoints = UdevSource(cfg.settings.udev_filters).snapshot() \
         + UdisksSource().snapshot(include_system=args.all)
     for d in endpoints:
-        keys = default_match_keys(d)
-        level = strength(build_match(d, keys)) if keys else "-"
-        print(f"{describe(d)}   [{level}]   {status_text(cfg, d)}")
+        print(f"{describe(d)}   [{level_label(d)}]   {status_text(cfg, d)}")
         print(f"    {format_props(d)}")
     return 0
 

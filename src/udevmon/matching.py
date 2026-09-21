@@ -115,6 +115,40 @@ def default_match_keys(endpoint: Endpoint) -> list[str]:
     return ids + [k for k in ("port_path",) if p.get(k)]
 
 
+def lacks_identity(endpoint: Endpoint) -> bool:
+    """A USB device with no usable serial number: nothing identifies this particular unit."""
+    p = endpoint.props
+    return not endpoint.is_filesystem and not (p.get("serial") and
+                                               not is_suspicious_serial(p["serial"]))
+
+
+def match_choices(endpoint: Endpoint) -> list[tuple[str, list[str]]]:
+    """What a device with no serial number can be matched on, as (meaning, keys).
+
+    Neither choice identifies the unit: one is tied to the USB port, the other matches every
+    unit of the model. `scan` asks the user to pick rather than pre-selecting one.
+    """
+    p = endpoint.props
+    model = [k for k in ("vendor_id", "product_id") if p.get(k)]
+    choices = []
+    if p.get("port_path") and model:
+        choices.append(("this model, in this port only", model + ["port_path"]))
+    if model:
+        choices.append(("this model, in any port", model))
+    return choices
+
+
+def level_label(endpoint: Endpoint, keys: list[str] | None = None) -> str:
+    """The strength of the best match for ``endpoint``, saying so when it is only a port."""
+    keys = default_match_keys(endpoint) if keys is None else keys
+    if not keys:
+        return "-"
+    level = strength(build_match(endpoint, keys))
+    if "port_path" in keys:
+        return f"{level}: no serial, matches the port"
+    return level
+
+
 def build_match(endpoint: Endpoint, keys: list[str]) -> dict[str, str]:
     return {k: endpoint.props[k] for k in keys if endpoint.props.get(k)}
 

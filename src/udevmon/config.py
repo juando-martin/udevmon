@@ -426,6 +426,15 @@ def _advise(cfg: Config) -> None:
     for t in sorted(carried - used):
         cfg.notes.append(f"tag {t!r} is set on devices but no action uses it")
     for d in cfg.devices.values():
+        if "port_path" in d.match:
+            cfg.notes.append(f"device {d.name!r} matches by port_path: it only matches while "
+                             "plugged into that USB port (another port or a hub stops it), and "
+                             "any device of the same model in that port matches")
+    for t in cfg.tags.values():
+        if "port_path" in t.match:
+            cfg.notes.append(f"tag rule {t.name!r} uses port_path: it only selects things in "
+                             "that USB port")
+    for d in cfg.devices.values():
         for t in d.exclude_tags:
             if t not in cfg.tags or not cfg.tags[t].match:
                 cfg.notes.append(f"device {d.name!r} excludes tag {t!r}, which has no rule, so "

@@ -159,6 +159,10 @@ Number(s) to name, iN to ignore, Enter = scan on, q = quit:
 Answer with numbers (\fB1,2\fR) to name several at once.
 For each one udevmon asks for a device name, the properties to match on (Enter
 accepts the suggestion and tells you how strong the match is) and tags.
+For a USB device with no serial number nothing is suggested: it explains that nothing
+identifies the unit and asks you to choose between this model in this port only and
+this model in any port (see
+.BR udevmon.toml (5)).
 Answer
 .B i3
 (or
@@ -180,8 +184,9 @@ only prints the events.
 .TP
 .B udevmon present \fR[\fB\-\-all\fR]
 List the USB devices and filesystems that are present now, with their
-properties, how strongly each could be matched (strong, medium or weak), whether
-it is named, and which tags it has.
+properties, how strongly each could be matched (strong, medium or weak; a device with
+no serial number is marked as matching the port), whether it is named, and which tags
+it has.
 System filesystems are left out unless
 .B \-\-all
 is given.

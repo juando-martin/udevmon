@@ -9,8 +9,8 @@ from pathlib import Path
 from . import config as cfgmod
 from . import configedit
 from .events import STARTUP, Endpoint, Event, describe
-from .matching import (STRONG, build_match, default_match_keys, device_label, resolve,
-                       strength, strength_note)
+from .matching import (STRONG, build_match, default_match_keys, device_label, lacks_identity,
+                       level_label, match_choices, resolve, strength, strength_note)
 from .sources.udev import UdevSource
 from .sources.udisks import UdisksSource
 
@@ -50,7 +50,7 @@ class Scanner:
         d = event.endpoint
         stamp = time.strftime("%H:%M:%S", time.localtime(event.time))
         keys = default_match_keys(d)
-        level = strength(build_match(d, keys)) if keys else None
+        level = level_label(d, keys) if keys else None
         status = status_text(self._config(), d)
         if event.kind == STARTUP:                 # already-present thing: keep it compact
             print(f"[{stamp}] present      {describe(d)}" + (f"  ({level})" if level else "")
@@ -58,7 +58,10 @@ class Scanner:
         else:
             print(f"[{stamp}] {event.kind:<12} {describe(d)}   {status}")
             print(f"           {format_props(d)}")
-            if keys:
+            if keys and lacks_identity(d):
+                print("           no serial number: nothing identifies this particular unit "
+                      "(you will be asked what to match on)")
+            elif keys:
                 print(f"           suggested match: {', '.join(keys)}  ({level})")
         if keys:
             self.pending[f"{d.source}:{d.key}"] = d
@@ -107,6 +110,37 @@ class Scanner:
             endpoints = [e for i, e in enumerate(endpoints, 1) if i not in named]
         print("Waiting for more events (Ctrl+C to quit)...")
 
+    def _choose_keys(self, endpoint: Endpoint) -> list[str] | None:
+        """The properties to match on, or None to skip. A device with no serial number gets no
+        pre-selected answer: nothing identifies the unit, so the user chooses what to tie it to."""
+        available = [k for k in endpoint.props if not k.startswith("udev_")
+                     and k not in ("syspath", "subsystem", "devtype", "mountpoint")]
+        print(f"Properties you can match on: {', '.join(available)}")
+        choices = match_choices(endpoint) if lacks_identity(endpoint) else []
+        if choices:
+            print("This device has no serial number, so nothing identifies\n"
+                  "this particular unit. Choose what to match on:")
+            for i, (meaning, keys) in enumerate(choices, 1):
+                print(f"  {i}) {meaning:<32} ({', '.join(keys)})")
+        defaults = [] if choices else default_match_keys(endpoint)
+        while True:
+            if choices:
+                raw = input("Number, or a list of properties: ").strip()
+            else:
+                raw = input(f"Match on [{', '.join(defaults)}] "
+                            "(Enter to accept, or type a list): ").strip()
+            if choices and raw.isdigit() and 1 <= int(raw) <= len(choices):
+                return list(choices[int(raw) - 1][1])
+            keys = [k.strip() for k in raw.split(",") if k.strip()] if raw else defaults
+            if not keys:
+                print("Nothing chosen; skipped." if choices else "Nothing to match on; skipped.")
+                return None
+            unknown = [k for k in keys if not endpoint.props.get(k)]
+            if not unknown:
+                return keys
+            print(f"Not a property of this thing: {', '.join(unknown)}. "
+                  "Choose from the list above.")
+
     def _name_endpoint(self, endpoint: Endpoint, ignore: bool = False) -> bool:
         name = input("Device name to ignore (Enter to skip): " if ignore
                      else "Device name (Enter to skip): ").strip()
@@ -116,22 +150,9 @@ class Scanner:
         if not cfgmod.NAME_RE.match(name):
             print("Names may contain only letters, digits, _ . -")
             return False
-        defaults = default_match_keys(endpoint)
-        available = [k for k in endpoint.props if not k.startswith("udev_")
-                     and k not in ("syspath", "subsystem", "devtype", "mountpoint")]
-        print(f"Properties you can match on: {', '.join(available)}")
-        while True:
-            raw = input(f"Match on [{', '.join(defaults)}] "
-                        "(Enter to accept, or type a list): ").strip()
-            keys = [k.strip() for k in raw.split(",") if k.strip()] if raw else defaults
-            unknown = [k for k in keys if not endpoint.props.get(k)]
-            if not keys:
-                print("Nothing to match on; skipped.")
-                return False
-            if not unknown:
-                break
-            print(f"Not a property of this thing: {', '.join(unknown)}. "
-                  "Choose from the list above.")
+        keys = self._choose_keys(endpoint)
+        if not keys:
+            return False
         match = build_match(endpoint, keys)
         level = strength(match)
         print(f"Match strength: {level} — {strength_note(level)}")

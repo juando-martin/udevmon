@@ -391,7 +391,7 @@ class ScanTests(unittest.TestCase):
     KEY = Endpoint("udev", "/sys/key", {"vendor_id": "1", "product_id": "2", "serial": "S9x7a"})
 
     def test_ignoring_from_scan(self):
-        p, out, prompts = self.prompt([self.HUB, self.KEY], ["i1", "root-hub", "", "y", ""])
+        p, out, prompts = self.prompt([self.HUB, self.KEY], ["i1", "root-hub", "1", "y", ""])
         c = C.load(p)
         self.assertEqual(c.devices["root-hub"].status, "ignored")
         self.assertEqual(c.devices["root-hub"].tags, ())

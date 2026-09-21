@@ -185,10 +185,27 @@ repeated character, or a well-known placeholder (`0123456789ABCDEF`,
 
 ### 5.3 Default keys chosen by scan
 
-- USB: `vendor_id`, `product_id`, `serial` if a good serial exists; otherwise
-  `vendor_id`, `product_id`, `port_path` (medium, flagged).
+- USB: `vendor_id`, `product_id`, `serial` if a good serial exists (a placeholder
+  serial does not count). Otherwise nothing identifies the unit and **nothing is
+  pre-selected**: `scan` offers the choices of §5.3.1 and the user picks one.
 - Filesystem: `fs_uuid`; else `part_uuid`; else `drive_serial`+`fs_label`;
   else `fs_label` (weak, flagged).
+
+#### 5.3.1 USB devices without a serial number
+
+`matching.lacks_identity()` is true for a USB device with no serial, or only a
+placeholder one (§5.2). For it `scan`, when naming, prints that nothing identifies the
+particular unit and offers, without a default:
+
+1. *this model, in this port only*: `vendor_id`, `product_id`, `port_path`
+   (offered only when `port_path` is known);
+2. *this model, in any port*: `vendor_id`, `product_id`.
+
+Or a typed list of properties. Enter alone skips. The result is medium (1) or weak (2), so
+the usual "Save anyway? [y/N]" follows. The event line printed while scanning says there
+is no serial number instead of suggesting keys. `present` and the scan list label such
+a device `[medium: no serial, matches the port]` (`matching.level_label()`): the level
+alone would suggest an identity that a port does not give.
 
 The user can override the keys interactively.
 
@@ -470,6 +487,8 @@ printed by `check` only. Neither changes the exit status.
 - note: an `allow_unnamed = true` action on a tag whose rule is not strong — "any
   hardware presenting these properties can trigger it";
 - note: a tag carried by devices but used by no action;
+- note: a device `match` or a tag rule that uses `port_path` (it only matches in that
+  USB port, and any device of the same model in it matches);
 - note: `tag_mode = "all"` on an action with a single tag; a tag listed in a device's
   `exclude_tags` that has no rule (nothing to opt out of);
 - note: a disabled or ignored device, a disabled action, and an action that only
@@ -605,7 +624,8 @@ The editing commands (`devices add|remove|tag|untag`, `tags add|remove`,
    list, noting any that already belong to a named device (and their tags).
 4. Prompt: choose one or more numbers (`2` or `1,2`, to name a whole stick at
    once) → for each, enter a name → confirm or edit the match keys
-   (default per §5.3, weak/medium warnings shown) → optionally enter tags
+   (default per §5.3, or the choices of §5.3.1 for a device with no serial number;
+   weak/medium warnings shown) → optionally enter tags
    (existing tags are suggested) → device appended to the config.
    `iN` (`i3`, `i1,3`) does the same but saves the devices as `ignored` and asks
    for no tags. Repeat, Enter to continue scanning, `q` to quit.
