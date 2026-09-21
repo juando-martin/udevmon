@@ -12,6 +12,8 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-21
+
 ### Added
 
 - **`instance` and a state folder, to match an unplug with its plug.** Every plug of a
