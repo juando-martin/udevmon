@@ -368,6 +368,16 @@ their events arrived.
 See
 .BR "RUNNING ACTIONS ONE AT A TIME" .
 .TP
+.B retries
+Whole number, default 0.
+When the command exits with a non-zero status it is run again, up to this many more
+times.
+See
+.BR "TRYING AGAIN" .
+.TP
+.B retry_delay
+Seconds, more than 0, default 1: how long to wait between attempts.
+.TP
 .B allow_unnamed
 Boolean, only for actions that use
 .BR tag .
@@ -795,6 +805,41 @@ And a detached
 .I script
 runs entirely unattended, so it is not the place for work that must finish before
 something else starts.
+.SH "TRYING AGAIN"
+A command that can fail for a moment, such as unmounting right after a desktop has
+mounted and is still looking at a drive, can be run again:
+.PP
+.nf
+[[actions]]
+device = "linuxsys"
+on = ["mounted"]
+retries = 10
+retry_delay = 1
+run = ["udisksctl", "unmount", "\-b", "{devnode}"]
+.fi
+.PP
+When the command exits with a non\-zero status it is run again after
+.BR retry_delay ,
+up to
+.B retries
+more times, and each failed attempt is logged.
+It is never retried after a
+.BR timeout ,
+when the program cannot start, or when the action was skipped, because repeating those
+rarely helps.
+Each attempt has its own
+.BR timeout ,
+so the worst case is
+.RI ( retries " + 1) x " timeout
+plus the delays.
+Retrying stops at once when automation is paused or the daemon is stopping, and a
+.B lock
+is held across all the attempts.
+.B retries
+and
+.B retry_delay
+cannot be combined with
+.BR detach .
 .SH "RUNNING ACTIONS ONE AT A TIME"
 The actions of one event run one after another, but different events run at the same
 time (up to
@@ -887,7 +932,12 @@ that is not a boolean or that comes with a
 .BR timeout ,
 a
 .B lock
-that is not a name,
+that is not a name, a
+.B retries
+that is not a whole number of 0 or more, a
+.B retry_delay
+that is not a number above 0, either of them with
+.BR detach ,
 a
 .B tag_mode
 other than

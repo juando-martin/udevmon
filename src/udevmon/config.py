@@ -66,6 +66,8 @@ class Action:
     tag_mode: str = "any"           # tag actions: "any" of the tags, or "all" of them
     detach: bool = False            # start the command and do not wait for it (spec 7.2)
     lock: str | None = None         # actions sharing a lock name never overlap (spec 7.3)
+    retries: int = 0                # run again after a non-zero exit, up to N more times (7.4)
+    retry_delay: float = 1.0        # seconds between attempts
 
     @property
     def targets(self) -> tuple[str, ...]:
@@ -126,7 +128,7 @@ _DAEMON = {"debounce", "udev_filters", "max_workers", "script_dir"}
 _DEVICE = {"description", "match", "tags", "status", "exclude_tags", "vars"}
 _TAG = {"description", "match"}
 _ACTION = {"name", "device", "tag", "on", "run", "timeout", "allow_unnamed", "enabled",
-           "tag_mode", "detach", "lock"}
+           "tag_mode", "detach", "lock", "retries", "retry_delay"}
 
 
 def _names(value, where: str, problems: list[str]) -> tuple[str, ...] | None:
@@ -325,6 +327,18 @@ def parse(data: dict) -> Config:
             problems.append(f"{where}: 'timeout' has no meaning with 'detach' (a detached "
                             "command is not waited for)")
             continue
+        retries, retry_delay = a.get("retries", 0), a.get("retry_delay", 1.0)
+        if not (isinstance(retries, int) and not isinstance(retries, bool) and retries >= 0):
+            problems.append(f"{where}: 'retries' must be a whole number, 0 or more")
+            continue
+        if not (isinstance(retry_delay, (int, float)) and not isinstance(retry_delay, bool)
+                and retry_delay > 0):
+            problems.append(f"{where}: 'retry_delay' must be a number of seconds, more than 0")
+            continue
+        if detach and ("retries" in a or "retry_delay" in a):
+            problems.append(f"{where}: 'retries' and 'retry_delay' have no meaning with "
+                            "'detach' (a detached command's result is not waited for)")
+            continue
         lock = a.get("lock")
         if "lock" in a and not (isinstance(lock, str) and NAME_RE.match(lock)):
             problems.append(f"{where}: 'lock' must be a name (letters, digits, _ . -)")
@@ -373,7 +387,7 @@ def parse(data: dict) -> Config:
             problems.append(f"{where}: invalid timeout")
             continue
         cfg.actions.append(Action(name, devices, tags, on, tuple(run), timeout, allow, enabled,
-                                  tag_mode, detach, lock))
+                                  tag_mode, detach, lock, retries, float(retry_delay)))
 
     if problems:
         raise ConfigError(problems)

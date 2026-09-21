@@ -452,7 +452,9 @@ reload keeps the previous configuration:
 - a placeholder unavailable for the action's event kinds (`{mountpoint}` on
   `connected`; `{tag}` on a `device` action);
 - an invalid `timeout`, a `detach` that is not a boolean, or a `timeout` together with
-  `detach = true` (§7.2); a `lock` that is not a name (§7.3);
+  `detach = true` (§7.2); a `lock` that is not a name (§7.3); `retries` that is not a
+whole number of 0 or more, `retry_delay` that is not a number above 0, or either of
+them with `detach` (§7.4);
 - a device `status` other than `"disabled"`, `"ignored"`, `"active"` or `""`, or a
   non-boolean `enabled` (§5.7);
 - `exclude_tags` that is not a name or a non-empty list of names, or that lists a tag
@@ -610,6 +612,19 @@ within one event the jobs still run in file order.
 - The log says (INFO) when a job had to wait. A `lock` is a name (letters, digits,
   `_ . -`); anything else is an error (§6.1).
 
+### 7.4 Retries
+
+`retries` (a whole number, default 0) and `retry_delay` (seconds, more than 0, default 1)
+belong to an action. `ActionRunner._run_with_retries` runs the command up to
+`retries + 1` times: after an attempt that returns a non-zero status it waits
+`retry_delay` and tries again. `run_action` returns None for a timeout, a failure to
+start, a skipped action (unavailable placeholder) and a dry run, and 0 for success, so
+none of those is retried. Before each retry the runner checks that automation is not
+paused, and it waits on the event that `shutdown()` sets, so a stop interrupts the wait
+and ends the retrying. Every failed attempt is logged (WARNING), and after the last one
+`gave up after N attempts`. Each attempt has its own timeout; a `lock` (§7.3) is held
+across all of them. `retries` or `retry_delay` with `detach` is an error (§6.1).
+
 ## 8. CLI
 
 ```
@@ -638,7 +653,7 @@ udevmon tags remove NAME
 udevmon actions list
 udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT ...]
                     [--name NAME] [--timeout SECONDS] [--all-tags]
-                    [--detach] [--lock NAME]
+                    [--detach] [--lock NAME] [--retries N] [--retry-delay S]
                     [--allow-unnamed | --named-only] -- COMMAND [ARG ...]
 udevmon actions remove NAME
 udevmon actions disable|enable NAME...
@@ -648,7 +663,8 @@ udevmon actions set NAME [--allow-unnamed | --named-only
                     [--add-device N ...] [--remove-device N ...]
                     [--add-tag N ...] [--remove-tag N ...]
                     [--all-tags | --any-tags] [--detach | --no-detach]
-                    [--lock NAME | --no-lock] [-- COMMAND ...]
+                    [--lock NAME | --no-lock] [--retries N]
+                    [--retry-delay S] [-- COMMAND ...]
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
                                         what would run (§8.4)
 udevmon pause [--for DURATION]          stop every action (§8.5)

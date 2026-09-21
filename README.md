@@ -922,6 +922,36 @@ run = ["systemd-run", "--user", "--scope", "keepassxc"]
 And a detached **script** runs entirely unattended, so it is not the place for work
 that must finish before something else starts.
 
+### Trying again (`retries`)
+
+A command that can fail for a moment, such as unmounting right after a desktop has
+mounted and is still looking at a drive, can be run again:
+
+```
+udevmon actions add --device linuxsys mounted \
+  --retries 10 --retry-delay 1 -- udisksctl unmount -b "{devnode}"
+```
+
+```toml
+[[actions]]
+device = "linuxsys"
+on = ["mounted"]
+retries = 10         # up to 10 more attempts (default 0: none)
+retry_delay = 1      # seconds between attempts (default 1)
+run = ["udisksctl", "unmount", "-b", "{devnode}"]
+```
+
+When the command exits with a **non-zero status** it is run again after the delay,
+up to `retries` more times, and each failed attempt is logged
+(`attempt 2 of 11 failed with status 1; retrying in 1 s`). It is **never retried after
+a timeout**, when the program cannot start, or when the action was skipped: repeating
+those rarely helps. Each attempt has its own `timeout`, so the worst case is
+`(retries + 1) x timeout` plus the delays. Retrying stops at once when automation is
+paused or the daemon is stopping, and a `lock` is held across all the attempts.
+`retries` and `retry_delay` cannot be combined with `detach`.
+`udevmon actions set NAME --retries N --retry-delay S` changes them (`--retries 0`
+removes the retries).
+
 ### Running actions one at a time (`lock`)
 
 The actions of one event run one after another, but different events run at the same
@@ -989,14 +1019,15 @@ udevmon tags set NAME [--match KEY=VALUE ... | --no-rule]
 udevmon actions list | remove NAME
 udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT...]
                     [--name NAME] [--timeout S] [--all-tags] [--detach]
-                    [--lock NAME] [--allow-unnamed | --named-only]
-                    -- COMMAND...
+                    [--lock NAME] [--retries N] [--retry-delay S]
+                    [--allow-unnamed | --named-only] -- COMMAND...
 udevmon actions set NAME [--allow-unnamed | --named-only
                           | --default-unnamed] [--on EVENTS] [--timeout S]
                     [--add-device NAME ...] [--remove-device NAME ...]
                     [--add-tag NAME ...] [--remove-tag NAME ...]
                     [--all-tags | --any-tags] [--detach | --no-detach]
-                    [--lock NAME | --no-lock] [-- COMMAND...]
+                    [--lock NAME | --no-lock] [--retries N]
+                    [--retry-delay S] [-- COMMAND...]
 udevmon actions disable | enable NAME...
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
                                         what would run (see above)

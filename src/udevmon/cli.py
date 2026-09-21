@@ -307,6 +307,8 @@ def cmd_actions_enable(args):
 
 @_reloads
 def cmd_actions_set(args):
+    if _retry_problem(args):
+        return 1
     on = None
     if args.on is not None:
         on = [k.strip() for k in args.on.split(",") if k.strip()]
@@ -320,12 +322,13 @@ def cmd_actions_set(args):
     targets = _guard(configedit.set_action_options, args.config, args.name,
                      unnamed=args.unnamed, on=on, timeout=args.timeout, run=args.cmd or None,
                      tag_mode=args.tag_mode, detach=args.detach, lock=args.lock,
+                     retries=args.retries, retry_delay=args.retry_delay,
                      add_devices=args.add_device, remove_devices=args.remove_device,
                      add_tags=args.add_tag, remove_tags=args.remove_tag)
     retargeted = any((args.add_device, args.remove_device, args.add_tag, args.remove_tag))
     if (retargeted and targets is None and not args.cmd
-            and (args.unnamed, args.on, args.timeout, args.tag_mode, args.detach, args.lock)
-            == (None,) * 6):
+            and (args.unnamed, args.on, args.timeout, args.tag_mode, args.detach, args.lock,
+                 args.retries, args.retry_delay) == (None,) * 8):
         print(f"Action {args.name!r} already targets that; nothing changed.")
         return 0
     print(f"Updated action {args.name!r}.")
@@ -482,11 +485,27 @@ def cmd_actions_list(args):
         flag += " [all tags]" if x.tag_mode == "all" else ""
         flag += " [detach]" if x.detach else ""
         flag += f" [lock: {x.lock}]" if x.lock else ""
+        flag += f" [retries: {x.retries}]" if x.retries else ""
         off = " [disabled]" if not x.enabled else ""
         print(f"{x.name:<24} {target:<22} on {','.join(x.on):<24} {list(x.run)}{flag}{off}")
     if not cfg.actions:
         print("No actions.")
     return 0
+
+
+def _retry_problem(args) -> bool:
+    """Print and return True when --retries / --retry-delay are out of range."""
+    if args.retries is not None and args.retries < 0:
+        print("error: --retries must be 0 or more", file=sys.stderr)
+        return True
+    if args.retry_delay is not None and args.retry_delay <= 0:
+        print("error: --retry-delay must be greater than 0", file=sys.stderr)
+        return True
+    if (args.retries or args.retry_delay is not None) and getattr(args, "detach", None) is True:
+        print("error: --retries and --retry-delay have no meaning with --detach",
+              file=sys.stderr)
+        return True
+    return False
 
 
 @_reloads
@@ -512,13 +531,15 @@ def cmd_actions_add(args):
     if args.lock is not None and not cfgmod.NAME_RE.match(args.lock):
         print("error: a lock name may contain only letters, digits, _ . -", file=sys.stderr)
         return 1
+    if _retry_problem(args):
+        return 1
     if args.detach and args.timeout is not None:
         print("error: --timeout has no meaning with --detach (a detached command is not "
               "waited for)", file=sys.stderr)
         return 1
     name = _guard(configedit.add_action, args.config, args.name, args.device or (),
                   args.tag or (), on, args.cmd, args.timeout, args.allow_unnamed, args.tag_mode,
-                  args.detach, args.lock)
+                  args.detach, args.lock, args.retries or 0, args.retry_delay)
     print(f"Added action {name!r}.")
     return 0
 
@@ -740,6 +761,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="start the command and do not wait for it (no timeout)")
     x.add_argument("--lock", metavar="NAME",
                    help="actions with the same lock name never run at the same time")
+    x.add_argument("--retries", type=int, metavar="N",
+                   help="run again after a non-zero exit, up to N more times")
+    x.add_argument("--retry-delay", type=float, metavar="SECONDS",
+                   help="seconds between attempts (default 1)")
     grp = x.add_mutually_exclusive_group()
     grp.add_argument("--allow-unnamed", dest="allow_unnamed", action="store_const", const=True,
                      default=None, help="also run for unnamed things matching the tag")
@@ -765,6 +790,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="clear the setting (named devices only, `check` will note it)")
     x.add_argument("--on", metavar="EVENTS", help="replace the events (comma-separated)")
     x.add_argument("--timeout", type=float, metavar="SECONDS")
+    x.add_argument("--retries", type=int, metavar="N",
+                   help="run again after a non-zero exit, up to N more times (0 removes it)")
+    x.add_argument("--retry-delay", type=float, metavar="SECONDS",
+                   help="seconds between attempts")
     lk = x.add_mutually_exclusive_group()
     lk.add_argument("--lock", dest="lock", metavar="NAME", default=None,
                     help="actions with the same lock name never run at the same time")

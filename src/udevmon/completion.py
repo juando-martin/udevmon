@@ -66,7 +66,7 @@ NO_COMPLETION = {("devices", "add"), ("tags", "add")}
 OPTION_VALUE_DESTS = {"config", "dest", "device", "tag", "match", "prop", "on",
                       "add_device", "remove_device", "add_tag", "remove_tag", "exclude_tag",
                       "var", "unset_var", "lock"}
-FREE_TEXT_DESTS = {"name", "timeout", "description", "duration"}
+FREE_TEXT_DESTS = {"name", "timeout", "description", "duration", "retries", "retry_delay"}
 
 HEADER = "# bash completion for udevmon"   # marks a file as ours (uninstall checks it)
 

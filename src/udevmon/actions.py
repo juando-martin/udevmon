@@ -9,6 +9,7 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+from . import pause as pause_flag
 from .config import Action, expand
 from .events import Event
 
@@ -159,6 +160,7 @@ class ActionRunner:
         self.dry_run = dry_run
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="action")
         self._locks: dict[str, FifoLock] = {}
+        self._stopping = threading.Event()      # set by shutdown(): no more retries
 
     def _lock(self, name: str) -> FifoLock:
         return self._locks.setdefault(name, FifoLock(name))
@@ -193,13 +195,43 @@ class ActionRunner:
             if lock.wait(ticket):
                 log.info("action %r waited for lock %r", job.action.name, lock.name)
         try:
-            run_action(job.action, event, job.device, job.tag, dry_run=self.dry_run,
-                       variables=job.vars)
+            self._run_with_retries(event, job)
         except Exception:
             log.exception("action %r crashed", job.action.name)
         finally:
             if lock is not None:
                 lock.release()
 
+    def _run_with_retries(self, event, job):
+        """Run the action; after a non-zero exit run it again, up to ``retries`` more times.
+
+        Not retried: a timeout, a command that cannot start, a skipped or dry run (they
+        return None), and nothing once automation is paused or the daemon is stopping.
+        The lock, if any, is held across the attempts.
+        """
+        action = job.action
+        attempts = action.retries + 1
+        for attempt in range(1, attempts + 1):
+            status = run_action(action, event, job.device, job.tag, dry_run=self.dry_run,
+                                variables=job.vars)
+            if status is None or status == 0:
+                return status
+            if attempt == attempts:
+                if action.retries:
+                    log.warning("action %r gave up after %d attempts (last status %d)",
+                                action.name, attempts, status)
+                return status
+            if pause_flag.is_paused():
+                log.warning("action %r failed with status %d; automation is paused, so not "
+                            "retrying", action.name, status)
+                return status
+            log.warning("action %r attempt %d of %d failed with status %d; retrying in %g s",
+                        action.name, attempt, attempts, status, action.retry_delay)
+            if self._stopping.wait(action.retry_delay):
+                log.warning("action %r: the daemon is stopping, so not retrying", action.name)
+                return status
+        return None
+
     def shutdown(self, wait=False):
+        self._stopping.set()
         self._pool.shutdown(wait=wait, cancel_futures=not wait)

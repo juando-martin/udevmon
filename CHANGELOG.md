@@ -14,6 +14,13 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ### Added
 
+- **`retries` and `retry_delay`** on an action (`actions add --retries N --retry-delay S`,
+  `actions set` the same): a command that exits with a non-zero status is run again after
+  the delay, up to `retries` more times, for things like `udisksctl unmount` right after a
+  desktop mounted the drive. Never after a timeout, when the program cannot start, or when
+  the action was skipped; each attempt has its own timeout; retrying stops when automation
+  is paused or the daemon is stopping; a `lock` is held across the attempts. Not with
+  `detach`. `actions list` and `explain` show it.
 - **`lock = "name"`** on an action (`actions add --lock NAME`, `actions set --lock NAME`
   / `--no-lock`): actions that share a lock name never run at the same time, and run in
   the order their events arrived, so the actions of a plug are never overtaken by those of
