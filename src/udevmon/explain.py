@@ -90,8 +90,9 @@ def explain_endpoint(cfg: cfgmod.Config, endpoint: Endpoint, kinds=None,
                 via = f"tags {' + '.join(job.action.tags)}"
             else:
                 via = f"tag {job.tag}"
-            unnamed = ("" if job.device else ", unnamed") + (", detached" if job.action.detach
-                                                                 else "")
+            unnamed = (("" if job.device else ", unnamed")
+                       + (", detached" if job.action.detach else "")
+                       + (f", lock {job.action.lock}" if job.action.lock else ""))
             lines.append(f"  {kind:<13} runs {job.action.name!r} ({via}{unnamed})")
             lines.append(f"                  {_command(job, event)}")
         for skip in plan.skipped:

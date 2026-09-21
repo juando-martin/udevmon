@@ -119,22 +119,87 @@ def _kill_group(proc, sig=signal.SIGTERM):
         pass
 
 
+class FifoLock:
+    """A mutex that hands the turn out in the order the tickets were taken.
+
+    A ticket is taken when the event is submitted (on the daemon's single main thread, so in
+    the order the events arrived) and used later, by whichever worker runs the job. That
+    keeps the actions of a plug ahead of those of the following unplug even when the unplug
+    reaches a free worker first, which a plain lock would not.
+    """
+
+    def __init__(self, name: str):
+        self.name = name
+        self._cond = threading.Condition()
+        self._next = 0            # the next ticket to hand out
+        self._serving = 0         # the ticket whose turn it is
+
+    def take(self) -> int:
+        with self._cond:
+            ticket = self._next
+            self._next += 1
+            return ticket
+
+    def wait(self, ticket: int) -> bool:
+        """Block until it is ``ticket``'s turn; True if it had to wait."""
+        with self._cond:
+            waited = self._serving != ticket
+            while self._serving != ticket:
+                self._cond.wait()
+            return waited
+
+    def release(self) -> None:
+        with self._cond:
+            self._serving += 1
+            self._cond.notify_all()
+
+
 class ActionRunner:
     def __init__(self, max_workers: int = 4, dry_run: bool = False):
         self.dry_run = dry_run
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="action")
+        self._locks: dict[str, FifoLock] = {}
+
+    def _lock(self, name: str) -> FifoLock:
+        return self._locks.setdefault(name, FifoLock(name))
 
     def submit(self, event: Event, jobs):
-        """Run the jobs (engine.Job) sequentially in one worker."""
-        return self._pool.submit(self._run_all, event, jobs)
+        """Run the jobs (engine.Job) sequentially in one worker.
 
-    def _run_all(self, event, jobs):
-        for job in jobs:
-            try:
-                run_action(job.action, event, job.device, job.tag, dry_run=self.dry_run,
-                           variables=job.vars)
-            except Exception:
-                log.exception("action %r crashed", job.action.name)
+        Called in the order the events arrived: a job whose action has a ``lock`` takes its
+        ticket now, so locked jobs run in that order and never at the same time.
+        """
+        ticketed = [(job, self._lock(job.action.lock).take() if job.action.lock else None)
+                    for job in jobs]
+        return self._pool.submit(self._run_all, event, ticketed)
+
+    def _run_all(self, event, ticketed):
+        done = 0
+        try:
+            for job, ticket in ticketed:
+                done += 1
+                self._run_one(event, job, ticket)
+        except BaseException:
+            for job, ticket in ticketed[done:]:            # never leave a ticket unserved
+                if ticket is not None:
+                    lock = self._lock(job.action.lock)
+                    lock.wait(ticket)
+                    lock.release()
+            raise
+
+    def _run_one(self, event, job, ticket):
+        lock = self._lock(job.action.lock) if ticket is not None else None
+        if lock is not None:
+            if lock.wait(ticket):
+                log.info("action %r waited for lock %r", job.action.name, lock.name)
+        try:
+            run_action(job.action, event, job.device, job.tag, dry_run=self.dry_run,
+                       variables=job.vars)
+        except Exception:
+            log.exception("action %r crashed", job.action.name)
+        finally:
+            if lock is not None:
+                lock.release()
 
     def shutdown(self, wait=False):
         self._pool.shutdown(wait=wait, cancel_futures=not wait)

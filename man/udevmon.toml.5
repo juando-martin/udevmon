@@ -361,6 +361,13 @@ Use it when the command is itself a long-running program, for example
 See
 .BR "PROGRAMS THAT KEEP RUNNING" .
 .TP
+.B lock
+Optional name.
+Actions that share a lock name never run at the same time, and run in the order
+their events arrived.
+See
+.BR "RUNNING ACTIONS ONE AT A TIME" .
+.TP
 .B allow_unnamed
 Boolean, only for actions that use
 .BR tag .
@@ -788,6 +795,50 @@ And a detached
 .I script
 runs entirely unattended, so it is not the place for work that must finish before
 something else starts.
+.SH "RUNNING ACTIONS ONE AT A TIME"
+The actions of one event run one after another, but different events run at the same
+time (up to
+.BR max_workers ).
+So the actions for a plug and for the unplug that follows can overlap.
+Give the actions that must not overlap the same
+.BR lock .
+.PP
+Actions that share a lock name never run at the same time, and they run in the order
+their events arrived: a quick unplug cannot overtake its plug, even if a worker is
+free.
+Actions without a lock, and locks with other names, are not affected, and within one
+event the actions still run in file order.
+The lock lives inside udevmon: there is no lock file, and it does not protect against
+the same script being run by hand.
+.PP
+The lock is held while the command runs and is released as soon as the command has
+exited (for a
+.B detach
+action, as soon as it has started).
+A waiting action occupies one of the
+.B max_workers
+workers, so keep locked actions short; every command has a
+.BR timeout ,
+so a stuck one holds the others for at most that long.
+The log says when an action had to wait.
+.PP
+To choose by what an action does:
+.IP \(bu 3
+a short script, which may leave a helper running with
+.BR & :
+.B lock
+only, held until the script exits;
+.IP \(bu 3
+the long-running program itself:
+.BR "detach = true" ,
+held until it has started;
+.IP \(bu 3
+critical work followed by starting a long-running program: two actions on the same
+event, the first with
+.B lock
+(the work) and the second with
+.B detach
+(the launch), in that order.
 .SH VALIDATION
 .B udevmon check
 and the daemon load the file with the same rules.
@@ -834,6 +885,9 @@ a
 .B detach
 that is not a boolean or that comes with a
 .BR timeout ,
+a
+.B lock
+that is not a name,
 a
 .B tag_mode
 other than

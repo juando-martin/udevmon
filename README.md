@@ -922,6 +922,47 @@ run = ["systemd-run", "--user", "--scope", "keepassxc"]
 And a detached **script** runs entirely unattended, so it is not the place for work
 that must finish before something else starts.
 
+### Running actions one at a time (`lock`)
+
+The actions of one event run one after another, but different events run at the same
+time (up to `max_workers`). So the actions for a plug and for the unplug that follows
+can overlap. Give the actions that must not overlap the same **lock name**:
+
+```
+udevmon actions add --tag yubikey connected,disconnected --lock yubikey -- \
+  yubikey.sh
+udevmon actions set other-script --lock yubikey     # or --no-lock
+```
+
+```toml
+[[actions]]
+tag = "yubikey"
+on = ["connected", "disconnected"]
+lock = "yubikey"
+run = ["yubikey.sh"]
+```
+
+Actions that share a name never run at the same time, and they run **in the order
+their events arrived**: a quick unplug cannot overtake its plug, even if a worker is
+free. Actions without a lock, and locks with other names, are not affected, and
+within one event the actions still run in file order. The lock is inside udevmon:
+there is no lock file, and it does not protect against the same script being run by
+hand (keep a `flock` in the script for that).
+
+The lock is held while the command runs and is released as soon as the command has
+**exited** (or, for `detach`, has **started**). A waiting action occupies one of the
+`max_workers` workers, so keep locked actions short; every command has a `timeout`,
+so a stuck one holds the others for at most that long. The log says when an action
+had to wait. What to use, by what the action does:
+
+| The action | Use | The lock is held |
+|---|---|---|
+| A short script (may leave a helper running with `&`) | `lock` only | Until the script exits |
+| **Is** the long-running program (`keepassxc ...`) | `detach = true` | Until it has started |
+| Does critical work, then must start a long-running program | Two actions on the same event: the first with `lock` (the work), the second with `detach` (the launch), in that order | The first until it exits; the second only for the start |
+
+The third row works because the actions of one event run in file order.
+
 ## Command reference
 
 ```
@@ -948,13 +989,14 @@ udevmon tags set NAME [--match KEY=VALUE ... | --no-rule]
 udevmon actions list | remove NAME
 udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT...]
                     [--name NAME] [--timeout S] [--all-tags] [--detach]
-                    [--allow-unnamed | --named-only] -- COMMAND...
+                    [--lock NAME] [--allow-unnamed | --named-only]
+                    -- COMMAND...
 udevmon actions set NAME [--allow-unnamed | --named-only
                           | --default-unnamed] [--on EVENTS] [--timeout S]
                     [--add-device NAME ...] [--remove-device NAME ...]
                     [--add-tag NAME ...] [--remove-tag NAME ...]
                     [--all-tags | --any-tags] [--detach | --no-detach]
-                    [-- COMMAND...]
+                    [--lock NAME | --no-lock] [-- COMMAND...]
 udevmon actions disable | enable NAME...
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
                                         what would run (see above)

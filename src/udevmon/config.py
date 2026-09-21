@@ -65,6 +65,7 @@ class Action:
     enabled: bool = True
     tag_mode: str = "any"           # tag actions: "any" of the tags, or "all" of them
     detach: bool = False            # start the command and do not wait for it (spec 7.2)
+    lock: str | None = None         # actions sharing a lock name never overlap (spec 7.3)
 
     @property
     def targets(self) -> tuple[str, ...]:
@@ -125,7 +126,7 @@ _DAEMON = {"debounce", "udev_filters", "max_workers", "script_dir"}
 _DEVICE = {"description", "match", "tags", "status", "exclude_tags", "vars"}
 _TAG = {"description", "match"}
 _ACTION = {"name", "device", "tag", "on", "run", "timeout", "allow_unnamed", "enabled",
-           "tag_mode", "detach"}
+           "tag_mode", "detach", "lock"}
 
 
 def _names(value, where: str, problems: list[str]) -> tuple[str, ...] | None:
@@ -324,6 +325,10 @@ def parse(data: dict) -> Config:
             problems.append(f"{where}: 'timeout' has no meaning with 'detach' (a detached "
                             "command is not waited for)")
             continue
+        lock = a.get("lock")
+        if "lock" in a and not (isinstance(lock, str) and NAME_RE.match(lock)):
+            problems.append(f"{where}: 'lock' must be a name (letters, digits, _ . -)")
+            continue
         enabled = a.get("enabled", True)
         if not isinstance(enabled, bool):
             problems.append(f"{where}: 'enabled' must be true or false")
@@ -368,7 +373,7 @@ def parse(data: dict) -> Config:
             problems.append(f"{where}: invalid timeout")
             continue
         cfg.actions.append(Action(name, devices, tags, on, tuple(run), timeout, allow, enabled,
-                                  tag_mode, detach))
+                                  tag_mode, detach, lock))
 
     if problems:
         raise ConfigError(problems)

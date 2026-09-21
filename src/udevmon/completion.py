@@ -65,7 +65,7 @@ NO_COMPLETION = {("devices", "add"), ("tags", "add")}
 # Options that take a value: those completed by _option_value, and free text.
 OPTION_VALUE_DESTS = {"config", "dest", "device", "tag", "match", "prop", "on",
                       "add_device", "remove_device", "add_tag", "remove_tag", "exclude_tag",
-                      "var", "unset_var"}
+                      "var", "unset_var", "lock"}
 FREE_TEXT_DESTS = {"name", "timeout", "description", "duration"}
 
 HEADER = "# bash completion for udevmon"   # marks a file as ours (uninstall checks it)
@@ -190,6 +190,8 @@ def _names(kind: str, cfg, positionals=()) -> list[str]:
         return sorted(cfg.all_tag_names())
     if kind == "declared-tag":
         return sorted(cfg.tags)
+    if kind == "lock":
+        return sorted({a.lock for a in cfg.actions if a.lock})
     if kind == "rule-tag":               # tags a rule can select (the ones worth opting out of)
         return sorted(t for t, tag in cfg.tags.items() if tag.match)
     if kind == "device-exclusion":       # the rule tags the device typed just before opts out of
@@ -266,6 +268,9 @@ def _option_value(st: _State, cur: str):
     if dest in ("device", "tag"):
         cfg = _config(st.config)
         return WORDS, _startswith(_names("device" if dest == "device" else "tag", cfg), cur)
+    if dest == "lock":                   # the lock names already in use
+        cfg = _config(st.config)
+        return WORDS, _startswith(_names("lock", cfg), cur)
     if dest == "var":                    # NAME=VALUE: offer the names in use, then free text
         return NOSPACE, _startswith([f"{k}=" for k in _variables(_config(st.config))], cur)
     if dest == "unset_var":

@@ -60,7 +60,7 @@ def render_tag(name, match, description="") -> str:
 
 
 def render_action(name, devices, tags, on, run, timeout=None, allow_unnamed=None,
-                  tag_mode=None, detach=False) -> str:
+                  tag_mode=None, detach=False, lock=None) -> str:
     lines = ["[[actions]]", f"name = {_s(name)}"]
     lines.append(f"device = {_name_or_list(devices)}" if devices
                  else f"tag = {_name_or_list(tags)}")
@@ -71,6 +71,8 @@ def render_action(name, devices, tags, on, run, timeout=None, allow_unnamed=None
         lines.append(f"tag_mode = {_s(tag_mode)}")
     if detach:
         lines.append("detach = true")
+    if lock:
+        lines.append(f"lock = {_s(lock)}")
     if allow_unnamed is not None:
         lines.append(f"allow_unnamed = {'true' if allow_unnamed else 'false'}")
     return "\n".join(lines) + "\n"
@@ -148,7 +150,7 @@ def add_tag(path: Path, name, match, description="") -> None:
 
 
 def add_action(path: Path, name, devices, tags, on, run, timeout=None, allow_unnamed=None,
-               tag_mode=None, detach=False) -> str:
+               tag_mode=None, detach=False, lock=None) -> str:
     existing = cfgmod.load(path)
     if not name:
         base = f"{(devices or tags)[0]}-{'-'.join(on)}"
@@ -159,7 +161,7 @@ def add_action(path: Path, name, devices, tags, on, run, timeout=None, allow_unn
     elif name in {a.name for a in existing.actions}:
         raise cfgmod.ConfigError([f"action {name!r} already exists"])
     _edit(path, _append(path, render_action(name, devices, tags, on, run, timeout, allow_unnamed,
-                                            tag_mode, detach)),
+                                            tag_mode, detach, lock)),
           lambda c: [a for a in c.actions if a.name == name][0])
     return name
 
@@ -392,8 +394,11 @@ def _retarget(kind: str, what: str, current, add, remove, action: str) -> list[s
 
 def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
                        on=None, timeout: float | None = None, run=None, tag_mode=None,
-                       detach: bool | None = None, add_devices=(), remove_devices=(), add_tags=(), remove_tags=()):
-    """Change an action's ``allow_unnamed``, events, timeout, command or targets.
+                       detach: bool | None = None, lock: str | None = None,
+                       add_devices=(), remove_devices=(), add_tags=(), remove_tags=()):
+    """Change an action's ``allow_unnamed``, events, timeout, command, lock or targets.
+
+    ``lock`` is a lock name, or "" to remove the action's lock.
 
     ``unnamed`` is "allow", "named-only" or "default" (back to not stated). An action
     targets devices or tags, never both, and keeps at least one. Returns the new list of
@@ -404,18 +409,20 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
     if action is None:
         raise cfgmod.ConfigError([f"no such action {name!r}"])
     device_edit, tag_edit = bool(add_devices or remove_devices), bool(add_tags or remove_tags)
+    if lock:
+        _check_name("lock", lock)
     if run is not None and not (run and all(isinstance(x, str) for x in run)):
         raise cfgmod.ConfigError(["the command must not be empty"])
     if tag_mode is not None and action.devices:
         raise cfgmod.ConfigError([f"action {name!r} targets devices; --all-tags/--any-tags only "
                                   "apply to actions that use tags"])
     if (unnamed is None and on is None and timeout is None and run is None and tag_mode is None
-            and detach is None and not (device_edit or tag_edit)):
+            and detach is None and lock is None and not (device_edit or tag_edit)):
         raise cfgmod.ConfigError(["nothing to change: give --allow-unnamed, --named-only, "
                                   "--default-unnamed, --on, --timeout, --add-device, "
                                   "--remove-device, --add-tag, --remove-tag, --all-tags, "
-                                  "--any-tags, --detach, --no-detach or a new command "
-                                  "after --"])
+                                  "--any-tags, --detach, --no-detach, --lock, --no-lock or a "
+                                  "new command after --"])
     key = None
     targets = None
     if device_edit and tag_edit:
@@ -441,7 +448,7 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
             targets = None                                  # already as asked: no edit
             key = None
             if (unnamed is None and on is None and timeout is None and run is None
-                    and tag_mode is None and detach is None):
+                    and tag_mode is None and detach is None and lock is None):
                 return None
 
     def change(doc):
@@ -459,6 +466,10 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
             item["on"] = array
         if timeout is not None:
             item["timeout"] = int(timeout) if float(timeout).is_integer() else float(timeout)
+        if lock:
+            item["lock"] = lock
+        elif lock == "":
+            item.pop("lock", None)
         if detach is True:
             item["detach"] = True
         elif detach is False:
@@ -497,6 +508,7 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
                 or (run is not None and a.run != tuple(run))
                 or (tag_mode is not None and a.tag_mode != tag_mode)
                 or (detach is not None and a.detach != detach)
+                or (lock is not None and a.lock != (lock or None))
                 or (key is not None and list(a.targets) != targets)):
             raise cfgmod.ConfigError([f"the change to {name!r} did not take effect"])
     _edit(path, _edited(path, change), verify)

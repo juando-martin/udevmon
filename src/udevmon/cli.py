@@ -319,13 +319,13 @@ def cmd_actions_set(args):
         return 1
     targets = _guard(configedit.set_action_options, args.config, args.name,
                      unnamed=args.unnamed, on=on, timeout=args.timeout, run=args.cmd or None,
-                     tag_mode=args.tag_mode, detach=args.detach,
+                     tag_mode=args.tag_mode, detach=args.detach, lock=args.lock,
                      add_devices=args.add_device, remove_devices=args.remove_device,
                      add_tags=args.add_tag, remove_tags=args.remove_tag)
     retargeted = any((args.add_device, args.remove_device, args.add_tag, args.remove_tag))
     if (retargeted and targets is None and not args.cmd
-            and (args.unnamed, args.on, args.timeout, args.tag_mode, args.detach)
-            == (None,) * 5):
+            and (args.unnamed, args.on, args.timeout, args.tag_mode, args.detach, args.lock)
+            == (None,) * 6):
         print(f"Action {args.name!r} already targets that; nothing changed.")
         return 0
     print(f"Updated action {args.name!r}.")
@@ -481,6 +481,7 @@ def cmd_actions_list(args):
         flag = {True: " [allow_unnamed]", False: " [named only]", None: ""}[x.allow_unnamed]
         flag += " [all tags]" if x.tag_mode == "all" else ""
         flag += " [detach]" if x.detach else ""
+        flag += f" [lock: {x.lock}]" if x.lock else ""
         off = " [disabled]" if not x.enabled else ""
         print(f"{x.name:<24} {target:<22} on {','.join(x.on):<24} {list(x.run)}{flag}{off}")
     if not cfg.actions:
@@ -508,13 +509,16 @@ def cmd_actions_add(args):
     if args.tag_mode and not args.tag:
         print("error: --all-tags only applies with --tag", file=sys.stderr)
         return 1
+    if args.lock is not None and not cfgmod.NAME_RE.match(args.lock):
+        print("error: a lock name may contain only letters, digits, _ . -", file=sys.stderr)
+        return 1
     if args.detach and args.timeout is not None:
         print("error: --timeout has no meaning with --detach (a detached command is not "
               "waited for)", file=sys.stderr)
         return 1
     name = _guard(configedit.add_action, args.config, args.name, args.device or (),
                   args.tag or (), on, args.cmd, args.timeout, args.allow_unnamed, args.tag_mode,
-                  args.detach)
+                  args.detach, args.lock)
     print(f"Added action {name!r}.")
     return 0
 
@@ -734,6 +738,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "(default: any of them)")
     x.add_argument("--detach", action="store_true",
                    help="start the command and do not wait for it (no timeout)")
+    x.add_argument("--lock", metavar="NAME",
+                   help="actions with the same lock name never run at the same time")
     grp = x.add_mutually_exclusive_group()
     grp.add_argument("--allow-unnamed", dest="allow_unnamed", action="store_const", const=True,
                      default=None, help="also run for unnamed things matching the tag")
@@ -759,6 +765,11 @@ def build_parser() -> argparse.ArgumentParser:
                      help="clear the setting (named devices only, `check` will note it)")
     x.add_argument("--on", metavar="EVENTS", help="replace the events (comma-separated)")
     x.add_argument("--timeout", type=float, metavar="SECONDS")
+    lk = x.add_mutually_exclusive_group()
+    lk.add_argument("--lock", dest="lock", metavar="NAME", default=None,
+                    help="actions with the same lock name never run at the same time")
+    lk.add_argument("--no-lock", dest="lock", action="store_const", const="",
+                    help="remove the action's lock")
     det = x.add_mutually_exclusive_group()
     det.add_argument("--detach", dest="detach", action="store_const", const=True, default=None,
                      help="start the command and do not wait for it (no timeout)")

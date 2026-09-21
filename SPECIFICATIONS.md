@@ -452,7 +452,7 @@ reload keeps the previous configuration:
 - a placeholder unavailable for the action's event kinds (`{mountpoint}` on
   `connected`; `{tag}` on a `device` action);
 - an invalid `timeout`, a `detach` that is not a boolean, or a `timeout` together with
-  `detach = true` (§7.2);
+  `detach = true` (§7.2); a `lock` that is not a name (§7.3);
 - a device `status` other than `"disabled"`, `"ignored"`, `"active"` or `""`, or a
   non-boolean `enabled` (§5.7);
 - `exclude_tags` that is not a name or a non-empty list of names, or that lists a tag
@@ -587,6 +587,29 @@ program can keep writing without a broken pipe.
 - Everything the actions started belongs to the daemon's service group: stopping the
   systemd service ends it, detached or not.
 
+### 7.3 Locks
+
+An action may name a `lock` (a name). `ActionRunner` keeps one `FifoLock` per name: a
+ticket counter and a "now serving" counter under a condition variable. `submit()` is
+called on the daemon's main thread, in the order events arrive, and takes one ticket
+for every job that has a lock; the worker that later runs the job waits until its
+ticket is being served and serves the next one when the job has finished, however it
+finished (a crash, or an exit that is not an exception, still serves it, and so do the
+tickets of the rest of that event's jobs). So the jobs of one lock run one at a time, in
+arrival order; jobs without a lock, and locks with other names, are not affected;
+within one event the jobs still run in file order.
+
+- **No deadlock:** a job only waits for jobs of earlier events (or earlier in its own
+  event, which run before it in the same worker), and the pool starts tasks in arrival
+  order, so the oldest unfinished job always has a worker; tickets follow arrival order
+  for every lock, so two locks taken in opposite orders by two events cannot cycle.
+- **Bounded wait:** every command has a `timeout`. A `detach`ed command releases the
+  lock once started; any other releases it when its process has exited (§7.2), whatever
+  it left running.
+- A waiting job occupies one worker (`max_workers`); locks are for short sections.
+- The log says (INFO) when a job had to wait. A `lock` is a name (letters, digits,
+  `_ . -`); anything else is an error (§6.1).
+
 ## 8. CLI
 
 ```
@@ -615,8 +638,8 @@ udevmon tags remove NAME
 udevmon actions list
 udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT ...]
                     [--name NAME] [--timeout SECONDS] [--all-tags]
-                    [--detach] [--allow-unnamed | --named-only]
-                    -- COMMAND [ARG ...]
+                    [--detach] [--lock NAME]
+                    [--allow-unnamed | --named-only] -- COMMAND [ARG ...]
 udevmon actions remove NAME
 udevmon actions disable|enable NAME...
 udevmon actions set NAME [--allow-unnamed | --named-only
@@ -625,7 +648,7 @@ udevmon actions set NAME [--allow-unnamed | --named-only
                     [--add-device N ...] [--remove-device N ...]
                     [--add-tag N ...] [--remove-tag N ...]
                     [--all-tags | --any-tags] [--detach | --no-detach]
-                    [-- COMMAND ...]
+                    [--lock NAME | --no-lock] [-- COMMAND ...]
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
                                         what would run (§8.4)
 udevmon pause [--for DURATION]          stop every action (§8.5)

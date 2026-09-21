@@ -29,6 +29,7 @@ match = { fs_type = ["ext4", "exfat"] }
 
 [[actions]]
 name = "log"
+lock = "usbtest"
 tag = "usbtest"
 on = ["connected"]
 run = ["true"]
@@ -171,7 +172,7 @@ class EngineTests(unittest.TestCase):
                          {"--allow-unnamed", "--named-only", "--default-unnamed", "--on",
                           "--timeout", "--no-reload", "--help", "--add-device",
                           "--remove-device", "--add-tag", "--remove-tag", "--all-tags", "--any-tags",
-                          "--detach", "--no-detach"})
+                          "--detach", "--no-detach", "--lock", "--no-lock"})
         self.assertEqual(self.words("udevmon actions set log --timeout "), [])   # free text
         self.assertIn("--no-reload", self.words("udevmon devices ignore --"))
 

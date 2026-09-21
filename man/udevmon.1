@@ -377,7 +377,7 @@ Rename a tag wherever it is used.
 .B udevmon actions list
 List the actions with their targets, events and command.
 .TP
-.B udevmon actions add (\-\-device \fINAME\fR ... | \-\-tag \fINAME\fR ...) \fIEVENT\fR[,\fIEVENT\fR...] [\fB\-\-name \fINAME\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-all\-tags\fR] [\fB\-\-detach\fR] [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR] \-\- \fICOMMAND\fR [\fIARG\fR...]
+.B udevmon actions add (\-\-device \fINAME\fR ... | \-\-tag \fINAME\fR ...) \fIEVENT\fR[,\fIEVENT\fR...] [\fB\-\-name \fINAME\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-all\-tags\fR] [\fB\-\-detach\fR] [\fB\-\-lock \fINAME\fR] [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR] \-\- \fICOMMAND\fR [\fIARG\fR...]
 Add an action.
 Options go before the
 .BR \-\- ;
@@ -406,6 +406,10 @@ starts the command and does not wait for it (no timeout, so it cannot be combine
 with
 .BR \-\-timeout ):
 use it when the command is itself a long-running program.
+.B \-\-lock
+gives the action a lock name: actions that share one never run at the same time and
+run in the order their events arrived (see
+.BR udevmon.toml (5)).
 .B \-\-allow\-unnamed
 and
 .B \-\-named\-only
@@ -423,7 +427,7 @@ An action created by hand without a
 .B name
 line cannot be removed this way; edit the file.
 .TP
-.B udevmon actions set \fINAME\fR [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR | \fB\-\-default\-unnamed\fR] [\fB\-\-on \fIEVENTS\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-add\-device \fINAME\fR ...] [\fB\-\-remove\-device \fINAME\fR ...] [\fB\-\-add\-tag \fINAME\fR ...] [\fB\-\-remove\-tag \fINAME\fR ...] [\fB\-\-all\-tags\fR | \fB\-\-any\-tags\fR] [\fB\-\-detach\fR | \fB\-\-no\-detach\fR] [\fB\-\- \fICOMMAND\fR ...]
+.B udevmon actions set \fINAME\fR [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR | \fB\-\-default\-unnamed\fR] [\fB\-\-on \fIEVENTS\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-add\-device \fINAME\fR ...] [\fB\-\-remove\-device \fINAME\fR ...] [\fB\-\-add\-tag \fINAME\fR ...] [\fB\-\-remove\-tag \fINAME\fR ...] [\fB\-\-all\-tags\fR | \fB\-\-any\-tags\fR] [\fB\-\-detach\fR | \fB\-\-no\-detach\fR] [\fB\-\-lock \fINAME\fR | \fB\-\-no\-lock\fR] [\fB\-\- \fICOMMAND\fR ...]
 Change an action without removing and adding it again.
 .B \-\-on
 replaces the events (comma\-separated).
@@ -470,6 +474,10 @@ makes the action start its command and not wait for it, and
 goes back to waiting (see
 .BR udevmon.toml (5)).
 An action with an explicit timeout cannot be detached.
+.B \-\-lock
+sets the action's lock name and
+.B \-\-no\-lock
+removes it.
 .IP
 A command after
 .B \-\-

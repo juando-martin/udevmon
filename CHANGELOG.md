@@ -14,6 +14,13 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ### Added
 
+- **`lock = "name"`** on an action (`actions add --lock NAME`, `actions set --lock NAME`
+  / `--no-lock`): actions that share a lock name never run at the same time, and run in
+  the order their events arrived, so the actions of a plug are never overtaken by those of
+  the unplug that follows. Not affected: actions without a lock, other lock names, and the
+  file order within one event. Released when the command exits (or, for `detach`, has
+  started), also after a crash. `actions list` and `explain` show it, and the log says
+  when an action had to wait. See "Running actions one at a time" in the README.
 - **`detach = true`** on an action (`actions add --detach`, `actions set --detach` /
   `--no-detach`): the command is started in its own session and not waited for, for a
   command that is itself a long-running program such as `keepassxc`. No timeout (setting
