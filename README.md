@@ -781,13 +781,14 @@ formatting, and save the previous version as `config.toml.bak`.
 - `udevmon check` also warns when an action's program can't be found or isn't
   executable (say, a mistyped script path). The daemon logs the same warning
   when it starts and on every reload, using *its own* `PATH`, which under
-  systemd is often shorter than your shell's.
+  systemd is often shorter than your shell's (see `script_dir` below).
 
 ```toml
 [daemon]                       # every setting here is optional
 debounce = 1.0                 # ignore repeats within N seconds
 max_workers = 4                # max events handled in parallel
 udev_filters = ["usb/usb_device"]
+script_dir = ["~/.local/udev/scripts"]   # where bare command names live
 
 [devices.backup-disk]
 description = "Weekly backup drive"
@@ -845,6 +846,17 @@ use letters, digits, `_`, `.` and `-`.
   the command itself. If you need a shell, ask for one explicitly:
   `run = ["sh", "-c", "cd \"$1\" && ls | wc -l >> ~/count.log", "sh", "{mountpoint}"]`
 - A leading `~` in an argument is expanded to your home directory.
+- **`script_dir`** (under `[daemon]`, a folder or a list of folders) says where
+  your own scripts live. A command given by bare name (`run = ["backup.sh", ...]`)
+  is then looked for in those folders, in order, and if it is in none of them, only
+  in the standard system paths (`/usr/local/sbin`, `/usr/local/bin`, `/usr/sbin`,
+  `/usr/bin`, `/sbin`, `/bin`). The daemon's own `PATH` is **not** used, so the
+  command is found the same way under systemd and in a terminal. The lookup happens
+  at every event, so a script you add later is found without a reload, and
+  `udevmon explain` shows the full path it will run. Without `script_dir` nothing
+  changes: bare names use the `PATH`. A command with a `/` in it is used as
+  written. `udevmon check` warns about a folder that does not exist and about a
+  command found in none of them.
 - `{var_NAME}` is a variable of the device (see
   [Variables per device](#variables-per-device)).
 - `{name}` is replaced by a property value: `{mountpoint}`, `{serial}`,
@@ -1036,9 +1048,9 @@ trust the *contents* of the device without care.
   all. `udevmon -v run` logs the same reasons, and `udevmon check` explains
   the notes about `allow_unnamed`.
 - **The daemon says a command was not found.** It checked with its own
-  `PATH`. Under systemd that is often shorter than your shell's, so use the
-  full path to the program in `run`, or put the directory on the service's
-  `PATH`.
+  `PATH`. Under systemd that is often shorter than your shell's, so put your
+  scripts' folder in `script_dir`, use the full path to the program in `run`, or
+  put the directory on the service's `PATH`.
 - **Filesystem events never fire.** Check that udisks2 is running
   (`systemctl status udisks2`) and that the drive is mounted through it (for
   example by your desktop's automounter or `udisksctl mount`). Mounts done
@@ -1054,7 +1066,7 @@ trust the *contents* of the device without care.
 - **"udevmon is already running".** Only one daemon runs per user. Stop the
   service (`systemctl --user stop udevmon`) before running it in a terminal.
 - **The command isn't found.** Services don't always see the same `PATH` as
-  your shell. Use full paths in `run`.
+  your shell. Set `script_dir`, or use full paths in `run`.
 
 ## Limitations
 

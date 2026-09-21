@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import NamedTuple
 
 from . import pause as pause_flag
-from .config import Action, Config
+from .config import Action, Config, resolve_program, uses_script_dir
 from .events import Event
 from .matching import resolve
 
@@ -61,6 +62,22 @@ class Engine:
             if skipped is not None:
                 skipped.append(Skip(action, reason))
 
+        def found(action):
+            """The action with its program resolved through script_dir; None (and a skip)
+            when it is set but the program is nowhere to be found."""
+            settings = self.config.settings
+            if not uses_script_dir(settings, action.run[0]):
+                return action
+            path = resolve_program(settings, action.run[0])
+            if path is None:
+                reason = (f"program {action.run[0]!r} not found in script_dir or the "
+                          "standard system paths")
+                skip(action, reason)
+                if skipped is None:                   # a real event, not `explain`: say so
+                    log.warning("%s: action %r skipped: %s", event.kind, action.name, reason)
+                return None
+            return replace(action, run=(path, *action.run[1:]))
+
         if res.ignored:                               # an ignored device silences everything
             log.debug("%s: ignored (%s)", event.kind, ", ".join(d.name for d in res.ignored))
             return jobs
@@ -78,7 +95,9 @@ class Engine:
                 if device is None:                    # its own actions are off for a disabled device
                     skip(action, f"device {listed[0].name!r} is disabled")
                     continue
-                jobs.append(Job(action, device, None, self._vars(device)))
+                resolved = found(action)
+                if resolved is not None:
+                    jobs.append(Job(resolved, device, None, self._vars(device)))
                 continue
             if action.tag_mode == "all":                  # every listed tag is needed
                 tag = action.tags[0] if all(t in res.tags for t in action.tags) else None
@@ -94,7 +113,9 @@ class Engine:
                              "set allow_unnamed = true")
                 continue
             device = res.named[0].name if named else None
-            jobs.append(Job(action, device, tag, self._vars(device)))
+            resolved = found(action)
+            if resolved is not None:
+                jobs.append(Job(resolved, device, tag, self._vars(device)))
         return jobs
 
     def _vars(self, device: str | None) -> Mapping:

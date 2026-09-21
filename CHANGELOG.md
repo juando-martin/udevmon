@@ -14,6 +14,13 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ### Added
 
+- **`[daemon] script_dir`**, a folder or a list of folders for your own scripts. A
+  command given by bare name is looked for in them, in order, and then only in the
+  standard system paths (`/usr/local/sbin`, `/usr/local/bin`, `/usr/sbin`, `/usr/bin`,
+  `/sbin`, `/bin`), never in the daemon's own `PATH`, so it is found the same way
+  under systemd and in a terminal. Resolved at every event (a script added later
+  needs no reload), shown in full by `explain`, and checked by `check`. Without it
+  nothing changes.
 - **`scan --all-props` and `present --all-props`** print every property of each thing,
   one per line, including the raw `udev_*` ones that the normal output hides, and mark
   those that change on every plug (they cannot be used in tag rules). It shows the

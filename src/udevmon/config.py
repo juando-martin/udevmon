@@ -75,6 +75,7 @@ class Settings:
     debounce: float = 1.0
     udev_filters: tuple[str, ...] = ("usb/usb_device",)
     max_workers: int = 4
+    script_dir: tuple[str, ...] = ()        # folders searched for a command given by bare name
 
 
 @dataclass
@@ -119,7 +120,7 @@ def expand(argv, props) -> list[str]:
 
 
 _TOP = {"daemon", "devices", "tags", "actions"}
-_DAEMON = {"debounce", "udev_filters", "max_workers"}
+_DAEMON = {"debounce", "udev_filters", "max_workers", "script_dir"}
 _DEVICE = {"description", "match", "tags", "status", "exclude_tags", "vars"}
 _TAG = {"description", "match"}
 _ACTION = {"name", "device", "tag", "on", "run", "timeout", "allow_unnamed", "enabled",
@@ -161,9 +162,13 @@ def parse(data: dict) -> Config:
             raise ValueError
         if not (isinstance(filters, list) and all(isinstance(f, str) and f for f in filters)):
             raise ValueError
-        cfg.settings = Settings(debounce, tuple(filters), workers)
+        dirs = d.get("script_dir", [])
+        dirs = [dirs] if isinstance(dirs, str) else dirs
+        if not (isinstance(dirs, list) and all(isinstance(x, str) and x for x in dirs)):
+            raise ValueError
+        cfg.settings = Settings(debounce, tuple(filters), workers, tuple(dict.fromkeys(dirs)))
     except (TypeError, ValueError):
-        problems.append("[daemon]: invalid debounce/udev_filters/max_workers")
+        problems.append("[daemon]: invalid debounce/udev_filters/max_workers/script_dir")
 
     # ---- devices
     for name, a in (data.get("devices") or {}).items():
@@ -443,6 +448,33 @@ def _advise(cfg: Config) -> None:
                                  "affected)")
 
 
+SYSTEM_PATHS = ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin")
+
+
+def find_program(name: str, dirs) -> str | None:
+    """The first executable file called ``name`` in ``dirs`` (``~`` expanded), or None."""
+    for d in dirs:
+        candidate = os.path.join(os.path.expanduser(d), name)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def resolve_program(settings: Settings, program: str) -> str | None:
+    """Where a command given by bare name is found when ``script_dir`` is set: the folders
+    in order, then only the standard system paths (the daemon's own PATH is ignored, so
+    it behaves the same under systemd and in a terminal). None when it is not found.
+
+    Only meaningful when ``settings.script_dir`` is set and ``program`` is a bare name.
+    """
+    return find_program(program, (*settings.script_dir, *SYSTEM_PATHS))
+
+
+def uses_script_dir(settings: Settings, program: str) -> bool:
+    """Whether ``program`` is looked up through ``script_dir`` (a bare name, no placeholder)."""
+    return bool(settings.script_dir) and "/" not in program and "{" not in program
+
+
 def command_problems(cfg: Config, path: str | None = None) -> list[str]:
     """Actions whose program cannot be run, judged with PATH (default: this process's).
 
@@ -450,9 +482,17 @@ def command_problems(cfg: Config, path: str | None = None) -> list[str]:
     is often shorter than a login shell's PATH.
     """
     problems = []
+    for d in cfg.settings.script_dir:
+        if not os.path.isdir(os.path.expanduser(d)):
+            problems.append(f"script_dir {d!r} is not a folder")
     for a in cfg.actions:
         prog = os.path.expanduser(a.run[0])
         if "{" in prog:                          # decided at run time
+            continue
+        if uses_script_dir(cfg.settings, prog):
+            if resolve_program(cfg.settings, prog) is None:
+                problems.append(f"action {a.name!r}: command {prog!r} was not found in "
+                                "script_dir or the standard system paths")
             continue
         if "/" in prog:
             if not os.path.exists(prog):

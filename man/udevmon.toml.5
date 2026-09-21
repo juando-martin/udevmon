@@ -92,6 +92,31 @@ are experimental and reach the device through its raw
 .BI udev_ name
 properties.
 Changing it needs a daemon restart, not a reload.
+.TP
+.B script_dir
+A folder, or a list of folders (\fB~\fR is expanded), where your own scripts live.
+Default: none.
+A command given by bare name is then looked for in these folders, in order, and if
+it is in none of them, only in the standard system paths
+.RB ( /usr/local/sbin ,
+.BR /usr/local/bin ,
+.BR /usr/sbin ,
+.BR /usr/bin ,
+.BR /sbin ,
+.BR /bin ).
+The daemon's own
+.B PATH
+is not used, so a command is found the same way under systemd and in a terminal.
+The first executable file wins.
+The lookup happens at every event, so a script added later is found without a
+reload.
+A command with a
+.B /
+in it, or that starts with a placeholder, is used as written.
+Without
+.B script_dir
+bare names use the
+.BR PATH .
 .SH "[devices.NAME]"
 A device is a name for one thing: a USB device or a filesystem.
 .TP
@@ -710,10 +735,14 @@ Their output goes to the log (the journal, under systemd).
 Several actions for one event run one after another, in file order.
 A failing action does not stop the next.
 .IP \(bu 3
-The daemon looks for the program with its own
+Without
+.B script_dir
+the daemon looks for the program with its own
 .BR PATH ,
 which under systemd is often shorter than your shell's.
-Use full paths in
+Use
+.B script_dir
+or full paths in
 .BR run .
 .SH VALIDATION
 .B udevmon check

@@ -338,6 +338,7 @@ overridable with `--config`. Unknown keys are errors (catches typos).
 debounce = 1.0                # ignore repeats within N seconds
 udev_filters = ["usb/usb_device"]   # "subsystem" or "subsystem/devtype"
 max_workers = 4
+script_dir = ["~/.local/udev/scripts"]   # bare command names (§7.1)
 
 [devices.backup-disk]
 description = "Weekly backup drive"
@@ -473,6 +474,9 @@ printed by `check` only. Neither changes the exit status.
 - warning: an `allow_unnamed = true` action that uses placeholders derived from
   hardware-supplied values (anything other than `event`, `tag`, `devnode`,
   `syspath`, `port_path`, `subsystem`, `devtype`, `surprise`);
+- warning: a `script_dir` entry that is not a folder, and (with `script_dir` set) an
+  action whose bare command name is in none of the folders nor the standard system
+  paths (computed by `config.command_problems()`, like the next one);
 - warning: a device `match` that uses a volatile key;
 - warning: a device `match` value containing `*` or `?` (literal there; wildcards
   work in tag rules only, §5.4);
@@ -498,6 +502,19 @@ printed by `check` only. Neither changes the exit status.
   targets disabled or ignored devices (so never runs).
 
 ## 7. Daemon (`udevmon run`)
+
+### 7.1 Finding a command (`script_dir`)
+
+`[daemon] script_dir` is a string or a list of strings (`~` expanded), empty by default.
+When it is set, a command whose `run[0]` is a bare name (no `/`, no placeholder) is
+resolved at every event by `Engine.select`: the folders in order, then only
+`config.SYSTEM_PATHS` (`/usr/local/sbin`, `/usr/local/bin`, `/usr/sbin`, `/usr/bin`,
+`/sbin`, `/bin`); the first *executable file* wins and the job's action gets that full
+path (so `explain` shows it). The daemon's `PATH` is not consulted. If nothing is
+found the action is skipped with the reason `program 'x' not found in script_dir or
+the standard system paths` (logged at WARNING for a real event, listed by `explain`).
+When it is not set nothing changes: a bare name is left to `PATH`. Changing
+`script_dir` takes a reload; scripts added afterwards need none.
 
 - Single instance (`flock` on `$XDG_RUNTIME_DIR/udevmon.lock`, which also
   stores the PID on the first line and the resolved config path on the second).
