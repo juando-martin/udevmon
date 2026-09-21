@@ -170,7 +170,8 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(set(self.words("udevmon actions set log --")),
                          {"--allow-unnamed", "--named-only", "--default-unnamed", "--on",
                           "--timeout", "--no-reload", "--help", "--add-device",
-                          "--remove-device", "--add-tag", "--remove-tag", "--all-tags", "--any-tags"})
+                          "--remove-device", "--add-tag", "--remove-tag", "--all-tags", "--any-tags",
+                          "--detach", "--no-detach"})
         self.assertEqual(self.words("udevmon actions set log --timeout "), [])   # free text
         self.assertIn("--no-reload", self.words("udevmon devices ignore --"))
 

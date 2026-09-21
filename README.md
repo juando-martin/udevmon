@@ -874,11 +874,53 @@ use letters, digits, `_`, `.` and `-`.
   `UDEVMON_EVENT`, `UDEVMON_DEVICE` (when the thing is named), `UDEVMON_TAG` (tag actions),
   and `UDEVMON_<PROPERTY>` (for example `UDEVMON_MOUNTPOINT`, `UDEVMON_SERIAL`).
 - Commands run as you, with your home directory as working directory and no
-  standard input. Their output goes to the log.
+  standard input. Their output goes to the log, line by line as it arrives, each
+  line prefixed with the action's name.
 - Several actions for one event run one after another, in file order.
   A failing action does not stop the next.
 - An action that runs longer than its `timeout` is terminated (along with any
   child processes it started).
+
+### Programs that keep running
+
+udevmon waits for the **command** to exit, not for everything it started. A script
+that does its work, starts a program in the background (`keepassxc &`, then
+`disown`) and exits, is finished when it exits: the program keeps running, and
+whatever it writes to its output is still logged. The `timeout` only applies while
+the script itself is running.
+
+When the command **is** the long-running program, say so with `detach`:
+
+```
+udevmon actions add --device backup-disk mounted --detach -- \
+  keepassxc "{mountpoint}/pass.kdbx"
+```
+
+```toml
+[[actions]]
+device = "backup-disk"
+on = ["mounted"]
+detach = true
+run = ["keepassxc", "{mountpoint}/pass.kdbx"]
+```
+
+A detached command is started in its own session and udevmon does not wait for it:
+there is no `timeout` (setting one is an error), the actions after it and a
+`shutdown` are not held up, its output is logged as usual, and its exit status is
+logged when it ends. `udevmon actions set NAME --detach` or `--no-detach` changes it,
+and `actions list` and `explain` show it.
+
+Two limits. Under the systemd service, stopping the service stops everything the
+actions started, detached or not (systemd ends the whole group); from a terminal they
+keep running. To start something that must outlive the service, use
+`systemd-run --user --scope`:
+
+```
+run = ["systemd-run", "--user", "--scope", "keepassxc"]
+```
+
+And a detached **script** runs entirely unattended, so it is not the place for work
+that must finish before something else starts.
 
 ## Command reference
 
@@ -905,13 +947,14 @@ udevmon tags set NAME [--match KEY=VALUE ... | --no-rule]
                       [--description TEXT]
 udevmon actions list | remove NAME
 udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT...]
-                    [--name NAME] [--timeout S] [--all-tags]
+                    [--name NAME] [--timeout S] [--all-tags] [--detach]
                     [--allow-unnamed | --named-only] -- COMMAND...
 udevmon actions set NAME [--allow-unnamed | --named-only
                           | --default-unnamed] [--on EVENTS] [--timeout S]
                     [--add-device NAME ...] [--remove-device NAME ...]
                     [--add-tag NAME ...] [--remove-tag NAME ...]
-                    [--all-tags | --any-tags] [-- COMMAND...]
+                    [--all-tags | --any-tags] [--detach | --no-detach]
+                    [-- COMMAND...]
 udevmon actions disable | enable NAME...
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
                                         what would run (see above)

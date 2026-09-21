@@ -64,6 +64,7 @@ class Action:
     allow_unnamed: bool | None = None   # tag actions only; None = not stated (behaves as False)
     enabled: bool = True
     tag_mode: str = "any"           # tag actions: "any" of the tags, or "all" of them
+    detach: bool = False            # start the command and do not wait for it (spec 7.2)
 
     @property
     def targets(self) -> tuple[str, ...]:
@@ -124,7 +125,7 @@ _DAEMON = {"debounce", "udev_filters", "max_workers", "script_dir"}
 _DEVICE = {"description", "match", "tags", "status", "exclude_tags", "vars"}
 _TAG = {"description", "match"}
 _ACTION = {"name", "device", "tag", "on", "run", "timeout", "allow_unnamed", "enabled",
-           "tag_mode"}
+           "tag_mode", "detach"}
 
 
 def _names(value, where: str, problems: list[str]) -> tuple[str, ...] | None:
@@ -315,6 +316,14 @@ def parse(data: dict) -> Config:
         if "tag_mode" in a and devices:
             problems.append(f"{where}: 'tag_mode' only applies to actions that use 'tag'")
             continue
+        detach = a.get("detach", False)
+        if not isinstance(detach, bool):
+            problems.append(f"{where}: 'detach' must be true or false")
+            continue
+        if detach and "timeout" in a:
+            problems.append(f"{where}: 'timeout' has no meaning with 'detach' (a detached "
+                            "command is not waited for)")
+            continue
         enabled = a.get("enabled", True)
         if not isinstance(enabled, bool):
             problems.append(f"{where}: 'enabled' must be true or false")
@@ -359,7 +368,7 @@ def parse(data: dict) -> Config:
             problems.append(f"{where}: invalid timeout")
             continue
         cfg.actions.append(Action(name, devices, tags, on, tuple(run), timeout, allow, enabled,
-                                  tag_mode))
+                                  tag_mode, detach))
 
     if problems:
         raise ConfigError(problems)

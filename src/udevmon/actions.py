@@ -6,6 +6,7 @@ import logging
 import os
 import signal
 import subprocess
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from .config import Action, expand
@@ -47,7 +48,8 @@ def run_action(action: Action, event: Event, device: str | None, tag: str | None
     if dry_run:
         log.info("[dry-run] action %r would run: %s", action.name, argv)
         return None
-    log.info("action %r: running %s", action.name, argv)
+    log.info("action %r: %s %s", action.name, "starting (detached)" if action.detach
+             else "running", argv)
     try:
         proc = subprocess.Popen(
             argv, cwd=os.path.expanduser("~"), env=build_env(event, device, tag, variables),
@@ -56,22 +58,58 @@ def run_action(action: Action, event: Event, device: str | None, tag: str | None
     except OSError as e:
         log.error("action %r failed to start: %s", action.name, e)
         return None
+    # The output is logged as it arrives, by a reader that outlives the command if it has to:
+    # a program the command leaves running in the background keeps the pipe open, and
+    # waiting for the pipe (instead of the command) made the action look stuck.
+    reader = threading.Thread(target=_pump, args=(action, proc), daemon=True,
+                              name=f"output-{action.name}")
+    reader.start()
+    if action.detach:
+        threading.Thread(target=_reap, args=(action, proc), daemon=True,
+                         name=f"reaper-{action.name}").start()
+        return None
     try:
-        out, _ = proc.communicate(timeout=action.timeout)
+        proc.wait(timeout=action.timeout)
     except subprocess.TimeoutExpired:
         log.error("action %r timed out after %gs; terminating", action.name, action.timeout)
         _kill_group(proc)
         try:
-            out, _ = proc.communicate(timeout=5)
+            proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             _kill_group(proc, signal.SIGKILL)
-            out, _ = proc.communicate()
-        _log_output(action, out)
+            proc.wait()
+        reader.join(timeout=1)
         return None
-    _log_output(action, out)
-    level = logging.INFO if proc.returncode == 0 else logging.WARNING
-    log.log(level, "action %r exited with status %d", action.name, proc.returncode)
+    reader.join(timeout=_DRAIN_WAIT)      # normally the pipe is already closed; not for long
+    _log_exit(action, proc.returncode)
     return proc.returncode
+
+
+_DRAIN_WAIT = 0.2      # seconds to let the reader catch up after the command has exited
+
+
+def _pump(action, proc) -> None:
+    """Log the command's output line by line until its last writer closes the pipe."""
+    try:
+        for line in proc.stdout:
+            log.info("[%s] %s", action.name, line.rstrip("\r\n"))
+    except (OSError, ValueError):                 # the pipe went away under us
+        pass
+    finally:
+        try:
+            proc.stdout.close()
+        except OSError:
+            pass
+
+
+def _reap(action, proc) -> None:
+    """Log how a detached command ended."""
+    _log_exit(action, proc.wait(), "detached ")
+
+
+def _log_exit(action, status: int, kind: str = "") -> None:
+    log.log(logging.INFO if status == 0 else logging.WARNING,
+            "%saction %r exited with status %d", kind, action.name, status)
 
 
 def _kill_group(proc, sig=signal.SIGTERM):
@@ -79,11 +117,6 @@ def _kill_group(proc, sig=signal.SIGTERM):
         os.killpg(proc.pid, sig)
     except ProcessLookupError:
         pass
-
-
-def _log_output(action, out):
-    for line in (out or "").splitlines():
-        log.info("[%s] %s", action.name, line)
 
 
 class ActionRunner:

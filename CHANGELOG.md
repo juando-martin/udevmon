@@ -14,6 +14,12 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ### Added
 
+- **`detach = true`** on an action (`actions add --detach`, `actions set --detach` /
+  `--no-detach`): the command is started in its own session and not waited for, for a
+  command that is itself a long-running program such as `keepassxc`. No timeout (setting
+  one is an error), the actions after it and `shutdown` are not held up, its output is
+  logged and its exit status is logged when it ends. `actions list` and `explain` show
+  it. See "Programs that keep running" in the README.
 - **`[daemon] script_dir`**, a folder or a list of folders for your own scripts. A
   command given by bare name is looked for in them, in order, and then only in the
   standard system paths (`/usr/local/sbin`, `/usr/local/bin`, `/usr/sbin`, `/usr/bin`,
@@ -28,6 +34,12 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ### Fixed
 
+- **A script that leaves a program running in the background** (`keepassxc &`, then
+  exit) made the action look stuck until its `timeout`, log "timed out" and be
+  reported as failed: the program kept the output pipe open and udevmon waited for the
+  pipe, not for the script. udevmon now waits for the command to exit; the program
+  keeps running, and whatever it writes is still logged. Output is also logged line by
+  line as it arrives instead of at the end.
 - **`{udev_NAME}` placeholders** (for example `{udev_id_model}`) in a command made the
   configuration fail to load, although the documentation said raw udev properties can
   be used. They are accepted for every event; a thing that lacks the property makes the

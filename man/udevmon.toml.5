@@ -344,6 +344,22 @@ Seconds, greater than 0, default
 .BR 60 .
 An action that runs longer is terminated, together with any child processes it
 started.
+The timeout only applies while the command itself is running.
+It cannot be combined with
+.BR detach .
+.TP
+.B detach
+Boolean, default false.
+.B "detach = true"
+starts the command and does not wait for it: there is no timeout, the actions after it
+and a
+.B shutdown
+are not held up, its output is logged as usual and its exit status is logged when it
+ends.
+Use it when the command is itself a long-running program, for example
+.BR "run = [\\"keepassxc\\", \\"{mountpoint}/pass.kdbx\\"]" .
+See
+.BR "PROGRAMS THAT KEEP RUNNING" .
 .TP
 .B allow_unnamed
 Boolean, only for actions that use
@@ -744,6 +760,34 @@ Use
 .B script_dir
 or full paths in
 .BR run .
+.SH "PROGRAMS THAT KEEP RUNNING"
+udevmon waits for the
+.I command
+to exit, not for everything it started.
+A script that does its work, starts a program in the background
+.RB ( "keepassxc &" ,
+then
+.BR disown )
+and exits is finished when it exits: the program keeps running, and whatever it
+writes to its output is still logged.
+The
+.B timeout
+only applies while the script itself is running.
+.PP
+When the command is itself the long-running program, set
+.BR detach .
+A detached command runs in its own session and is never waited for.
+.PP
+Two limits.
+Under the systemd service, stopping the service stops everything the actions started,
+detached or not, because systemd ends the whole group; from a terminal they keep
+running.
+To start something that must outlive the service, run it through
+.BR "systemd\\-run \\-\\-user \\-\\-scope" .
+And a detached
+.I script
+runs entirely unattended, so it is not the place for work that must finish before
+something else starts.
 .SH VALIDATION
 .B udevmon check
 and the daemon load the file with the same rules.
@@ -785,6 +829,10 @@ with
 lists a bad event, has an empty
 .BR run ,
 an invalid
+.BR timeout ,
+a
+.B detach
+that is not a boolean or that comes with a
 .BR timeout ,
 a
 .B tag_mode

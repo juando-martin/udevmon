@@ -451,7 +451,8 @@ reload keeps the previous configuration:
 - a tag rule with an empty list, a non-string value, or a volatile key;
 - a placeholder unavailable for the action's event kinds (`{mountpoint}` on
   `connected`; `{tag}` on a `device` action);
-- an invalid `timeout`;
+- an invalid `timeout`, a `detach` that is not a boolean, or a `timeout` together with
+  `detach = true` (§7.2);
 - a device `status` other than `"disabled"`, `"ignored"`, `"active"` or `""`, or a
   non-boolean `enabled` (§5.7);
 - `exclude_tags` that is not a name or a non-empty list of names, or that lists a tag
@@ -564,6 +565,28 @@ When it is not set nothing changes: a bare name is left to `PATH`. Changing
   source; the udisks source attaches when the service appears
   (`Gio.bus_watch_name`).
 
+### 7.2 Running a command
+
+`actions.run_action` starts the command with `Popen` (never a shell), in its own
+session, with stdin closed and stdout and stderr on one pipe. A reader thread logs the
+pipe line by line (`[action] line`) until its last writer closes it; it outlives the
+command if a program the command left running still holds the pipe, so such a
+program can keep writing without a broken pipe.
+
+- **Normal action:** the runner waits for the *process* to exit, with the action's
+  `timeout`, and not for the pipe. It lets the reader catch up for at most 0.2 s, then
+  logs the exit status (INFO for 0, WARNING otherwise) and returns it. On timeout the
+  process group is sent SIGTERM, then SIGKILL after 5 s, and the action returns None.
+  The timeout and the kill apply only while the command itself is running.
+- **`detach = true`:** the command is started the same way and `run_action` returns
+  None at once. A reaper thread logs its exit status when it ends (prefixed
+  `detached`). There is no timeout, so a `timeout` key together with `detach` is an
+  error (§6.1). A command that cannot start is logged as an error either way.
+- The actions of one event run one after another in file order; a detached one
+  does not hold up the next.
+- Everything the actions started belongs to the daemon's service group: stopping the
+  systemd service ends it, detached or not.
+
 ## 8. CLI
 
 ```
@@ -592,7 +615,8 @@ udevmon tags remove NAME
 udevmon actions list
 udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT ...]
                     [--name NAME] [--timeout SECONDS] [--all-tags]
-                    [--allow-unnamed | --named-only] -- COMMAND [ARG ...]
+                    [--detach] [--allow-unnamed | --named-only]
+                    -- COMMAND [ARG ...]
 udevmon actions remove NAME
 udevmon actions disable|enable NAME...
 udevmon actions set NAME [--allow-unnamed | --named-only
@@ -600,7 +624,8 @@ udevmon actions set NAME [--allow-unnamed | --named-only
                     [--on EVENTS] [--timeout SECONDS]
                     [--add-device N ...] [--remove-device N ...]
                     [--add-tag N ...] [--remove-tag N ...]
-                    [--all-tags | --any-tags] [-- COMMAND ...]
+                    [--all-tags | --any-tags] [--detach | --no-detach]
+                    [-- COMMAND ...]
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
                                         what would run (§8.4)
 udevmon pause [--for DURATION]          stop every action (§8.5)
