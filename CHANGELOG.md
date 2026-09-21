@@ -12,6 +12,8 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-21
+
 ### Added
 
 - **Wildcards in tag rules.** `*` (any run of characters) and `?` (one) in a rule
