@@ -324,6 +324,8 @@ description = "Weekly backup drive"
 match = { fs_uuid = "3F2A-91BC" }
 tags = ["backup", "storage"]           # explicit tags (optional)
 # status = "disabled"   # or "ignored"; absent = active (§5.7)
+# exclude_tags = ["storage"]   # opt out of a rule tag (§5.4)
+# vars = { dest = "/srv/backups" }   # {var_dest} in commands (§5.8)
 
 [devices.yubikey]
 match = { vendor_id = "1050", product_id = "0407", serial = "A1B2C3D4E5" }
@@ -334,6 +336,7 @@ match = { vendor_id = "2ce3", product_id = "9563", port_path = "3-3" }
 [tags.storage]                         # rule tag: selected by properties
 description = "Filesystems I care about"
 match = { fs_type = ["ext4", "exfat"] }    # list = any of
+# match = { fs_label = "BACKUP*" }   # * and ? are wildcards (§5.4)
 
 [[actions]]                            # one device
 name = "run-backup"                    # optional; generated if missing
@@ -429,7 +432,14 @@ reload keeps the previous configuration:
   `connected`; `{tag}` on a `device` action);
 - an invalid `timeout`;
 - a device `status` other than `"disabled"`, `"ignored"`, `"active"` or `""`, or a
-  non-boolean `enabled` (§5.7).
+  non-boolean `enabled` (§5.7);
+- `exclude_tags` that is not a name or a non-empty list of names, or that lists a tag
+  also in the device's `tags` (§5.4);
+- `tag_mode` other than `"any"` or `"all"`, or on an action that targets `device`
+  (§5.4);
+- `vars` that is not a table, a variable name that is not lowercase letters, digits
+  and `_` (not starting with a digit), or a non-text value; a `{var_NAME}` that no
+  device defines (§5.8).
 
 ### 6.2 Warnings and notes
 
@@ -444,6 +454,12 @@ printed by `check` only. Neither changes the exit status.
   hardware-supplied values (anything other than `event`, `tag`, `devnode`,
   `syspath`, `port_path`, `subsystem`, `devtype`, `surprise`);
 - warning: a device `match` that uses a volatile key;
+- warning: a device `match` value containing `*` or `?` (literal there; wildcards
+  work in tag rules only, §5.4);
+- warning: an action that uses `{var_NAME}` for a device it can reach (a listed
+  device, or one carrying its tag explicitly) that does not define `NAME`;
+- warning: an `allow_unnamed = true` action that uses a variable (skipped for
+  unnamed things, §5.8);
 - warning: an action whose program cannot be run (`run[0]`, with `~` expanded, is not
   found in `PATH`, does not exist, or is not an executable file; skipped when it
   contains a placeholder). This depends on the environment, so it is computed
@@ -454,6 +470,8 @@ printed by `check` only. Neither changes the exit status.
 - note: an `allow_unnamed = true` action on a tag whose rule is not strong — "any
   hardware presenting these properties can trigger it";
 - note: a tag carried by devices but used by no action;
+- note: `tag_mode = "all"` on an action with a single tag; a tag listed in a device's
+  `exclude_tags` that has no rule (nothing to opt out of);
 - note: a disabled or ignored device, a disabled action, and an action that only
   targets disabled or ignored devices (so never runs).
 

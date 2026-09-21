@@ -771,6 +771,12 @@ match = { vendor_id = "2ce3", product_id = "9563", port_path = "3-3" }
 [tags.storage]                 # a rule tag: things selected by properties
 description = "Filesystems I care about"
 match = { fs_type = ["ext4", "exfat"] }    # a list means "any of"
+# match = { fs_label = "BACKUP*" }         # * and ? are wildcards in a rule
+
+# A device can also have:
+#   exclude_tags = ["storage"]     # opt out of a rule tag
+#   vars = { dest = "/srv/x" }     # used as {var_dest} in commands
+# and an action on several tags: tag_mode = "all"   # default "any"
 
 [[actions]]                    # one device
 name = "run-backup"            # optional

@@ -694,9 +694,17 @@ or a name is used twice for actions;
 .IP \(bu 3
 a device has no
 .B match
-or a non\-string value, or a
+or a non\-string value, a
 .B status
-other than the three allowed;
+other than the three allowed, an
+.B exclude_tags
+that is empty or lists a tag also in its
+.BR tags ,
+or
+.B vars
+that is not a table, has a name that is not lowercase letters, digits and
+.BR _ ,
+or has a value that is not text;
 .IP \(bu 3
 an action names a device that does not exist, has both or neither of
 .B device
@@ -710,14 +718,28 @@ lists a bad event, has an empty
 .BR run ,
 an invalid
 .BR timeout ,
-or a placeholder that is not available for one of its events;
+a
+.B tag_mode
+other than
+.B any
+or
+.BR all ,
+or a placeholder that is not available for one of its events, including a
+.BI { var_NAME }
+that no device defines;
 .IP \(bu 3
 a tag rule uses a key that changes from plug to plug.
 .PP
 Problems that do not stop the file from loading are warnings and notes:
-weak matches, a tag that no device carries and that has no rule (so its action
-never runs), a program that cannot be found or run, disabled things, and
-choices about
+weak matches, a wildcard in a device's
+.B match
+(where it is literal), a tag that no device carries and that has no rule (so its
+action never runs), a program that cannot be found or run, a device that lacks a
+variable an action uses, an
+.B allow_unnamed
+action that uses a variable, an
+.B exclude_tags
+entry with nothing to opt out of, disabled things, and choices about
 .BR allow_unnamed .
 When a reload finds an invalid file, the daemon logs the error and keeps its old
 configuration.
