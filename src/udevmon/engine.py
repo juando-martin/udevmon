@@ -10,7 +10,7 @@ from typing import NamedTuple
 
 from . import pause as pause_flag
 from .config import Action, Config, resolve_program, uses_script_dir
-from .events import Event
+from .events import DISCONNECTED, REMOVED, UNMOUNTED, Event
 from .matching import resolve
 
 log = logging.getLogger("udevmon.engine")
@@ -33,6 +33,20 @@ class Plan(NamedTuple):
     resolution: object
     jobs: list
     skipped: list
+
+
+def presence_ends(event: Event) -> str | None:
+    """The instance whose presence this event ends, else None: ``disconnected`` for a USB
+    device; for a filesystem ``removed``, or ``unmounted`` unless it was a pull
+    (``surprise=1``, when ``removed`` follows)."""
+    instance = event.props.get("instance")
+    if not instance:
+        return None
+    if event.kind in (DISCONNECTED, REMOVED):
+        return instance
+    if event.kind == UNMOUNTED and event.props.get("surprise") != "1":
+        return instance
+    return None
 
 
 class Engine:
@@ -132,6 +146,16 @@ class Engine:
         return paused
 
     def handle(self, event: Event) -> list[Job]:
+        jobs = self._dispatch(event)
+        ended = presence_ends(event)
+        if ended:                        # tidy up after the actions, even when there are none
+            self.runner.submit(event, jobs, ended)
+        elif jobs:
+            self.runner.submit(event, jobs)
+        return jobs
+
+    def _dispatch(self, event: Event) -> list[Job]:
+        """Work out the jobs for an event (debounce and pause included); submits nothing."""
         if self._pause_check():                       # startup and shutdown are held back too
             log.debug("%s: paused, skipped (%s)", event.kind, event.endpoint.key)
             return []
@@ -155,5 +179,4 @@ class Engine:
         self._last[key] = now
         log.info("%s: %s%s, %d action(s)", event.kind, subject if res.named else "unnamed thing",
                  f" [{', '.join(res.tags)}]" if res.tags else "", len(jobs))
-        self.runner.submit(event, jobs)
         return jobs

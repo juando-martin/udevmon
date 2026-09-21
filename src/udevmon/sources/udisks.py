@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import itertools
 import logging
+import time
 from typing import Callable
 
 from ..events import MOUNTED, REMOVED, STARTUP, UNMOUNTED, Endpoint, Event
@@ -45,6 +47,18 @@ class UdisksTracker:
     def __init__(self):
         self.objects: dict[str, dict[str, dict]] = {}
         self._mounted: dict[str, Endpoint] = {}
+        # One `instance` per mount: the same in mounted, startup, unmounted, removed and
+        # shutdown of that mount, and new for the next one. Unique while the daemon runs.
+        self._instances: dict[str, str] = {}
+        self._start = int(time.time())
+        self._counter = itertools.count(1)
+
+    def _new_instance(self, path: str) -> str:
+        self._instances[path] = f"fs-{self._start}-{next(self._counter)}"
+        return self._instances[path]
+
+    def _instance(self, path: str) -> str:
+        return self._instances.get(path) or self._new_instance(path)
 
     # -- device construction -------------------------------------------------
     def _props_for(self, path: str) -> dict[str, str]:
@@ -67,6 +81,7 @@ class UdisksTracker:
         props = self._props_for(path)
         if mountpoint:
             props["mountpoint"] = mountpoint
+        props["instance"] = self._instance(path)
         return Endpoint("udisks", path, props)
 
     def _mount_points(self, path: str) -> list[str]:
@@ -77,20 +92,24 @@ class UdisksTracker:
         """Replace state from GetManagedObjects; fires nothing (priming)."""
         self.objects = {p: {i: dict(v) for i, v in ifs.items()} for p, ifs in managed.items()}
         self._mounted = {}
+        self._instances = {}
         for path in self.objects:
             mps = self._mount_points(path)
             if mps:
+                self._new_instance(path)
                 self._mounted[path] = self._endpoint(path, mps[0])
 
     def _reconcile(self, path: str) -> list[Event]:
         mps = self._mount_points(path)
         was = self._mounted.get(path)
         if mps and was is None:
+            self._new_instance(path)                     # a new mount, a new instance
             endpoint = self._endpoint(path, mps[0])
             self._mounted[path] = endpoint
             return [Event(MOUNTED, endpoint)]
         if not mps and was is not None:                 # a clean unmount
             del self._mounted[path]
+            self._instances.pop(path, None)
             return [Event(UNMOUNTED, _with_surprise(was, False))]
         return []
 
@@ -117,12 +136,14 @@ class UdisksTracker:
             # the device vanished (or its filesystem interface was dropped) while mounted:
             # `unmounted` still fires, as before, then `removed`; both say surprise = "1"
             gone = _with_surprise(self._mounted.pop(path), True)
+            self._instances.pop(path, None)
             events.append(Event(UNMOUNTED, gone))
             events.append(Event(REMOVED, gone))
         for name in iface_names:
             ifaces.pop(name, None)
         if not ifaces:
             del self.objects[path]
+            self._instances.pop(path, None)
         return events
 
     def filesystems(self, include_system: bool = False) -> list[Endpoint]:

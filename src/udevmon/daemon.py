@@ -9,6 +9,7 @@ import signal
 from pathlib import Path
 
 from . import config as cfgmod
+from . import state
 from .actions import ActionRunner
 from .engine import Engine
 from .events import SHUTDOWN, Event
@@ -116,6 +117,7 @@ class Daemon:
             return 1
         for w in [*self.cfg.warnings, *cfgmod.command_problems(self.cfg)]:
             log.warning(w)
+        state.wipe()                             # folders left by a crash or an earlier run
         self.runner = ActionRunner(self.cfg.settings.max_workers, self.dry_run)
         self.engine = Engine(self.cfg, self.runner)
         loop = GLib.MainLoop()
@@ -135,6 +137,7 @@ class Daemon:
             for s in self.sources:
                 s.stop()
             self.runner.shutdown(wait=True)      # let shutdown actions finish
+            state.wipe()
             log.info("udevmon stopped")
         return 0
 

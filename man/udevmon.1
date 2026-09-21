@@ -667,6 +667,12 @@ If
 is not set, these files are in
 .IR /tmp/udevmon\-UID .
 .TP
+.I $XDG_RUNTIME_DIR/udevmon/state/
+The per\-instance folders that actions can leave notes in (private, removed when the
+plug or mount ends, wiped when the daemon starts and stops).
+See
+.BR udevmon.toml (5).
+.TP
 .I ~/.config/systemd/user/udevmon.service
 The unit written by
 .BR "service install" .
@@ -692,7 +698,9 @@ Commands started by actions receive your environment plus
 .B UDEVMON_TAG
 (tag actions), one
 .BI UDEVMON_VAR_ NAME
-per variable of the device, and one
+per variable of the device,
+.B UDEVMON_STATE_DIR
+(the private folder of the plug or mount), and one
 .BI UDEVMON_ PROPERTY
 per property, for example
 .B UDEVMON_MOUNTPOINT

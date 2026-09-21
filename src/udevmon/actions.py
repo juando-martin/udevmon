@@ -10,6 +10,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from . import pause as pause_flag
+from . import state
 from .config import Action, expand
 from .events import Event
 
@@ -17,7 +18,7 @@ log = logging.getLogger("udevmon.actions")
 
 
 def build_env(event: Event, device: str | None, tag: str | None = None,
-              variables=None) -> dict[str, str]:
+              variables=None, state_dir: str | None = None) -> dict[str, str]:
     env = dict(os.environ)
     env["UDEVMON_EVENT"] = event.kind
     if device:
@@ -28,13 +29,17 @@ def build_env(event: Event, device: str | None, tag: str | None = None,
         env[f"UDEVMON_{k.upper()}"] = v
     for k, v in (variables or {}).items():
         env[f"UDEVMON_VAR_{k.upper()}"] = v
+    if state_dir:
+        env["UDEVMON_STATE_DIR"] = state_dir
     return env
 
 
 def run_action(action: Action, event: Event, device: str | None, tag: str | None = None, *,
-               dry_run: bool = False, variables=None) -> int | None:
+               dry_run: bool = False, variables=None, state_dir: str | None = None) -> int | None:
     """Run one action; returns exit status (None if skipped/timeout-killed)."""
     props = dict(event.props)
+    if state_dir:
+        props["state_dir"] = state_dir
     props.update({f"var_{k}": v for k, v in (variables or {}).items()})
     if device:
         props["device"] = device
@@ -53,7 +58,7 @@ def run_action(action: Action, event: Event, device: str | None, tag: str | None
              else "running", argv)
     try:
         proc = subprocess.Popen(
-            argv, cwd=os.path.expanduser("~"), env=build_env(event, device, tag, variables),
+            argv, cwd=os.path.expanduser("~"), env=build_env(event, device, tag, variables, state_dir),
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, errors="replace", start_new_session=True)
     except OSError as e:
@@ -165,17 +170,19 @@ class ActionRunner:
     def _lock(self, name: str) -> FifoLock:
         return self._locks.setdefault(name, FifoLock(name))
 
-    def submit(self, event: Event, jobs):
+    def submit(self, event: Event, jobs, ended: str | None = None):
         """Run the jobs (engine.Job) sequentially in one worker.
 
         Called in the order the events arrived: a job whose action has a ``lock`` takes its
-        ticket now, so locked jobs run in that order and never at the same time.
+        ticket now, so locked jobs run in that order and never at the same time. ``ended``
+        is the instance whose presence this event ends: its state folder is removed once
+        the jobs are done.
         """
         ticketed = [(job, self._lock(job.action.lock).take() if job.action.lock else None)
                     for job in jobs]
-        return self._pool.submit(self._run_all, event, ticketed)
+        return self._pool.submit(self._run_all, event, ticketed, ended)
 
-    def _run_all(self, event, ticketed):
+    def _run_all(self, event, ticketed, ended=None):
         done = 0
         try:
             for job, ticket in ticketed:
@@ -188,6 +195,9 @@ class ActionRunner:
                     lock.wait(ticket)
                     lock.release()
             raise
+        finally:
+            if ended:
+                state.remove(ended)
 
     def _run_one(self, event, job, ticket):
         lock = self._lock(job.action.lock) if ticket is not None else None
@@ -202,6 +212,17 @@ class ActionRunner:
             if lock is not None:
                 lock.release()
 
+    def _state_dir(self, event) -> str | None:
+        """The state folder of the event's instance, created on first use (not for a dry run)."""
+        instance = event.props.get("instance")
+        if not instance or self.dry_run:
+            return None
+        try:
+            return str(state.ensure(instance))
+        except OSError as e:
+            log.warning("cannot create the state folder for %s: %s", instance, e)
+            return None
+
     def _run_with_retries(self, event, job):
         """Run the action; after a non-zero exit run it again, up to ``retries`` more times.
 
@@ -213,7 +234,7 @@ class ActionRunner:
         attempts = action.retries + 1
         for attempt in range(1, attempts + 1):
             status = run_action(action, event, job.device, job.tag, dry_run=self.dry_run,
-                                variables=job.vars)
+                                variables=job.vars, state_dir=self._state_dir(event))
             if status is None or status == 0:
                 return status
             if attempt == attempts:

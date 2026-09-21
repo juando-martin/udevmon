@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import itertools
 import logging
 from typing import Callable, Mapping
 
@@ -48,6 +50,23 @@ def normalize(raw: Mapping[str, str], *, syspath: str, subsystem: str,
     return props
 
 
+def instance_id(props: Mapping[str, str], counter) -> str:
+    """One text value per plug of a device, kept by the source from its first sight to its
+    removal, so that every event of that presence (connected, startup, disconnected,
+    shutdown) carries the same ``instance``.
+
+    Built on udev's USEC_INITIALIZED (microseconds since boot when udev initialised the
+    device: different for every plug) when there is one; otherwise on a hash of the sysfs
+    path plus a counter, which is unique while the daemon runs.
+    """
+    kind = props.get("subsystem") or "dev"
+    usec = props.get("udev_usec_initialized")
+    if usec:
+        return f"{kind}-{usec}"
+    digest = hashlib.sha1(props.get("syspath", "").encode()).hexdigest()[:8]
+    return f"{kind}-{digest}-{next(counter)}"
+
+
 def _device_props(dev) -> dict[str, str]:
     return normalize(dict(dev.properties), syspath=dev.sys_path, subsystem=dev.subsystem,
                      devtype=dev.device_type, devnode=dev.device_node, sys_name=dev.sys_name)
@@ -63,17 +82,23 @@ class UdevSource:
         self._emit: Callable[[Event], None] | None = None
         self._monitor = None
         self._watch_id = None
+        self._counter = itertools.count(1)
+
+    def _with_instance(self, props: dict[str, str]) -> dict[str, str]:
+        return {**props, "instance": instance_id(props, self._counter)}
 
     # -- pure state handling (unit-testable) --------------------------------
     def handle(self, action: str, props: dict[str, str]) -> Event | None:
         key = props["syspath"]
         if action == "add":
-            endpoint = Endpoint(self.name, key, props)
+            endpoint = Endpoint(self.name, key, self._with_instance(props))
             self._cache[key] = endpoint
             return Event(CONNECTED, endpoint)
         if action == "remove":
             cached = self._cache.pop(key, None)
-            merged = {**(cached.props if cached else {}), **props}
+            merged = self._with_instance({**(cached.props if cached else {}), **props})
+            if cached is not None and "instance" in cached.props:
+                merged["instance"] = cached.props["instance"]     # the one seen at connect
             return Event(DISCONNECTED, Endpoint(self.name, key, merged))
         return None
 
@@ -94,7 +119,8 @@ class UdevSource:
             if devtype:
                 kwargs["DEVTYPE"] = devtype
             for dev in ctx.list_devices(**kwargs):
-                endpoints.append(Endpoint(self.name, dev.sys_path, _device_props(dev)))
+                endpoints.append(Endpoint(self.name, dev.sys_path,
+                                          self._with_instance(_device_props(dev))))
         return endpoints
 
     def start(self, emit: Callable[[Event], None]) -> None:

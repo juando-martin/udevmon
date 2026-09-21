@@ -375,7 +375,7 @@ def parse(data: dict) -> Config:
                             f"--var {unknown_vars[0][4:]}=VALUE`)")
         for kind in on:
             missing = ({n for n in names if not is_variable(n) and not is_raw(n)}
-                       - KNOWN_KEYS[kind] - {"device", "tag"})
+                       - KNOWN_KEYS[kind] - {"device", "tag", "state_dir"})
             if missing:
                 problems.append(f"{where}: placeholder(s) {sorted(missing)} not available "
                                 f"for event {kind!r}")

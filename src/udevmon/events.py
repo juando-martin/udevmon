@@ -17,11 +17,11 @@ SHUTDOWN = "shutdown"        # device still present when the daemon exits
 # kind -> property keys that are always available to placeholders for it
 _USB_KEYS = frozenset({
     "vendor_id", "product_id", "serial", "vendor", "model", "port_path",
-    "devnode", "syspath", "subsystem", "devtype",
+    "devnode", "syspath", "subsystem", "devtype", "instance",
 })
 _FS_KEYS = frozenset({
     "fs_uuid", "fs_label", "fs_type", "part_uuid", "devnode",
-    "drive_vendor", "drive_model", "drive_serial",
+    "drive_vendor", "drive_model", "drive_serial", "instance",
 })
 _COMMON = frozenset({"event"})   # "device"/"tag" depend on the action; see config
 
@@ -41,13 +41,13 @@ VALID_KINDS = frozenset(KNOWN_KEYS)
 VOLATILE_KEYS = frozenset({
     "mountpoint", "devnode", "syspath", "event", "device", "tag", "surprise",
     "udev_devname", "udev_devpath", "udev_busnum", "udev_devnum", "udev_seqnum",
-    "udev_usec_initialized",
+    "udev_usec_initialized", "instance",
 })
 
 # Placeholders whose values do not come from the (possibly hostile) hardware itself.
 TRUSTED_PLACEHOLDERS = frozenset({
     "event", "tag", "device", "devnode", "syspath", "port_path", "subsystem", "devtype",
-    "surprise",
+    "surprise", "instance", "state_dir",
 })
 
 

@@ -321,6 +321,14 @@ Filesystems:
 - `surprise` — `1` if the filesystem vanished while mounted, `0` after a clean unmount; only on `unmounted` and `removed`. It can be used in commands but not in tag rules.
 - `drive_vendor`, `drive_model`, `drive_serial` — of the physical drive holding it.
 
+On both kinds, added by udevmon itself:
+
+- `instance` — one value for each plug of a USB device (`usb-9878235508`) or each
+  mount of a filesystem (`fs-1758400000-3`), identical in every event of it and new
+  for the next plug or mount. See
+  [Matching an unplug with its plug](#matching-an-unplug-with-its-plug). It changes on
+  every plug, so it cannot be used in tag rules.
+
 `udevmon present` lists everything currently present with these values, and
 how strongly each could be matched.
 
@@ -921,6 +929,53 @@ run = ["systemd-run", "--user", "--scope", "keepassxc"]
 
 And a detached **script** runs entirely unattended, so it is not the place for work
 that must finish before something else starts.
+
+### Matching an unplug with its plug
+
+An action for `disconnected` often needs something that the action for `connected`
+found out: which YubiKey it was (the key itself reports no serial number, so a script
+asks `ykman`), which folder it created, when it started. udevmon gives every plug, and
+every mount, one value that is the same in all its events, and a private folder to keep
+notes in:
+
+| | For | Set in | Same in |
+|---|---|---|---|
+| `{instance}` / `$UDEVMON_INSTANCE` | one plug or mount | every event | connected, startup, disconnected, shutdown (USB); mounted, startup, unmounted, removed, shutdown (filesystem) |
+| `{state_dir}` / `$UDEVMON_STATE_DIR` | the same, as a folder | every action | the same events |
+
+The instance is built on udev's `USEC_INITIALIZED` (different for every plug), or on
+a counter when the device has none, and a new mount of a filesystem is a new instance.
+It is the same across `startup` and the later removal of a thing that was already
+there when the daemon started. It is unique only while the daemon runs.
+
+The **state folder** is
+`$XDG_RUNTIME_DIR/udevmon/state/<instance>` (private, mode 0700). It is created
+before the first action of that instance runs, so a connect script can write into it,
+and it is removed after the actions of its **last** event have finished: `disconnected`
+for a USB device; `unmounted` for a filesystem, or `removed` when it was pulled (the
+`unmounted` of a pull, with `surprise=1`, is followed by `removed`). The whole
+`state/` folder is wiped when the daemon starts and when it stops, so nothing outlives
+a restart; `startup` is where a script rebuilds what it needs, as the old scripts did.
+
+```
+#!/bin/bash
+# connected: remember which key this is
+serial=$(ykman list -s | head -1)
+echo "$serial" > "$UDEVMON_STATE_DIR/serial"
+```
+
+```
+#!/bin/bash
+# disconnected: the folder still has what connect wrote
+serial=$(cat "$UDEVMON_STATE_DIR/serial")
+```
+
+Things to know: two plugged-in things have two folders, so several keys work at once.
+The folder is only kept for events that carry an instance (everything udevmon sees
+does). A detached action must not rely on it after the last event's actions have
+finished, and an action of the connect event that is still running when the
+disconnect's actions end may find it gone; give both the same `lock` to keep them apart.
+There is no link between a USB device and its filesystems: each has its own instance.
 
 ### Trying again (`retries`)
 

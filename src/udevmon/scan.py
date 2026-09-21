@@ -15,7 +15,7 @@ from .sources.udev import UdevSource
 from .sources.udisks import UdisksSource
 
 QUIET_MS = 2000
-SKIP_KEYS = ("syspath", "subsystem", "devtype")
+SKIP_KEYS = ("syspath", "subsystem", "devtype", "instance")
 
 
 def status_text(cfg: cfgmod.Config, endpoint: Endpoint) -> str:
@@ -132,7 +132,7 @@ class Scanner:
         """The properties to match on, or None to skip. A device with no serial number gets no
         pre-selected answer: nothing identifies the unit, so the user chooses what to tie it to."""
         available = [k for k in endpoint.props if not k.startswith("udev_")
-                     and k not in ("syspath", "subsystem", "devtype", "mountpoint")]
+                     and k not in ("syspath", "subsystem", "devtype", "mountpoint", "instance")]
         print(f"Properties you can match on: {', '.join(available)}")
         choices = match_choices(endpoint) if lacks_identity(endpoint) else []
         if choices:

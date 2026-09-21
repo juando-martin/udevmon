@@ -14,6 +14,15 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ### Added
 
+- **`instance` and a state folder, to match an unplug with its plug.** Every plug of a
+  USB device and every mount of a filesystem has one `instance` value (`{instance}`,
+  `$UDEVMON_INSTANCE`), identical in all its events and new for the next plug or mount,
+  and a private folder (`{state_dir}`, `$UDEVMON_STATE_DIR`,
+  `$XDG_RUNTIME_DIR/udevmon/state/<instance>`) that exists from the first action to the
+  end of its last event, so a connect script can leave what it found out (the serial that
+  `ykman` reported) for the disconnect script. Wiped when the daemon starts and stops.
+  `instance` shows in `--all-props` and cannot be used in tag rules. See "Matching an
+  unplug with its plug" in the README.
 - **`retries` and `retry_delay`** on an action (`actions add --retries N --retry-delay S`,
   `actions set` the same): a command that exits with a non-zero status is run again after
   the delay, up to `retries` more times, for things like `udisksctl unmount` right after a

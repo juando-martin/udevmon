@@ -140,6 +140,12 @@ Filesystems (udisks):
 - `surprise` — `"1"` when the filesystem vanished while mounted, `"0"` after a clean
   unmount; only on `unmounted` and `removed` events
 - `drive_vendor`, `drive_model`, `drive_serial` — `Drive` of the block device
+- `instance` — one value per mount (`fs-<start>-<n>`, new for each mount, kept from
+  `mounted` or `startup` to `unmounted`/`removed`/`shutdown`)
+
+USB devices (and other udev devices) also have `instance` (`<subsystem>-<usec>` from
+`USEC_INITIALIZED`, else `<subsystem>-<hash of syspath>-<n>`), fixed by the source at
+first sight and carried by the later `disconnected` (§7.5).
 
 Added by the engine for actions (not present on the endpoint, so not matchable):
 
@@ -149,7 +155,7 @@ Added by the engine for actions (not present on the endpoint, so not matchable):
 
 **Volatile keys** change from plug to plug or event to event and are rejected in
 tag rules (§5.4): `mountpoint`, `devnode`, `syspath`, `event`, `device`, `tag`,
-`surprise`, and the raw properties `udev_devname`, `udev_devpath`, `udev_busnum`,
+`surprise`, `instance`, and the raw properties `udev_devname`, `udev_devpath`, `udev_busnum`,
 `udev_devnum`, `udev_seqnum`, `udev_usec_initialized`.
 
 ## 5. Devices, tags and matching
@@ -624,6 +630,25 @@ paused, and it waits on the event that `shutdown()` sets, so a stop interrupts t
 and ends the retrying. Every failed attempt is logged (WARNING), and after the last one
 `gave up after N attempts`. Each attempt has its own timeout; a `lock` (§7.3) is held
 across all of them. `retries` or `retry_delay` with `detach` is an error (§6.1).
+
+### 7.5 Instances and state folders
+
+Every event of a thing carries `instance`, chosen by its source when the thing is first
+seen and kept until its presence ends (§4.2). A USB device's instance is fixed at the
+first `connected` or `startup` and copied onto the `disconnected` even if that event's
+own properties would give another value; a filesystem's is new at each mount and shared
+by `startup`, `mounted`, `unmounted`, `removed` and `shutdown` of it.
+
+`state.py` keeps one folder per instance, `$XDG_RUNTIME_DIR/udevmon/state/<instance>`
+(mode 0700; the instance is reduced to `A-Za-z0-9._-` so it cannot leave the folder).
+`ActionRunner` creates it before the first action of an event that has an instance
+(never for a dry run) and passes it as `{state_dir}` and `$UDEVMON_STATE_DIR`.
+`Engine.handle` passes the instance a presence *ends* with: `disconnected`, `removed`,
+and `unmounted` unless `surprise` is `1` (`presence_ends()`). `ActionRunner` removes that
+folder when the jobs of the event have finished, even if there are none and even when the
+event was debounced or automation is paused. The whole tree is wiped when the daemon
+starts (leftovers of a crash) and after it has stopped. A running action of an earlier
+event may find the folder gone; a `lock` (§7.3) orders them.
 
 ## 8. CLI
 

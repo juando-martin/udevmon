@@ -12,7 +12,7 @@ class FakeRunner:
     def __init__(self):
         self.calls = []
 
-    def submit(self, event, jobs):
+    def submit(self, event, jobs, ended=None):
         self.calls.append((event.kind, [(j.action.name, j.device) for j in jobs]))
 
 

@@ -55,6 +55,8 @@ def _status(cfg: cfgmod.Config, plan) -> str:
 def _command(job, event) -> str:
     props = dict(event.props)
     props.update({f"var_{k}": v for k, v in job.vars.items()})
+    props.setdefault("instance", "<instance>")            # only real events have them
+    props["state_dir"] = "<state folder>"
     if job.device:
         props["device"] = job.device
     if job.tag:

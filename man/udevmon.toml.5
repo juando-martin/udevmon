@@ -570,6 +570,82 @@ A property that is missing from a thing (a stick without a serial number, a
 filesystem without a label) simply does not match.
 .B udevmon present
 lists everything present with these values.
+.PP
+On both kinds, added by udevmon itself:
+.TP
+.B instance
+One value for each plug of a USB device or each mount of a filesystem, identical in
+every event of it and new for the next plug or mount (for example
+.B usb\-9878235508
+or
+.BR fs\-1758400000\-3 ).
+It changes on every plug, so it cannot be used in tag rules.
+See
+.BR "MATCHING AN UNPLUG WITH ITS PLUG" .
+.SH "MATCHING AN UNPLUG WITH ITS PLUG"
+An action for
+.B disconnected
+often needs something the action for
+.B connected
+found out, for example which YubiKey it was (the key reports no serial number, so a
+script asks
+.BR ykman ).
+udevmon gives every plug, and every mount, one value that is the same in all its events,
+and a private folder to keep notes in:
+.TP
+.BI { instance } ", " UDEVMON_INSTANCE
+The instance (see
+.BR PROPERTIES ):
+the same in
+.BR connected ,
+.BR startup ,
+.B disconnected
+and
+.B shutdown
+of a USB device, and in
+.BR mounted ,
+.BR startup ,
+.BR unmounted ,
+.B removed
+and
+.B shutdown
+of a filesystem.
+It is built on udev's
+.B USEC_INITIALIZED
+(different for every plug), or on a counter when the device has none; a new mount of a
+filesystem is a new instance.
+It is unique only while the daemon runs.
+.TP
+.BI { state_dir } ", " UDEVMON_STATE_DIR
+A private folder,
+.IR $XDG_RUNTIME_DIR/udevmon/state/ INSTANCE ,
+mode 0700, created before the first action of that instance runs.
+A connect script writes into it and the disconnect script reads it.
+It is removed after the actions of the instance's last event have finished:
+.B disconnected
+for a USB device;
+.B unmounted
+for a filesystem, or
+.B removed
+when it was pulled (the
+.B unmounted
+of a pull, with
+.BR surprise=1 ,
+is followed by
+.BR removed ).
+The whole
+.I state
+folder is wiped when the daemon starts and when it stops, so nothing outlives a restart;
+.B startup
+is where a script rebuilds what it needs.
+.PP
+Two plugged\-in things have two folders, so several keys work at once.
+A detached action must not rely on the folder after the last event's actions have
+finished, and an action of the connect event that is still running when the
+disconnect's actions end may find it gone: give both the same
+.B lock
+to keep them apart.
+There is no link between a USB device and its filesystems; each has its own instance.
 .SH VARIABLES
 A device's
 .B vars
@@ -752,7 +828,11 @@ The same information is in the environment:
 .B UDEVMON_TAG
 (tag actions) and
 .BI UDEVMON_VAR_ NAME
-for every variable of the device, and
+for every variable of the device,
+.B UDEVMON_STATE_DIR
+(see
+.BR "MATCHING AN UNPLUG WITH ITS PLUG" ),
+and
 .BI UDEVMON_ PROPERTY
 for every property, for example
 .BR UDEVMON_MOUNTPOINT ,
