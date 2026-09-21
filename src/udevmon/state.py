@@ -37,5 +37,10 @@ def remove(instance: str) -> None:
 
 
 def wipe() -> None:
-    """Remove every state folder (stale ones after a crash, and all at a normal stop)."""
+    """Remove every state folder (stale ones after a crash, and all at a normal stop), and
+    the ``udevmon`` folder above them when nothing else is in it."""
     shutil.rmtree(root(), ignore_errors=True)
+    try:
+        root().parent.rmdir()
+    except OSError:                                # not empty, or not there
+        pass

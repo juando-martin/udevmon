@@ -191,7 +191,18 @@ class StateFolderTests(unittest.TestCase):
         state.ensure("a"), state.ensure("b")
         state.wipe()
         self.assertFalse(state.root().exists())
+        self.assertFalse(state.root().parent.exists())              # no empty folder left behind
         state.wipe()                                                # nothing there: fine
+
+    def test_wipe_leaves_the_folder_above_alone_when_it_holds_something_else(self):
+        state.ensure("a")
+        other = state.root().parent / "other"
+        other.write_text("x")
+        state.wipe()
+        self.assertFalse(state.root().exists())
+        self.assertTrue(other.exists())
+        other.unlink()
+        state.wipe()
 
 
 class EngineLifecycleTests(unittest.TestCase):
