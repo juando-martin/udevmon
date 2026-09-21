@@ -80,20 +80,24 @@ def cmd_run(args):
 def cmd_scan(args):
     from .scan import Scanner
     return Scanner(args.config, prompt=not args.no_prompt and sys.stdin.isatty(),
-                   present=args.present).run()
+                   present=args.present, all_props=args.all_props).run()
 
 
 def cmd_present(args):
     from .sources.udev import UdevSource
     from .sources.udisks import UdisksSource
-    from .scan import format_props, status_text
+    from .scan import format_all_props, format_props, status_text
     from .matching import level_label
     cfg = _load(args)
     endpoints = UdevSource(cfg.settings.udev_filters).snapshot() \
         + UdisksSource().snapshot(include_system=args.all)
     for d in endpoints:
         print(f"{describe(d)}   [{level_label(d)}]   {status_text(cfg, d)}")
-        print(f"    {format_props(d)}")
+        if args.all_props:
+            for line in format_all_props(d):
+                print(f"    {line}")
+        else:
+            print(f"    {format_props(d)}")
     return 0
 
 
@@ -625,10 +629,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-prompt", action="store_true", help="only print events")
     s.add_argument("--present", action="store_true",
                    help="also offer devices and filesystems that are already present")
+    s.add_argument("--all-props", action="store_true",
+                   help="print every property, including the raw udev_* ones")
     s.set_defaults(fn=cmd_scan)
 
     s = sub.add_parser("present", help="list USB devices and filesystems that are present now")
     s.add_argument("--all", action="store_true", help="include system filesystems")
+    s.add_argument("--all-props", action="store_true",
+                   help="print every property, including the raw udev_* ones")
     s.set_defaults(fn=cmd_present)
 
     dev = sub.add_parser("devices", help="manage named devices")

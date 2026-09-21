@@ -217,6 +217,10 @@ device to react to it being plugged in at all; name the filesystem to react
 to it being mounted and unmounted.
 
 To also offer devices that are *already* plugged in, use `udevmon scan --present`.
+To see every property of what you plug in, the raw `udev_*` ones included (the
+names you can use in a rule or as `{udev_NAME}` in a command), add `--all-props`;
+`udevmon present --all-props` does the same for what is plugged in now. Properties
+that change on every plug, which cannot be used in tag rules, are marked.
 
 **2. Attach an action**
 
@@ -867,8 +871,9 @@ use letters, digits, `_`, `.` and `-`.
 ## Command reference
 
 ```
-udevmon scan [--present] [--no-prompt]  watch events and name things
-udevmon present [--all]                 list what is plugged in now
+udevmon scan [--present] [--no-prompt] [--all-props]
+                                        watch events and name things
+udevmon present [--all] [--all-props]   list what is plugged in now
 udevmon devices list | show NAME | remove NAME
 udevmon devices add NAME --match KEY=VALUE ...
                     [--tag TAG ...] [--exclude-tag TAG ...]

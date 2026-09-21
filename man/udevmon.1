@@ -147,7 +147,7 @@ is not called.
 Your configuration is never touched.
 .SS "Finding and naming things"
 .TP
-.B udevmon scan \fR[\fB\-\-present\fR] [\fB\-\-no\-prompt\fR]
+.B udevmon scan \fR[\fB\-\-present\fR] [\fB\-\-no\-prompt\fR] [\fB\-\-all\-props\fR]
 Watch events and offer to name what you see.
 Plug something in (or unplug it, or mount a filesystem).
 After a short pause udevmon lists what it saw and asks:
@@ -181,8 +181,15 @@ react to it being mounted.
 also offers devices and filesystems that are already present.
 .B \-\-no\-prompt
 only prints the events.
+.B \-\-all\-props
+prints every property of each thing, one per line, including the raw
+.B udev_*
+ones (the names usable in a rule or as
+.BI { udev_NAME }
+in a command); those that change on every plug and cannot be used in tag rules are
+marked.
 .TP
-.B udevmon present \fR[\fB\-\-all\fR]
+.B udevmon present \fR[\fB\-\-all\fR] [\fB\-\-all\-props\fR]
 List the USB devices and filesystems that are present now, with their
 properties, how strongly each could be matched (strong, medium or weak; a device with
 no serial number is marked as matching the port), whether it is named, and which tags
@@ -190,6 +197,9 @@ it has.
 System filesystems are left out unless
 .B \-\-all
 is given.
+.B \-\-all\-props
+prints every property of each entry instead of the summary line, as for
+.BR scan .
 .TP
 .B udevmon explain \fR[\fIEVENT\fR] [\fB\-\-device \fINAME\fR] [\fB\-\-prop \fIKEY=VALUE\fR ...] [\fB\-\-all\fR]
 Show what would run, without plugging anything in.

@@ -551,8 +551,9 @@ printed by `check` only. Neither changes the exit status.
 
 ```
 udevmon run [--dry-run] [-v]            run the daemon
-udevmon scan [--no-prompt] [--present]  scan mode (below)
-udevmon present [--all]                 list what is present now, with
+udevmon scan [--no-prompt] [--present] [--all-props]
+                                        scan mode (below)
+udevmon present [--all] [--all-props]   list what is present now, with
                                         strength, device name and tags
 udevmon devices list|show               (bare `devices` = `devices list`)
 udevmon devices add NAME --match KEY=VALUE ...
@@ -633,6 +634,9 @@ The editing commands (`devices add|remove|tag|untag`, `tags add|remove`,
    `iN` (`i3`, `i1,3`) does the same but saves the devices as `ignored` and asks
    for no tags. Repeat, Enter to continue scanning, `q` to quit.
 5. `--no-prompt` (also automatic when stdin is not a TTY) only prints events.
+   `--all-props` (here and on `present`) prints every property of each thing, one per
+   line and sorted, including the raw `udev_*` ones, marking those in the volatile set
+   (§4.2) with `[changes per plug]`; without it the summary line hides them.
 6. `--present` also offers things that are **already present** when the scan
    starts (printed as `present`, one line each, and included in the naming
    list). Without it, scan only reports changes. System filesystems are omitted.

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import config as cfgmod
 from . import configedit
-from .events import STARTUP, Endpoint, Event, describe
+from .events import STARTUP, VOLATILE_KEYS, Endpoint, Event, describe
 from .matching import (STRONG, build_match, default_match_keys, device_label, lacks_identity,
                        level_label, match_choices, resolve, strength, strength_note)
 from .sources.udev import UdevSource
@@ -26,14 +26,23 @@ def status_text(cfg: cfgmod.Config, endpoint: Endpoint) -> str:
             + (f"  excluded from: {', '.join(res.excluded)}" if res.excluded else ""))
 
 
+def format_all_props(endpoint: Endpoint) -> list[str]:
+    """Every property, one per line and sorted, marking those that change between plugs
+    (they cannot be used in tag rules). Includes the raw ``udev_*`` ones."""
+    return [f"{k} = {v}" + ("   [changes per plug]" if k in VOLATILE_KEYS else "")
+            for k, v in sorted(endpoint.props.items())]
+
+
 def format_props(endpoint: Endpoint) -> str:
     return "  ".join(f"{k}={v}" for k, v in endpoint.props.items()
                      if not k.startswith("udev_") and k not in SKIP_KEYS)
 
 
 class Scanner:
-    def __init__(self, config_path: Path, prompt: bool, present: bool = False):
+    def __init__(self, config_path: Path, prompt: bool, present: bool = False,
+                 all_props: bool = False):
         self.config_path = config_path
+        self.all_props = all_props
         self.prompt = prompt
         self.present = present
         self.pending: dict[str, Endpoint] = {}
@@ -55,9 +64,13 @@ class Scanner:
         if event.kind == STARTUP:                 # already-present thing: keep it compact
             print(f"[{stamp}] present      {describe(d)}" + (f"  ({level})" if level else "")
                   + f"   {status}")
+            self._print_all(d)
         else:
             print(f"[{stamp}] {event.kind:<12} {describe(d)}   {status}")
-            print(f"           {format_props(d)}")
+            if self.all_props:
+                self._print_all(d)
+            else:
+                print(f"           {format_props(d)}")
             if keys and lacks_identity(d):
                 print("           no serial number: nothing identifies this particular unit "
                       "(you will be asked what to match on)")
@@ -70,6 +83,11 @@ class Scanner:
             GLib.source_remove(self._timer)
         if self.prompt and self.pending:
             self._timer = GLib.timeout_add(QUIET_MS, self._quiet)
+
+    def _print_all(self, endpoint: Endpoint) -> None:
+        if self.all_props:
+            for line in format_all_props(endpoint):
+                print(f"           {line}")
 
     def _quiet(self) -> bool:
         self._timer = None

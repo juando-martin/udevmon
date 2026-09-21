@@ -12,6 +12,13 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ## [Unreleased]
 
+### Added
+
+- **`scan --all-props` and `present --all-props`** print every property of each thing,
+  one per line, including the raw `udev_*` ones that the normal output hides, and mark
+  those that change on every plug (they cannot be used in tag rules). It shows the
+  names to use in a rule or as `{udev_NAME}` in a command.
+
 ### Fixed
 
 - **`{udev_NAME}` placeholders** (for example `{udev_id_model}`) in a command made the
