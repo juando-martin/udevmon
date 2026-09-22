@@ -828,12 +828,35 @@ The editing commands (`devices add|remove|tag|untag`, `tags add|remove`,
 3. After 2 s without new events, present the collected things as a numbered
    list, noting any that already belong to a named device (and their tags).
 4. Prompt: choose one or more numbers (`2` or `1,2`, to name a whole stick at
-   once) → for each, enter a name → confirm or edit the match keys
-   (default per §5.3, or the choices of §5.3.1 for a device with no serial number;
-   weak/medium warnings shown) → optionally enter tags
-   (existing tags are suggested) → device appended to the config.
-   `iN` (`i3`, `i1,3`) does the same but saves the devices as `ignored` and asks
-   for no tags. Repeat, Enter to continue scanning, `q` to quit.
+   once). For each, in turn:
+   1. **Kind**: `d` (a device, one particular trusted thing) or `c` (a
+      category: a declared tag with a rule, §5.4). Default `c` for a thing with
+      no serial number (§5.3.1), else `d`; `q` skips this thing.
+   2. **Name**: the device or tag name. Blank skips this thing.
+   3. **Match keys**: as for a device (default per §5.3, or the choices of
+      §5.3.1 for a thing with no serial number); the same selection becomes the
+      tag's `match` for a category.
+   4. **Tags** (device only): explicit tags, comma-separated; existing tags are
+      suggested. Skipped for a category (a tag has no tags of its own).
+   5. **Confirm**: a summary (name, match/rule with its strength, and tags for
+      a device) followed by `[Enter] save   [r] rename   [m] change match(/rule)
+      [t] change tags (device only)   [c] cancel`. `r`, `m` and `t` redo that one
+      step (Enter there keeps the previous value; `-` for tags clears them) and
+      return to this same confirm screen; `c` (also `n`, `no`, `q`) cancels and
+      leaves the thing in the list to pick again. Blank saves only when the
+      match/rule is strong; otherwise `y` is required (blank prints a reminder
+      and asks again). A category has no strength gate: blank always saves. A
+      name already in use (device or tag) is reported and the screen is shown
+      again so it can be renamed.
+   `iN` (`i3`, `i1,3`) skips the kind choice and goes straight to steps 2–3
+   (match) and the confirm screen, saving the device as `ignored` and asking
+   for no tags (step 4). Repeat, Enter to continue scanning, `q` to quit.
+
+   After saving: the same reload/pause notice as the other editing commands,
+   then a suggested `actions add` command — `--device NAME EVENT` for a device,
+   `--tag NAME EVENT --allow-unnamed` for a category (§5.6), `mounted` for a
+   filesystem and `connected` otherwise. Nothing is printed for an ignored
+   device.
 5. `--no-prompt` (also automatic when stdin is not a TTY) only prints events.
    `--all-props` (here and on `present`) prints every property of each thing, one per
    line and sorted, including the raw `udev_*` ones, marking those in the volatile set

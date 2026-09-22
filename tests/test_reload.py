@@ -147,7 +147,7 @@ class AutoReloadTests(unittest.TestCase):
         scanner.loop = mock.Mock()
         scanner.pending = {"a": Endpoint("udev", "k", {"vendor_id": "1", "product_id": "2",
                                                        "serial": "S9x7a"})}
-        answers = iter(["1", "stick", "", ""])
+        answers = iter(["1", "", "stick", "", "", ""])
         out = io.StringIO()
         with mock.patch("builtins.input", lambda p="": next(answers)), \
                 mock.patch("udevmon.daemon.reload_running", return_value=True) as reload, \

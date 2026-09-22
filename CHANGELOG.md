@@ -12,6 +12,26 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ## [Unreleased]
 
+### Changed
+
+- **`scan` now confirms before saving, and lets you go back.** Before anything is
+  written it shows what would be saved (name, match or rule with its strength, and
+  tags for a device) and asks you to confirm; `r`, `m` and `t` redo the name, the
+  match/rule or the tags without losing the rest, and `c` (also `n`, `q`) cancels,
+  leaving the thing in the list to pick again. A weak or medium match now needs an
+  explicit `y` at that screen instead of a separate "Save anyway?" prompt. A name
+  already in use is reported there, so you can rename and try again instead of
+  losing what you typed.
+- **`scan` can now declare a category instead of a device.** For each thing you
+  pick to name, it first asks whether to register it as a **device** (one
+  particular, trusted thing) or a **category** (a declared tag with a rule,
+  matching every thing like it); a thing with no serial number, such as a YubiKey,
+  defaults to category, since no device match can single out one such unit anyway.
+  A category has no tags of its own and no strength gate, and the "add an action"
+  hint printed afterwards includes `--allow-unnamed`, since a category is unnamed
+  by default until it also matches a device you named. `iN` (ignore) is unchanged:
+  it is device-only and skips the kind choice.
+
 ## [0.7.0] - 2026-11-05
 
 ### Added

@@ -55,11 +55,11 @@ class ScanTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.p = Path(tmp.name) / "c.toml"
 
-    def name(self, endpoint, answers):
+    def name(self, endpoint, answers, kind="d"):
         scanner = Scanner(self.p, prompt=True)
         scanner.loop = mock.Mock()
         scanner.pending = {"0": endpoint}
-        seq, prompts = iter(["1", "yk"] + answers), []
+        seq, prompts = iter(["1", kind, "yk"] + answers), []
 
         def fake(prompt=""):
             prompts.append(prompt)
@@ -78,7 +78,7 @@ class ScanTests(unittest.TestCase):
         return dict(C.load(self.p).devices["yk"].match)
 
     def test_the_explanation_and_both_choices_are_shown_without_a_default(self):
-        out, prompts = self.name(YUBIKEY, ["", ""])
+        out, prompts = self.name(YUBIKEY, [""])
         self.assertIn("no serial number, so nothing identifies\nthis particular unit.", out)
         self.assertIn("1) this model, in this port only", out)
         self.assertIn("2) this model, in any port", out)
@@ -91,24 +91,43 @@ class ScanTests(unittest.TestCase):
         self.assertFalse(self.p.exists())
 
     def test_choice_1_ties_the_device_to_the_port(self):
-        out, _ = self.name(YUBIKEY, ["1", "y", ""])
+        out, _ = self.name(YUBIKEY, ["1", "", "y"])
         self.assertEqual(self.match(), {"vendor_id": "1050", "product_id": "0407",
                                         "port_path": "3-4"})
-        self.assertIn("Match strength: medium", out)
+        self.assertIn("(medium — matches any device of this model in this port)", out)
 
     def test_choice_2_matches_the_model_in_any_port(self):
-        out, _ = self.name(YUBIKEY, ["2", "y", ""])
+        out, _ = self.name(YUBIKEY, ["2", "", "y"])
         self.assertEqual(self.match(), {"vendor_id": "1050", "product_id": "0407"})
-        self.assertIn("Match strength: weak", out)
+        self.assertIn("(weak — matches every device/filesystem with these values)", out)
 
     def test_a_typed_list_still_works_and_a_wrong_answer_asks_again(self):
-        out, _ = self.name(YUBIKEY, ["9", "vendor_id,nonsense", "vendor_id", "y", ""])
+        out, _ = self.name(YUBIKEY, ["9", "vendor_id,nonsense", "vendor_id", "", "y"])
         self.assertEqual(self.match(), {"vendor_id": "1050"})
         self.assertIn("Not a property of this thing", out)
 
     def test_declining_to_save_a_weak_match_saves_nothing(self):
-        self.name(YUBIKEY, ["2", "n"])
+        self.name(YUBIKEY, ["2", "", "n"])
         self.assertFalse(self.p.exists())
+
+    def test_choosing_category_instead_declares_a_tag(self):
+        out, _ = self.name(YUBIKEY, ["1", ""], kind="c")
+        self.assertIn("category (tag) 'yk'", out)
+        self.assertEqual(dict(C.load(self.p).tags["yk"].match),
+                         {"vendor_id": ("1050",), "product_id": ("0407",),
+                          "port_path": ("3-4",)})
+        self.assertIn("Add an action with e.g.:\n  udevmon actions add --tag yk connected "
+                      "--allow-unnamed -- notify-send 'hello'", out)
+
+    def test_category_is_the_default_for_a_thing_with_no_identity(self):
+        out, prompts = self.name(YUBIKEY, ["1", ""], kind="")
+        self.assertIn("category (tag) 'yk'", out)
+        self.assertTrue(any(p.startswith("Choice [c]") for p in prompts))
+
+    def test_device_is_the_default_when_there_is_a_serial(self):
+        out, prompts = self.name(STICK, ["", "", ""], kind="")
+        self.assertTrue(any(p.startswith("Choice [d]") for p in prompts))
+        self.assertEqual(C.load(self.p).devices["yk"].match["serial"], STICK.props["serial"])
 
     def test_devices_with_an_identity_keep_the_old_prompt(self):
         scanner = Scanner(self.p, prompt=True)

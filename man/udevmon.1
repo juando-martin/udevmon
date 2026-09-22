@@ -1,6 +1,6 @@
 .\" Manual page for the udevmon command. Keep it in step with the CLI:
 .\" tests/test_manpages.py fails when a command or option is missing here.
-.TH UDEVMON 1 "2026-11-05" "udevmon" "User Commands"
+.TH UDEVMON 1 "2026-11-10" "udevmon" "User Commands"
 .SH NAME
 udevmon \- run your own commands when USB devices and filesystems appear or go away
 .SH SYNOPSIS
@@ -186,25 +186,63 @@ Number(s) to name, iN to ignore, Enter = scan on, q = quit:
 .fi
 .IP
 Answer with numbers (\fB1,2\fR) to name several at once.
-For each one udevmon asks for a device name, the properties to match on (Enter
-accepts the suggestion and tells you how strong the match is) and tags.
-For a USB device with no serial number nothing is suggested: it explains that nothing
-identifies the unit and asks you to choose between this model in this port only and
-this model in any port (see
+For each one udevmon first asks whether to register it as a
+.B device
+(one particular, trusted thing) or a
+.B category
+(a declared tag with a rule, matching every thing like it); a thing with no
+serial number defaults to category, since no device match can single it out
+anyway.
+Then it asks for a name, and the properties to match on (Enter accepts the
+suggestion and tells you how strong the match is).
+For a thing with no serial number nothing is suggested: it explains that
+nothing identifies the unit and asks you to choose between this model in this
+port only and this model in any port (see
 .BR udevmon.toml (5)).
+A device is then asked for tags, comma\-separated; a category has none of its
+own.
+.IP
+Before anything is written it shows a summary (name, match or rule with its
+strength, and tags for a device) and asks:
+.B [Enter]
+to save (a match or rule that is not strong needs
+.B y
+instead; blank prints a reminder and asks again \(em a category has no such
+gate),
+.B r
+to rename,
+.B m
+to redo the match or rule,
+.B t
+to redo the tags (device only), or
+.B c
+(also
+.BR n ", " no " or " q )
+to cancel.
+Redoing a step keeps what you already answered for the others, and Enter at
+that step keeps its previous value; a name already used is reported so you can
+rename and try again.
 Answer
 .B i3
 (or
 .BR i1,3 )
-to save things as ignored devices instead, without asking for tags.
+to save things as ignored devices instead: this skips the device/category
+choice and asks for no tags.
 Press Ctrl+C to leave; the answer
 .B q
-works only at the number prompt.
+at the number prompt cancels the batch, not just one thing.
 .IP
 A physical stick usually shows up twice, as a USB device and as one or more
 filesystems.
 Name the USB device to react to it being plugged in, and the filesystem to
 react to it being mounted.
+An action on a category needs
+.B allow_unnamed = true
+to run for things only matched that way (see
+.BR udevmon.toml (5));
+the command
+.B scan
+suggests after saving one includes it.
 .IP
 .B \-\-present
 also offers devices and filesystems that are already present.

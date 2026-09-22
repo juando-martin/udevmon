@@ -401,7 +401,7 @@ class ScanTests(unittest.TestCase):
         self.assertNotIn("Add an action", out)
 
     def test_naming_still_works_and_marks_ignored_things(self):
-        p, out, prompts = self.prompt([self.KEY], ["1", "key", "", "t1"])
+        p, out, prompts = self.prompt([self.KEY], ["1", "", "key", "", "t1", ""])
         self.assertEqual(C.load(p).devices["key"].status, "active")
         self.assertEqual(C.load(p).devices["key"].tags, ("t1",))
 

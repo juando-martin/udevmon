@@ -403,7 +403,9 @@ class ScanPromptTests(unittest.TestCase):
                                               "serial": "4C530001", "vendor": "SanDisk"})
             fs = Endpoint("udisks", "/o/1", {"fs_uuid": "3F2A-91BC", "fs_label": "BK"})
             scanner.pending = {"a": usb, "b": fs}
-            answers = iter(["1,2", "stick", "", "usb-storage", "stick-fs", "", "usb-storage,backup"])
+            answers = iter(["1,2",
+                "", "stick", "", "usb-storage", "",
+                "", "stick-fs", "", "usb-storage,backup", ""])
             with mock.patch("builtins.input", lambda prompt="": next(answers)), \
                     contextlib.redirect_stdout(io.StringIO()):
                 scanner._prompt_user()
@@ -438,7 +440,7 @@ class ScanPromptTests(unittest.TestCase):
         usb = Endpoint("udev", "/sys/1", {"vendor_id": "090c", "product_id": "1000",
                                           "serial": "1111222233334444", "vendor": "V"})
         # what happened for real: the next device's name typed at the properties prompt
-        path, out, prompts = self.run_prompt([usb], ["1", "stick", "stick-fs", "", "usbtest"])
+        path, out, prompts = self.run_prompt([usb], ["1", "", "stick", "stick-fs", "", "usbtest", ""])
         self.assertIn("Not a property of this thing: stick-fs", out)
         cfg = C.load(path)
         self.assertEqual(cfg.devices["stick"].match["serial"], "1111222233334444")
@@ -448,9 +450,9 @@ class ScanPromptTests(unittest.TestCase):
     def test_typed_property_list_and_skip(self):
         usb = Endpoint("udev", "/sys/1", {"vendor_id": "090c", "product_id": "1000",
                                           "serial": "1111222233334444"})
-        path, out, _ = self.run_prompt([usb], ["1", "s", "vendor_id,serial", "", ""])
+        path, out, _ = self.run_prompt([usb], ["1", "", "s", "vendor_id,serial", "", ""])
         self.assertEqual(set(C.load(path).devices["s"].match), {"vendor_id", "serial"})
-        path, out, _ = self.run_prompt([usb], ["1", "", ""])           # empty name: skip
+        path, out, _ = self.run_prompt([usb], ["1", "", "", ""])       # empty name: skip
         self.assertIn("Skipped.", out)
         self.assertFalse(path.exists())
 

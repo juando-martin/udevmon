@@ -200,21 +200,39 @@ Detected:
   [1] USB SanDisk Cruzer [0781:5567]   unnamed
   [2] Filesystem BACKUP (ext4) on /dev/sdb1   unnamed
 Number(s) to name, iN to ignore, Enter = scan on, q = quit: 2
+Register it as a [d]evice (one particular thing) or a [c]ategory
+(a tag rule matching every thing like this; an action then
+needs allow_unnamed = true to run for things matched only
+this way)?
+Choice [d] (q to skip this thing): d
 Device name (Enter to skip): backup-disk
 Properties you can match on: fs_uuid, fs_label, fs_type, devnode
 Match on [fs_uuid] (Enter to accept, or type a list):
-Match strength: strong — identifies this exact device
 Tags, comma-separated (Enter for none): backup
+
+About to save:
+  device 'backup-disk'
+  match: fs_uuid=3F2A-91BC  (strong — identifies this exact device)
+  tags: backup
+[Enter] save   [r] rename   [m] change match   [t] change tags   [c] cancel
+>
 Saved device 'backup-disk' to /home/me/.config/udevmon/config.toml
+Add an action with e.g.:
+  udevmon actions add --device backup-disk mounted -- notify-send 'hello'
 ```
 
-The prompts are asked in that order. If you type a property that doesn't
-exist (say, a device name at the "Match on" prompt), it tells you and asks
-again. When nothing more is left to name it prints `Waiting for more events`
-and keeps scanning; press Ctrl+C to leave (the `q` answer works only at the
-"Number(s) to name" prompt). To silence something you never want to react to
-(a USB hub, an internal card reader), answer with `i` and its number (`i3`, or
-`i1,3`): it is saved as an ignored device, without asking for tags (see
+The prompts are asked in that order, and nothing is written until you confirm
+the last screen: press Enter (or type `y` for a match that isn't strong) to
+save, or fix something first — `r` to rename, `m` to redo the match, `t` to
+redo the tags — and it asks again with what you typed kept. `c` (or `n`, `q`)
+cancels the whole thing, and it stays in the list to pick again. If you type a
+property that doesn't exist (say, a name at the "Match on" prompt), it tells
+you and asks again. When nothing more is left to name it prints `Waiting for
+more events` and keeps scanning; press Ctrl+C to leave (the `q` answer works
+only at the "Number(s) to name" prompt). To silence something you never want
+to react to (a USB hub, an internal card reader), answer with `i` and its
+number (`i3`, or `i1,3`): it goes straight to naming it as an ignored device,
+without the device/category choice or tags (see
 [Switching things off](#switching-things-off)).
 
 A physical stick usually shows up twice: as a **USB device** (identified by
@@ -222,6 +240,47 @@ vendor/product ID and serial number, when it has one) and as one or more **files
 (identified by UUID). Name whichever you want to react to. Name the USB
 device to react to it being plugged in at all; name the filesystem to react
 to it being mounted and unmounted.
+
+**Devices without a serial number**, YubiKeys for one, can't be told apart, so
+`scan` offers a **category** instead of a device: a declared tag with a rule,
+picked by the same "this model, in this port" / "this model, in any port"
+choice as a device match, but saved as `[tags.NAME]` rather than
+`[devices.NAME]`. It is the default answer for such a thing:
+
+```
+Number(s) to name, iN to ignore, Enter = scan on, q = quit: 1
+This thing has no serial number, so nothing tells one unit from another;
+a category usually fits it better than a device, which claims to be one
+exact, trusted thing.
+Register it as a [d]evice (one particular thing) or a [c]ategory
+(a tag rule matching every thing like this; an action then
+needs allow_unnamed = true to run for things matched only
+this way)?
+Choice [c] (q to skip this thing): c
+Category (tag) name (Enter to skip): yubikey
+Properties you can match on: vendor_id, product_id, port_path, vendor, model
+This thing has no serial number, so nothing identifies
+this particular unit. Choose what to match on:
+  1) this model, in this port only    (vendor_id, product_id, port_path)
+  2) this model, in any port          (vendor_id, product_id)
+Number, or a list of properties: 1
+
+About to save:
+  category (tag) 'yubikey'
+  rule: vendor_id=1050  product_id=0407  port_path=3-4  (medium — ...)
+[Enter] save   [r] rename   [m] change rule   [c] cancel
+>
+Saved tag 'yubikey' to /home/me/.config/udevmon/config.toml
+Add an action with e.g.:
+  udevmon actions add --tag yubikey connected --allow-unnamed -- \
+    notify-send 'hello'
+```
+
+A category never claims to identify one particular unit, so nothing runs for
+it unless the action sets `allow_unnamed = true` (see
+[Named and unnamed things](#named-and-unnamed-things)); the example command
+above already includes it. `d` still registers it as an ordinary device if you
+really mean this one physical thing (say, a key you keep in one USB port).
 
 To also offer devices that are *already* plugged in, use `udevmon scan --present`.
 To see every property of what you plug in, the raw `udev_*` ones included (the
