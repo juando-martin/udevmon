@@ -5,7 +5,7 @@ from pathlib import Path
 from udevmon import actions as A
 from udevmon import config as C
 from udevmon.engine import Engine
-from udevmon.events import CONNECTED, MOUNTED, Endpoint, Event
+from udevmon.events import CONNECTED, MOUNTED, UNMOUNTED, Endpoint, Event
 
 
 class FakeRunner:
@@ -58,6 +58,29 @@ class EngineTests(unittest.TestCase):
         self.now += 1.0
         self.engine.handle(e)
         self.assertEqual(len(self.runner.calls), 2)
+
+    def test_two_things_matching_one_device_are_not_repeats(self):
+        # two YubiKeys without a serial in the match, present at startup
+        for path in ("/usb/1", "/usb/2"):
+            self.engine.handle(Event(CONNECTED, Endpoint("udev", path, {"serial": "S9x7"})))
+        self.assertEqual(len(self.runner.calls), 2)
+
+    def test_another_event_in_between_ends_the_repeat(self):
+        # mounted, unmounted by an action, mounted again by the file manager: 0.4 s
+        mounted = self.ev(MOUNTED, "udisks", fs_uuid="U1", mountpoint="/m")
+        self.engine.handle(mounted)
+        self.now += 0.15
+        self.engine.handle(self.ev(UNMOUNTED, "udisks", fs_uuid="U1", mountpoint="/m"))
+        self.now += 0.3
+        self.engine.handle(mounted)
+        self.assertEqual([k for k, _ in self.runner.calls], [MOUNTED, MOUNTED])
+
+    def test_a_dropped_repeat_is_logged(self):
+        e = self.ev(CONNECTED, "udev", serial="S9x7")
+        self.engine.handle(e)
+        with self.assertLogs("udevmon.engine", "INFO") as logs:
+            self.engine.handle(e)
+        self.assertIn("dropped: a repeat within 1s", logs.output[0])
 
 
 class RunActionTests(unittest.TestCase):

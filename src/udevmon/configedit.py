@@ -248,6 +248,8 @@ def remove_action(path: Path, name: str) -> None:
     def change(doc):
         index, _ = _find_action(doc, name, "remove")
         del doc["actions"][index]
+        if not doc["actions"]:           # tomlkit 0.15 would write the empty one as `actions = []`
+            del doc["actions"]
 
     def verify(c):
         if name in {a.name for a in c.actions}:

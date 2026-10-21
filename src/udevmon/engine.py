@@ -56,7 +56,8 @@ class Engine:
         self._clock = clock
         self._paused = paused or pause_flag.is_paused        # a callable: injectable for tests
         self._was_paused = False
-        self._last: dict[tuple[str, str], float] = {}
+        # endpoint key -> (kind, time) of its last event that was not dropped as a repeat
+        self._last: dict[str, tuple[str, float]] = {}
 
     def set_config(self, config: Config) -> None:
         self.config = config
@@ -154,10 +155,29 @@ class Engine:
             self.runner.submit(event, jobs)
         return jobs
 
+    def _repeat(self, event: Event) -> bool:
+        """Whether the event repeats its thing's last one within ``debounce`` (then dropped).
+
+        Keyed on the thing (its endpoint), not on the device it matches: two keys matching
+        one device are two things. Any other event of the thing in between, with actions or
+        not, ends the repeat (mounted, unmounted, mounted again is three events).
+        """
+        key, now = event.endpoint.key, self._clock()
+        last = self._last.get(key)
+        if last is not None and last[0] == event.kind \
+                and now - last[1] < self.config.settings.debounce:
+            log.info("%s for %s dropped: a repeat within %gs (debounce)",
+                     event.kind, key, self.config.settings.debounce)
+            return True
+        self._last[key] = (event.kind, now)
+        return False
+
     def _dispatch(self, event: Event) -> list[Job]:
         """Work out the jobs for an event (debounce and pause included); submits nothing."""
         if self._pause_check():                       # startup and shutdown are held back too
             log.debug("%s: paused, skipped (%s)", event.kind, event.endpoint.key)
+            return []
+        if self._repeat(event):
             return []
         props = event.props
         res = resolve(self.config, props)
@@ -171,12 +191,6 @@ class Engine:
         if not jobs:
             return []
         subject = res.named[0].name if res.named else f"unnamed:{event.endpoint.key}"
-        key, now = (subject, event.kind), self._clock()
-        last = self._last.get(key)
-        if last is not None and now - last < self.config.settings.debounce:
-            log.debug("debounced %s for %s", event.kind, subject)
-            return []
-        self._last[key] = now
         log.info("%s: %s%s, %d action(s)", event.kind, subject if res.named else "unnamed thing",
                  f" [{', '.join(res.tags)}]" if res.tags else "", len(jobs))
         return jobs

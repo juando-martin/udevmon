@@ -35,8 +35,9 @@ Concepts:
   already installed.
 - On Python 3.10 only: the `tomli` package (system package `python3-tomli`),
   which `pip` pulls in automatically when you install udevmon.
-- The `tomlkit` package, version 0.11.4 or newer. Only the commands that
-  change something already in your config (`remove`, `tag`, `untag`) use it;
+- The `tomlkit` package, version 0.11.7 or newer, except 0.15.0. Only the
+  commands that change something already in your config (`remove`, `tag`,
+  `untag`) use it;
   adding new entries, `check`, `explain` and the daemon don't. `pip` pulls it
   in automatically. The system package `python3-tomlkit` is recent enough on
   Debian 13 and Ubuntu 24.04, but too old on Ubuntu 22.04 (it leaves stray
@@ -57,6 +58,12 @@ system files. If you'd rather use a virtual environment, install
 `python3 -m venv --system-site-packages ~/.venvs/udevmon`
 (the flag keeps the system `gi` and `pyudev` visible), then
 `~/.venvs/udevmon/bin/pip install .`.
+
+A virtual environment *without* `--system-site-packages` works too, but then
+pip builds PyGObject from source. That needs the GObject introspection headers
+(`libgirepository1.0-dev` on Debian/Ubuntu, needs root), and PyGObject 3.51
+and later need GLib 2.80 or newer. On an older system (Ubuntu 22.04, for
+example) install `'PyGObject<3.51'` first.
 
 Make sure `~/.local/bin` is on your `PATH` and check:
 
@@ -287,8 +294,11 @@ Notes:
   point no longer exists and any command that reads or writes there fails.
   `{mountpoint}` is still filled in, but only as text (for a message or a log
   line). Use it to warn, log or clean up something of your own.
-- Events for the same device and kind that repeat within one second are
-  dropped (`debounce`, configurable).
+- An event that repeats the last one of the same thing (the same plugged-in
+  device or filesystem, and the same kind) within one second is dropped
+  (`debounce`, configurable), and the log says so. Two things that match one
+  device are not repeats of each other, and any other event of the thing in
+  between (`mounted`, `unmounted`, `mounted` again) ends the repeat.
 - `shutdown` actions run when udevmon receives a normal stop signal
   (`systemctl --user stop`, Ctrl+C, logout). The daemon waits for them to
   finish, up to each action's `timeout`. They do **not** run if udevmon is
@@ -881,6 +891,14 @@ use letters, digits, `_`, `.` and `-`.
 - The same information is available as environment variables:
   `UDEVMON_EVENT`, `UDEVMON_DEVICE` (when the thing is named), `UDEVMON_TAG` (tag actions),
   and `UDEVMON_<PROPERTY>` (for example `UDEVMON_MOUNTPOINT`, `UDEVMON_SERIAL`).
+- Graphical programs work under the service too. For every action udevmon
+  looks up your desktop session's `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`
+  and `DBUS_SESSION_BUS_ADDRESS`: from systemd's environment for your user,
+  or, if your desktop never put them there, from one of your own running
+  programs. If the service started at the very beginning of your login, before
+  the desktop has a display, an action waits for it (up to 30 seconds). So it
+  does not matter whether the service started before or after you logged in. Run from a terminal that has a display, your own environment
+  is used as it is.
 - Commands run as you, with your home directory as working directory and no
   standard input. Their output goes to the log, line by line as it arrives, each
   line prefixed with the action's name.
@@ -994,6 +1012,16 @@ on = ["mounted"]
 retries = 10         # up to 10 more attempts (default 0: none)
 retry_delay = 1      # seconds between attempts (default 1)
 run = ["udisksctl", "unmount", "-b", "{devnode}"]
+```
+
+Unmounting what the desktop just mounted races with the desktop: a file
+manager that opened a window for the new mount may mount it again when the
+folder disappears, and this undoes mounts you make by hand too. If you only
+want to keep a partition from being mounted automatically, a udev rule (needs
+root) is cleaner, for example in `/etc/udev/rules.d/99-no-automount.rules`:
+
+```
+ENV{ID_FS_LABEL}=="LinuxSys", ENV{UDISKS_AUTO}="0"
 ```
 
 When the command exits with a **non-zero status** it is run again after the delay,
@@ -1227,11 +1255,11 @@ trust the *contents* of the device without care.
   example by your desktop's automounter or `udisksctl mount`). Mounts done
   with `sudo mount` do not go through udisks2 and are not seen.
 - **`notify-send` or other graphical commands don't work from the service.**
-  A systemd user service only sees the graphical session's environment if the
-  desktop has imported it. If it doesn't, run
-  `systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS`
-  from your session and restart the service. (Whether this is needed depends
-  on the desktop; this has not been verified on every desktop.)
+  udevmon finds your session's `DISPLAY` by itself (see "Commands" above), and
+  the log says which one it uses (`journalctl --user -u udevmon`, look for
+  "graphical session for actions"). If it says "no graphical session found",
+  no program of yours has a display, which happens when nobody is logged in
+  to the desktop.
 - **"refusing to load".** The config file is group- or world-writable or owned
   by someone else. Fix it with `chmod go-w ~/.config/udevmon/config.toml`.
 - **"udevmon is already running".** Only one daemon runs per user. Stop the

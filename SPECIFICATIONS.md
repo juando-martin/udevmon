@@ -411,6 +411,25 @@ Rules:
 - Actions run with environment `UDEVMON_EVENT`, `UDEVMON_DEVICE` (when named),
   `UDEVMON_TAG` (tag actions), and `UDEVMON_<KEY>` for every property,
   cwd = `$HOME`, stdin = `/dev/null`.
+- The graphical session's variables (`DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`,
+  `DBUS_SESSION_BUS_ADDRESS`, `XDG_SESSION_TYPE`, `XDG_CURRENT_DESKTOP`,
+  `XDG_SESSION_DESKTOP`, `DESKTOP_SESSION`) are looked up for every action
+  (`udevmon/session.py`), because a systemd user service gets the manager's
+  environment as it was when it started, which may be before the desktop
+  imported them, and some desktops never import them. Under the service
+  (`INVOCATION_ID` set), or with no display of its own: first the user
+  manager's environment now (`systemctl --user show-environment`), whose
+  values replace the daemon's under the service; if that has no
+  `DISPLAY`/`WAYLAND_DISPLAY`, the variables of the newest process of the
+  same user that has one (`/proc/<pid>/environ`), a process of a graphical
+  logind session of the user (matched on `XDG_SESSION_ID`) before any other.
+  If there is still none but logind lists a graphical session (`Type` x11,
+  wayland or mir, `State` active or online), the action waits for one, polling
+  both every 0.5 s for up to 30 s (the service starts with the user manager,
+  before the desktop has a display); then an X11 session's logind `Display`
+  is used alone, when logind has one (GDM on Ubuntu 22.04 leaves it empty, so
+  there the processes are the only fallback). From a terminal with a display nothing is looked up. The display in use is logged when it changes;
+  none found is a warning.
 - Because actions execute commands, the daemon **refuses to load** a config
   that is not owned by the user or is group/world-writable.
 - The CLI edits the file so that comments and formatting elsewhere are preserved,
@@ -543,6 +562,13 @@ When it is not set nothing changes: a bare name is left to `PATH`. Changing
 - `SIGTERM`/`SIGINT`: emit `shutdown` events, wait for those actions (bounded by each
   action's `timeout`), stop cleanly.
 - For each event, in this order:
+  0. Unless automation is paused, **debounce**: an event of the same kind as the
+     last event of the same endpoint (the thing, not the device it matches),
+     within `debounce` seconds of it, is dropped and logged at info. Every event
+     that is not dropped is recorded, whether it has actions or not, so any other
+     event of the endpoint in between ends the repeat (a `mounted`, `unmounted`,
+     `mounted` within a second is three events). Two endpoints matching one
+     device are never repeats of each other.
   1. Resolve `N(E)` and `T(E)` (§5.5). Unnamed things with no tags stop here (debug
      log). If any device in `N(E)` is `ignored`, stop: nothing runs (§5.7).
   2. Walk the actions in file order and select those whose `on` includes the kind and
@@ -555,10 +581,7 @@ When it is not set nothing changes: a bare name is left to `PATH`. Changing
        the action's tags (in the order written) that is in `T(E)`; `{device}` is the
        first device in `N(E)` (absent when unnamed).
      An action is selected at most once per event.
-  3. If none is selected, stop. Otherwise apply **debounce** to the event's
-     *subject* — the first device in `N(E)`, or the endpoint key when unnamed —
-     with the event kind: repeats of `(subject, kind)` within `debounce` seconds
-     are dropped.
+  3. If none is selected, stop.
   4. One job per event runs its selected actions **sequentially in config order**;
      different events run in parallel in a small thread pool.
 - A thing matching several named devices is logged (info): usually a config smell.

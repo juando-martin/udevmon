@@ -68,8 +68,11 @@ Every key is optional.
 .B debounce
 Number of seconds, default
 .BR 1.0 .
-Events of the same kind for the same device that repeat within this time are
-dropped.
+An event that repeats the last event of the same thing (the same plugged-in
+device or filesystem) and is of the same kind, within this time, is dropped
+and logged.
+Two things matching one device are not repeats of each other, and any other
+event of the thing in between ends the repeat.
 Must not be negative;
 .B 0
 turns it off.
@@ -840,6 +843,19 @@ for every property, for example
 and
 .BR UDEVMON_SURPRISE .
 Your own environment is passed on too.
+.IP \(bu 3
+Graphical programs work under the service as well: for every action udevmon
+looks up your desktop session's
+.BR DISPLAY ,
+.BR WAYLAND_DISPLAY ,
+.B XAUTHORITY
+and
+.BR DBUS_SESSION_BUS_ADDRESS ,
+from systemd's environment for your user or, if the desktop never put them
+there, from one of your own running programs.
+At the very beginning of a graphical login, before the desktop has a display,
+an action waits for it, up to 30 seconds.
+The log says which display is used.
 .IP \(bu 3
 Commands run as you, with your home directory as the working directory and no
 standard input.

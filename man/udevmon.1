@@ -706,6 +706,10 @@ per property, for example
 .B UDEVMON_MOUNTPOINT
 and
 .BR UDEVMON_SURPRISE .
+Under the service, the graphical session's
+.B DISPLAY
+and related variables are looked up for every action, so graphical programs
+work whether the service started before or after you logged in.
 See
 .BR udevmon.toml (5).
 .SH EXIT STATUS

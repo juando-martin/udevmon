@@ -12,6 +12,46 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Graphical programs started by actions work under the systemd service.**
+  The service got its environment once, when it started; if that was before the
+  desktop gave systemd its `DISPLAY` (or on a desktop that never does), every
+  action ran without a display. Now the session's `DISPLAY`, `WAYLAND_DISPLAY`,
+  `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS` and `XDG_*` desktop variables are
+  looked up for each action: from systemd's environment for your user as it is
+  now, or else from one of your own running programs that has a display
+  (preferring those of your desktop login over, say, an `ssh -X` shell). At
+  the very beginning of a login, before the desktop has a display, an action
+  waits for it, up to 30 s. The log says which display is used, and warns when
+  there is none. Run from a terminal with a display, nothing changes.
+- **Debounce no longer drops events of a different thing, or a real second
+  event.** It was keyed on the device name, so two things matching one device
+  (two YubiKeys without a serial in the match) within a second counted as one:
+  at startup only one got its `startup` action. And a `mounted`, `unmounted`,
+  `mounted` within a second lost the second `mounted`. Now a repeat is the same
+  kind of event for the same thing with nothing else in between, and a dropped
+  repeat is logged at the normal level.
+- **Works with tomlkit 0.15.** Removing the last action left `actions = []` at
+  the top of the file (tomlkit 0.15 writes an emptied `[[actions]]` list that
+  way), which also broke the file's first line. The key is now removed with its
+  last entry.
+
+### Dependencies
+
+- tomlkit **0.11.7** or newer (was 0.11.4), **except 0.15.0**: 0.11.4 to 0.11.6
+  fail two of the tests on variables, and 0.15.0 writes invalid TOML when a
+  variable in an inline table is changed (the edit is refused and rolled back;
+  fixed in tomlkit 0.15.1). Tested with 0.11.7, 0.12, 0.13, 0.14, 0.15.1 and
+  0.15.2.
+
+### Documentation
+
+- README: installing into a virtual environment without the system packages
+  (PyGObject's build needs, and `PyGObject<3.51` on Ubuntu 22.04), and the
+  `UDISKS_AUTO=0` udev rule as the clean way to keep a partition from being
+  automounted, rather than an action that unmounts it.
+
 ## [0.5.0] - 2026-09-21
 
 ### Added

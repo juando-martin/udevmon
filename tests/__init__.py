@@ -3,6 +3,7 @@
 * Every temporary file or folder the tests create lives in one per-run folder that is
   deleted when the run ends, so the suite never leaves anything behind in /tmp.
 * Tests never touch a real udevmon daemon: they get their own runtime directory.
+* Tests never touch the real graphical session: they get a fake DISPLAY.
 
 (Both take effect when the `tests` package is imported, which `python -m unittest
 discover -s tests -t .` and `python -m unittest tests.test_x` do; running a test file
@@ -21,3 +22,11 @@ atexit.register(_scratch.cleanup)
 _runtime = tempfile.TemporaryDirectory(prefix="udevmon-tests-")     # inside the folder above
 os.environ["XDG_RUNTIME_DIR"] = _runtime.name
 atexit.register(_runtime.cleanup)
+
+# Actions look up the graphical session (udevmon.session) unless they already have a
+# display and are not under systemd. A fake one keeps that lookup out of the suite (and
+# anything graphical a test might start off the real screen); tests/test_session.py
+# exercises the lookup itself against a fake /proc and manager.
+os.environ.pop("INVOCATION_ID", None)
+os.environ["DISPLAY"] = ":udevmon-tests"
+os.environ.pop("WAYLAND_DISPLAY", None)

@@ -10,7 +10,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from . import pause as pause_flag
-from . import state
+from . import session, state
 from .config import Action, expand
 from .events import Event
 
@@ -56,9 +56,11 @@ def run_action(action: Action, event: Event, device: str | None, tag: str | None
         return None
     log.info("action %r: %s %s", action.name, "starting (detached)" if action.detach
              else "running", argv)
+    env = build_env(event, device, tag, variables, state_dir)
+    session.update(env)                  # DISPLAY etc., which a service may not have had at start
     try:
         proc = subprocess.Popen(
-            argv, cwd=os.path.expanduser("~"), env=build_env(event, device, tag, variables, state_dir),
+            argv, cwd=os.path.expanduser("~"), env=env,
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, errors="replace", start_new_session=True)
     except OSError as e:
