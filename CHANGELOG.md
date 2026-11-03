@@ -12,6 +12,8 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-03
+
 ### Added
 
 - **`contrib/rclone-config`: rclone credentials carried on a drive.** A
