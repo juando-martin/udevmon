@@ -920,8 +920,14 @@ src/udevmon/{__init__,__main__,cli,config,configedit,events,matching,
              engine,actions,daemon,scan,service,completion,explain,pause,
              runtime,_scm}.py
 src/udevmon/sources/{__init__,udev,udisks}.py
+contrib/rclone-config/            helper run as an action (own package)
 tests/…   (unittest)
 ```
+
+`contrib/` holds helpers that udevmon runs as ordinary actions; they are not part
+of the udevmon package and import nothing from it; each has its own README and is
+installed on its own (`rclone-config` is a separate small package). `rclone-config` publishes the rclone config of a drive tagged for it while
+the drive is present.
 
 `completion.py` holds the shell completion (§8.2); `explain.py` the report of §8.4.
 `matching.py` holds device matching, tag rules, strength and the resolver

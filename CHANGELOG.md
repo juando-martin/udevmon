@@ -12,6 +12,16 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ## [Unreleased]
 
+### Added
+
+- **`contrib/rclone-config`: rclone credentials carried on a drive.** A
+  separate helper package (not part of udevmon) whose `rclone-config`
+  command udevmon runs as an action: while a drive tagged `rclone` is present, its
+  `config/rclone/rclone.conf` is published to
+  `$XDG_RUNTIME_DIR/rclone/rclone.conf` for any rclone user; it is switched to
+  another tagged drive's config, or deleted, as soon as that drive is gone or
+  udevmon stops. See its README for installing and the two actions.
+
 ### Fixed
 
 - **Graphical programs started by actions work under the systemd service.**

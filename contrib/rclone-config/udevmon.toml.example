@@ -1,0 +1,20 @@
+# rclone-config: publish the rclone config of drives tagged "rclone".
+# Merge into ~/.config/udevmon/config.toml, above any action that uses the
+# credentials. The rclone-config command must be in a [daemon] script_dir
+# folder, e.g. script_dir = ["~/.local/udev/scripts", "~/.venvs/tools/bin"].
+
+[[actions]]
+name = "rclone-config-up"
+tag = "rclone"
+on = ["startup", "mounted"]
+run = ["rclone-config", "up", "{mountpoint}", "{drive_serial}:{fs_uuid}"]
+lock = "rclone-config"
+timeout = 30
+
+[[actions]]
+name = "rclone-config-down"
+tag = "rclone"
+on = ["unmounted", "shutdown"]
+run = ["rclone-config", "down", "{mountpoint}", "{drive_serial}:{fs_uuid}"]
+lock = "rclone-config"
+timeout = 30

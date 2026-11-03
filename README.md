@@ -1212,6 +1212,13 @@ udevmon actions add --tag backup mounted --named-only -- \
   ~/bin/backup.sh "{mountpoint}"
 ```
 
+Carry rclone credentials on a drive, available only while it is plugged in:
+the helper in [`contrib/rclone-config/`](contrib/rclone-config/README.md)
+publishes the drive's `config/rclone/rclone.conf` to
+`$XDG_RUNTIME_DIR/rclone/rclone.conf` and removes it as soon as the drive is
+gone. It's a separate small package that udevmon runs as an action, not
+part of udevmon itself.
+
 ## Security notes
 
 Running commands automatically when hardware appears is convenient and also a
