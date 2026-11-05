@@ -12,6 +12,8 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-05
+
 ### Added
 
 - **Drop-in files: `config.d/*.toml`.** Read after `config.toml`, in file-name
