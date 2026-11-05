@@ -148,11 +148,30 @@ class EngineTests(Base):
 
 class CheckTests(Base):
     def test_a_missing_folder_and_a_missing_program_are_reported(self):
-        cfg = self.config(["tool"], [str(self.a), str(self.root / "nope")])
+        cfg = self.config(["tool"], [str(self.root / "nope")])
         problems = C.command_problems(cfg)
         self.assertTrue(any("script_dir" in p and "nope" in p for p in problems))
         self.assertTrue(any("'tool' was not found in script_dir or the standard system "
                             "paths" in p for p in problems))
+
+    def test_a_missing_folder_is_only_a_note_when_another_exists(self):
+        self.script(self.a, "tool")
+        cfg = self.config(["tool"], [str(self.root / "nope"), str(self.a)])
+        self.assertEqual(C.command_problems(cfg), [])
+        notes = C.command_notes(cfg)
+        self.assertEqual(len(notes), 1)
+        self.assertIn("nope", notes[0])
+
+    def test_all_folders_missing_is_still_a_warning(self):
+        cfg = self.config(["/bin/true"], [str(self.root / "nope"), str(self.root / "nada")])
+        self.assertEqual(len(C.command_problems(cfg)), 2)
+        self.assertEqual(C.command_notes(cfg), [])
+
+    def test_a_file_in_place_of_a_folder_is_still_a_warning(self):
+        (self.root / "file").write_text("")
+        cfg = self.config(["/bin/true"], [str(self.root / "file"), str(self.a)])
+        self.assertEqual(len(C.command_problems(cfg)), 1)
+        self.assertEqual(C.command_notes(cfg), [])
 
     def test_a_program_in_the_folder_is_fine_even_if_not_on_the_path(self):
         self.script(self.a, "tool")

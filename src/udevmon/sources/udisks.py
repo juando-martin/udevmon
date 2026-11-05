@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+import os
 import time
 from typing import Callable
 
@@ -159,6 +160,19 @@ class UdisksTracker:
         return out
 
 
+    def mounted_at(self, mountpoint: str) -> Endpoint | None:
+        """The filesystem mounted at ``mountpoint`` (any of its mount points; symlinks
+        resolved), with that mount point as its ``mountpoint``; None if there is none."""
+        want = os.path.realpath(mountpoint)
+        for path, ifaces in self.objects.items():
+            if I_FS not in ifaces:
+                continue
+            for mp in self._mount_points(path):
+                if os.path.realpath(mp) == want:
+                    return self._endpoint(path, mp)
+        return None
+
+
 class UdisksSource:
     name = "udisks"
 
@@ -194,6 +208,18 @@ class UdisksSource:
             log.warning("cannot query udisks2: %s", e)
             return []
         return tracker.filesystems(include_system)
+
+    def mounted_at(self, mountpoint: str) -> Endpoint | None:
+        """The filesystem mounted at ``mountpoint`` now (asks udisks2), or None."""
+        from gi.repository import Gio
+        try:
+            conn = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+            tracker = UdisksTracker()
+            tracker.load(self._managed(conn))
+        except Exception as e:
+            log.warning("cannot query udisks2: %s", e)
+            return None
+        return tracker.mounted_at(mountpoint)
 
     def start(self, emit: Callable[[Event], None]) -> None:
         from gi.repository import Gio

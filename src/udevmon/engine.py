@@ -68,7 +68,8 @@ class Engine:
         return Plan(res, self.select(event, res, skipped), skipped)
 
     def select(self, event: Event, res, skipped: list | None = None) -> list[Job]:
-        """The actions that apply to this event, in config order (each at most once)."""
+        """The actions that apply to this event (each at most once), in the order they run:
+        by ``order``, then config order."""
         named = {d.name for d in res.named}
         jobs: list[Job] = []
 
@@ -131,11 +132,34 @@ class Engine:
             resolved = found(action)
             if resolved is not None:
                 jobs.append(Job(resolved, device, tag, self._vars(device)))
+        jobs.sort(key=lambda job: job.action.order)          # stable: ties keep config order
+        if skipped is not None:
+            skipped.sort(key=lambda s: s.action.order)
         return jobs
 
     def _vars(self, device: str | None) -> Mapping:
         d = self.config.devices.get(device) if device else None
         return dict(d.vars) if d else {}
+
+    def trigger(self, event: Event) -> tuple[list[Job], list[Skip]]:
+        """The jobs for an event asked for with ``udevmon trigger``, logged like a real one.
+
+        Unlike a real event it is never dropped as a repeat (and does not count as one),
+        and it ends nothing: no state folder is removed after it. The caller has checked
+        the pause. Nothing is submitted here.
+        """
+        res = resolve(self.config, event.props)
+        skipped: list[Skip] = []
+        if res.ignored:
+            return [], skipped
+        jobs = self.select(event, res, skipped)
+        subject = res.named[0].name if res.named else "unnamed thing"
+        log.info("%s (udevmon trigger): %s%s, %d action(s)", event.kind, subject,
+                 f" [{', '.join(res.tags)}]" if res.tags else "", len(jobs))
+        for s in skipped:
+            log.info("%s (udevmon trigger): action %r skipped: %s", event.kind, s.action.name,
+                     s.reason)
+        return jobs, skipped
 
     def _pause_check(self) -> bool:
         """True while automation is paused; logs when that starts and ends."""

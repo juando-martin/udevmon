@@ -95,7 +95,11 @@ def explain_endpoint(cfg: cfgmod.Config, endpoint: Endpoint, kinds=None,
             unnamed = (("" if job.device else ", unnamed")
                        + (", detached" if job.action.detach else "")
                        + (f", lock {job.action.lock}" if job.action.lock else "")
-                       + (f", up to {job.action.retries} retries" if job.action.retries else ""))
+                       + (f", up to {job.action.retries} retries" if job.action.retries else "")
+                       + (f", order {job.action.order}" if job.action.order != cfgmod.DEFAULT_ORDER
+                          else "")
+                       + (f", from {label}" if (label := cfg.label("action", job.action.name))
+                          else ""))
             lines.append(f"  {kind:<13} runs {job.action.name!r} ({via}{unnamed})")
             lines.append(f"                  {_command(job, event)}")
         for skip in plan.skipped:

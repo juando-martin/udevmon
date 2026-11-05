@@ -1,6 +1,6 @@
 .\" Manual page for the udevmon command. Keep it in step with the CLI:
 .\" tests/test_manpages.py fails when a command or option is missing here.
-.TH UDEVMON 1 "2026-09-21" "udevmon" "User Commands"
+.TH UDEVMON 1 "2026-11-05" "udevmon" "User Commands"
 .SH NAME
 udevmon \- run your own commands when USB devices and filesystems appear or go away
 .SH SYNOPSIS
@@ -112,7 +112,36 @@ It exits with status 1 and the message
 if there is no daemon.
 Reloading does not fire
 .B startup
-actions again.
+actions again; use
+.B udevmon trigger
+for a device configured while plugged in.
+.TP
+.B udevmon trigger \fIDEVICE\fR [\fIEVENT\fR] [\fB\-\-wait\fR]
+Ask the running daemon to run the actions of the named device, which must be
+present, for
+.I EVENT
+now:
+.B startup
+(the default),
+.BR shutdown ,
+.B connected
+(a USB device),
+.B mounted
+(a filesystem that is mounted) or
+.B unmounted
+(a filesystem; it stays mounted).
+It goes through the same rules, locks, timeouts and placeholders as a real event
+and is logged like one (marked
+.BR "udevmon trigger" ),
+but it is never dropped by the debounce and removes no state folder.
+It prints what it started and why any action was skipped, and exits with status
+1 when the daemon is not running, the device is unknown to the daemon's
+configuration, not present, ignored, or automation is paused.
+.B \-\-wait
+waits for the actions to finish and prints their exit status; then any status
+other than 0 also gives status 1.
+It talks to the daemon over its control socket,
+.IR $XDG_RUNTIME_DIR/udevmon.sock .
 .TP
 .B udevmon service install \fR[\fB\-\-now\fR] [\fB\-\-dest \fIDIR\fR]
 Write a systemd user unit,
@@ -189,7 +218,7 @@ ones (the names usable in a rule or as
 in a command); those that change on every plug and cannot be used in tag rules are
 marked.
 .TP
-.B udevmon present \fR[\fB\-\-all\fR] [\fB\-\-all\-props\fR]
+.B udevmon present \fR[\fB\-\-all\fR] [\fB\-\-all\-props\fR] [\fB\-\-json\fR]
 List the USB devices and filesystems that are present now, with their
 properties, how strongly each could be matched (strong, medium or weak; a device with
 no serial number is marked as matching the port), whether it is named, and which tags
@@ -200,6 +229,23 @@ is given.
 .B \-\-all\-props
 prints every property of each entry instead of the summary line, as for
 .BR scan .
+.B \-\-json
+prints, for scripts, a JSON list with one object per entry:
+.B kind
+.RB ( usb " or " filesystem ),
+.BR description ,
+.B props
+(every property, the
+.B udev_*
+ones included),
+.B devices
+and
+.B tags
+(the names it has in the configuration) and
+.B suggested_match
+(the keys
+.B scan
+would offer).
 .TP
 .B udevmon explain \fR[\fIEVENT\fR] [\fB\-\-device \fINAME\fR] [\fB\-\-prop \fIKEY=VALUE\fR ...] [\fB\-\-all\fR]
 Show what would run, without plugging anything in.
@@ -245,11 +291,24 @@ actions that use each.
 .B udevmon devices show \fINAME\fR
 Show one device: match, strength, status, tags and its actions.
 .TP
-.B udevmon devices add \fINAME\fR \fB\-\-match \fIKEY=VALUE\fR ... [\fB\-\-tag \fITAG\fR ...] [\fB\-\-exclude\-tag \fITAG\fR ...] [\fB\-\-var \fINAME=VALUE\fR ...] [\fB\-\-description \fITEXT\fR]
+.B udevmon devices add \fINAME\fR (\fB\-\-match \fIKEY=VALUE\fR ... | \fB\-\-from\-mountpoint \fIPATH\fR) [\fB\-\-tag \fITAG\fR ...] [\fB\-\-exclude\-tag \fITAG\fR ...] [\fB\-\-var \fINAME=VALUE\fR ...] [\fB\-\-description \fITEXT\fR]
 Add a device without scanning.
 .B \-\-match
 is required and can be repeated for several keys; a device match is exact, so
 repeating a key is an error.
+.B \-\-from\-mountpoint
+instead takes the match from the filesystem mounted at
+.IR PATH :
+its
+.B fs_uuid
+and its drive's
+.BR drive_serial ,
+and its description unless
+.B \-\-description
+is given.
+Nothing is written when nothing is mounted there, the filesystem has no UUID,
+the drive has no usable serial number, or a device already matches that
+filesystem.
 .B \-\-tag
 sets an explicit tag (repeatable).
 .B \-\-exclude\-tag
@@ -375,9 +434,12 @@ Rename a tag wherever it is used.
 .SS "Actions"
 .TP
 .B udevmon actions list
-List the actions with their targets, events and command.
+List the actions with their targets, events and command, in the order they run
+within an event (by
+.BR order ,
+then file order; an order other than 50 is shown).
 .TP
-.B udevmon actions add (\-\-device \fINAME\fR ... | \-\-tag \fINAME\fR ...) \fIEVENT\fR[,\fIEVENT\fR...] [\fB\-\-name \fINAME\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-all\-tags\fR] [\fB\-\-detach\fR] [\fB\-\-lock \fINAME\fR] [\fB\-\-retries \fIN\fR] [\fB\-\-retry\-delay \fISECONDS\fR] [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR] \-\- \fICOMMAND\fR [\fIARG\fR...]
+.B udevmon actions add (\-\-device \fINAME\fR ... | \-\-tag \fINAME\fR ...) \fIEVENT\fR[,\fIEVENT\fR...] [\fB\-\-name \fINAME\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-all\-tags\fR] [\fB\-\-detach\fR] [\fB\-\-lock \fINAME\fR] [\fB\-\-retries \fIN\fR] [\fB\-\-retry\-delay \fISECONDS\fR] [\fB\-\-order \fIN\fR] [\fB\-\-notify\-on\-failure\fR] [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR] \-\- \fICOMMAND\fR [\fIARG\fR...]
 Add an action.
 Options go before the
 .BR \-\- ;
@@ -400,6 +462,7 @@ is one or more of
 and
 .BR shutdown ,
 separated by commas.
+The action is added at the end of the file.
 The timeout defaults to 60 seconds.
 .B \-\-detach
 starts the command and does not wait for it (no timeout, so it cannot be combined
@@ -416,6 +479,14 @@ more times, waiting
 .B \-\-retry\-delay
 seconds (default 1) between attempts; never after a timeout (see
 .BR udevmon.toml (5)).
+.B \-\-order
+sets the action's
+.BR order :
+within one event, lower runs first (default 50; equal ones run in file order).
+.B \-\-notify\-on\-failure
+sets
+.BR notify_on_failure :
+a desktop notification when the action fails or times out.
 .B \-\-allow\-unnamed
 and
 .B \-\-named\-only
@@ -433,7 +504,7 @@ An action created by hand without a
 .B name
 line cannot be removed this way; edit the file.
 .TP
-.B udevmon actions set \fINAME\fR [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR | \fB\-\-default\-unnamed\fR] [\fB\-\-on \fIEVENTS\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-add\-device \fINAME\fR ...] [\fB\-\-remove\-device \fINAME\fR ...] [\fB\-\-add\-tag \fINAME\fR ...] [\fB\-\-remove\-tag \fINAME\fR ...] [\fB\-\-all\-tags\fR | \fB\-\-any\-tags\fR] [\fB\-\-detach\fR | \fB\-\-no\-detach\fR] [\fB\-\-lock \fINAME\fR | \fB\-\-no\-lock\fR] [\fB\-\-retries \fIN\fR] [\fB\-\-retry\-delay \fISECONDS\fR] [\fB\-\- \fICOMMAND\fR ...]
+.B udevmon actions set \fINAME\fR [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR | \fB\-\-default\-unnamed\fR] [\fB\-\-on \fIEVENTS\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-add\-device \fINAME\fR ...] [\fB\-\-remove\-device \fINAME\fR ...] [\fB\-\-add\-tag \fINAME\fR ...] [\fB\-\-remove\-tag \fINAME\fR ...] [\fB\-\-all\-tags\fR | \fB\-\-any\-tags\fR] [\fB\-\-detach\fR | \fB\-\-no\-detach\fR] [\fB\-\-lock \fINAME\fR | \fB\-\-no\-lock\fR] [\fB\-\-retries \fIN\fR] [\fB\-\-retry\-delay \fISECONDS\fR] [\fB\-\-order \fIN\fR] [\fB\-\-notify\-on\-failure\fR | \fB\-\-no\-notify\-on\-failure\fR] [\fB\-\- \fICOMMAND\fR ...]
 Change an action without removing and adding it again.
 .B \-\-on
 replaces the events (comma\-separated).
@@ -488,6 +559,14 @@ removes it.
 and
 .B \-\-retry\-delay
 change the retries (\fB\-\-retries 0\fR removes them).
+.B \-\-order
+changes the order
+.RB ( "\-\-order 50" ,
+the default, removes the key).
+.B \-\-notify\-on\-failure
+and
+.B \-\-no\-notify\-on\-failure
+turn the failure notification on and off.
 .IP
 A command after
 .B \-\-
@@ -594,6 +673,24 @@ Commands that only add or remove entries do not need
 commands that change an existing entry do, and say how to install it if it is
 missing.
 .IP \(bu 3
+An entry is changed, renamed or removed in the file that defines it, the main
+file or a drop\-in
+.RI ( config.d/NAME.toml ,
+see
+.BR udevmon.toml (5)).
+A rename also changes the references to the old name in every file.
+.BR "devices add" ,
+.B tags add
+and
+.B actions add
+write to the main file;
+.BI \-\-file " DROPIN"
+writes to that drop\-in instead, created if needed, given as
+.IR NAME ,
+.I NAME.toml
+or
+.IR config.d/NAME.toml .
+.IP \(bu 3
 They say when automation is paused.
 .IP \(bu 3
 If the result cannot be written correctly the file is left as it was, and the
@@ -651,12 +748,21 @@ The file must be owned by you and not writable by group or others; udevmon
 refuses to load it otherwise (\c
 .BR "chmod go\-w" ).
 .TP
+.I ~/.config/udevmon/config.d/*.toml
+Drop\-in files, read after the main one in name order.
+.TP
 .I ~/.config/udevmon/config.toml.bak
-The previous version, written by every editing command.
+The previous version, written by every editing command (a drop\-in gets its own
+.IR NAME.toml.bak ).
 .TP
 .I $XDG_RUNTIME_DIR/udevmon.lock
 Held by the running daemon.
 Line one is its process ID, line two the resolved path of its configuration.
+.TP
+.I $XDG_RUNTIME_DIR/udevmon.sock
+The running daemon's control socket, used by
+.BR "udevmon trigger" .
+Only you can connect to it.
 .TP
 .I $XDG_RUNTIME_DIR/udevmon.paused
 Exists while automation is paused.

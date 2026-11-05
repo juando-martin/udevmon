@@ -192,7 +192,7 @@ class CliTests(PauseTestCase):
 
     def test_a_timed_pause(self):
         rc, out, _ = self.run_cli("pause", "--for", "30m", daemon_running=True)
-        self.assertRegex(out, r"paused until \d\d:\d\d\.")
+        self.assertRegex(out, r"paused until (\d{4}-\d\d-\d\d )?\d\d:\d\d\.")   # a date after midnight
         self.assertIn("`udevmon resume` to continue sooner", out)
         paused, until = pause.status()
         self.assertTrue(paused and until is not None)

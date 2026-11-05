@@ -465,6 +465,38 @@ Rules:
   `config.toml.bak` is written before each edit. Line endings (LF or CRLF) and a
   missing final newline are preserved. A comment above a removed block stays.
 
+### 6.0 Drop-in files
+
+- Besides the main file `M` (`config.toml`, or `--config NAME.toml`), the files
+  `M.d/*.toml` (`config.d/`) are read after it, sorted by file name (byte order).
+  Only regular files named `NAME.toml` with `NAME` starting with a letter, digit
+  or `_` are read (no hidden files, no `.bak`/`.tmp`). `config.load()` reads them
+  all; a missing main file with drop-ins is fine (`must_exist` then holds).
+- A drop-in has the main file's schema except `[daemon]` (an error there). The
+  `devices`, `tags` and `actions` of all files are merged before validation, so
+  references cross files. A device, declared tag or explicitly named action
+  defined in two files is an error naming both; errors inside a drop-in are
+  prefixed with its label (`config.d/NAME.toml: ...`, and an action's number is
+  its position in that file). With only the main file every message is as before.
+- Actions keep file order across files: the main file's, then each drop-in's
+  (`order`, §7 step 3, sorts first; one file order cannot nest one tool's setup
+  and teardown around another's, `order` can). A
+  made-up action name (`TARGET-N`) uses its position `N` in that combined list.
+- Each file, and the folder when a drop-in exists, passes the ownership and
+  permission check (§6).
+- `Config.sources` maps (`device` | `tag` | `action`, name) to the file defining
+  it; `Config.files` lists the files read. `check` prints them with their counts
+  when there are drop-ins; `devices|tags|actions list` add `[config.d/NAME.toml]`,
+  `devices|tags show` a `file:` line and `explain` `from config.d/NAME.toml` for
+  drop-in entries only.
+- Editing (§6): `devices|tags|actions add` write to the main file, or with
+  `--file DROPIN` (`NAME`, `NAME.toml`, `config.d/NAME.toml` or its full path;
+  nothing else) to that drop-in, created with mode 0600. Every other edit is made
+  in the file that defines the entry; `devices disable` and the like may edit
+  several files at once. A rename changes the references in every file and the
+  header in the defining one. An edit is checked against the whole configuration, and every
+  file it wrote is rolled back on failure. Each edited file gets its own `.bak`.
+
 ### 6.1 Errors
 
 `check` reports these and exits 1; the daemon refuses to start with them, and on
@@ -478,7 +510,8 @@ reload keeps the previous configuration:
   `connected`; `{tag}` on a `device` action);
 - an invalid `timeout`, a `detach` that is not a boolean, or a `timeout` together with
   `detach = true` (§7.2); a `lock` that is not a name (§7.3); `retries` that is not a
-whole number of 0 or more, `retry_delay` that is not a number above 0, or either of
+whole number of 0 or more, `order` that is not a whole number, `retry_delay` that
+is not a number above 0, or either of
 them with `detach` (§7.4);
 - a device `status` other than `"disabled"`, `"ignored"`, `"active"` or `""`, or a
   non-boolean `enabled` (§5.7);
@@ -504,7 +537,9 @@ printed by `check` only. Neither changes the exit status.
   `syspath`, `port_path`, `subsystem`, `devtype`, `surprise`);
 - warning: a `script_dir` entry that is not a folder, and (with `script_dir` set) an
   action whose bare command name is in none of the folders nor the standard system
-  paths (computed by `config.command_problems()`, like the next one);
+  paths (computed by `config.command_problems()`, like the next one). An entry that
+  does not exist while another entry is a folder is only a note
+  (`config.command_notes()`, logged at the normal level by the daemon);
 - warning: a device `match` that uses a volatile key;
 - warning: a device `match` value containing `*` or `?` (literal there; wildcards
   work in tag rules only, §5.4);
@@ -581,8 +616,10 @@ When it is not set nothing changes: a bare name is left to `PATH`. Changing
        the action's tags (in the order written) that is in `T(E)`; `{device}` is the
        first device in `N(E)` (absent when unnamed).
      An action is selected at most once per event.
-  3. If none is selected, stop.
-  4. One job per event runs its selected actions **sequentially in config order**;
+  3. If none is selected, stop. Otherwise sort the selected actions by `order`
+     (an integer, default 50, lower first); the sort is stable, so equal ones keep
+     config order (main file, then drop-ins, §6.0). Skips are sorted the same way.
+  4. One job per event runs its selected actions **sequentially in that order**;
      different events run in parallel in a small thread pool.
 - A thing matching several named devices is logged (info): usually a config smell.
 - Selected actions for unnamed things are logged at info with an "unnamed" marker;
@@ -613,7 +650,8 @@ program can keep writing without a broken pipe.
   None at once. A reaper thread logs its exit status when it ends (prefixed
   `detached`). There is no timeout, so a `timeout` key together with `detach` is an
   error (§6.1). A command that cannot start is logged as an error either way.
-- The actions of one event run one after another in file order; a detached one
+- The actions of one event run one after another, by `order` then file order
+  (§7, step 3); a detached one
   does not hold up the next.
 - Everything the actions started belongs to the daemon's service group: stopping the
   systemd service ends it, detached or not.
@@ -654,6 +692,19 @@ and ends the retrying. Every failed attempt is logged (WARNING), and after the l
 `gave up after N attempts`. Each attempt has its own timeout; a `lock` (§7.3) is held
 across all of them. `retries` or `retry_delay` with `detach` is an error (§6.1).
 
+### 7.4.1 Failure notifications
+
+`notify_on_failure` (boolean, default false; an error with `detach`): when the
+action's last attempt (§7.4) exits non-zero, times out or cannot start, the
+runner calls `notify.action_failed`, which sends one
+`org.freedesktop.Notifications.Notify` (app `udevmon`, icon `dialog-error`,
+urgency critical; summary `udevmon: action NAME failed (DEVICE)`, body the exit
+status, `timed out after N s` or `could not start: ...`, plus `(after N
+attempts)` with retries) on the session bus: `DBUS_SESSION_BUS_ADDRESS` as
+`session.update` finds it for actions, else `unix:path=$XDG_RUNTIME_DIR/bus` if
+that exists. No bus: nothing is sent (info log); a sending error is a warning
+and never affects the runner. Nothing is sent for a skipped action or a dry run.
+
 ### 7.5 Instances and state folders
 
 Every event of a thing carries `instance`, chosen by its source when the thing is first
@@ -679,12 +730,14 @@ event may find the folder gone; a `lock` (§7.3) orders them.
 udevmon run [--dry-run] [-v]            run the daemon
 udevmon scan [--no-prompt] [--present] [--all-props]
                                         scan mode (below)
-udevmon present [--all] [--all-props]   list what is present now, with
+udevmon present [--all] [--all-props] [--json]
+                                        list what is present now, with
                                         strength, device name and tags
 udevmon devices list|show               (bare `devices` = `devices list`)
-udevmon devices add NAME --match KEY=VALUE ...
+udevmon devices add NAME (--match KEY=VALUE ... | --from-mountpoint PATH)
                     [--tag TAG ...] [--exclude-tag TAG ...]
                     [--var NAME=VALUE ...] [--description TEXT]
+                    [--file DROPIN]
 udevmon devices remove NAME
 udevmon devices tag NAME TAG [TAG ...]  add explicit tags to a device
 udevmon devices disable|ignore|enable NAME...   (§5.7)
@@ -695,6 +748,7 @@ udevmon devices|tags|actions rename OLD NEW
 udevmon devices untag NAME TAG [TAG ...]
 udevmon tags list|show
 udevmon tags add NAME [--match KEY=VALUE ...] [--description TEXT]
+                     [--file DROPIN]
 udevmon tags set NAME [--match KEY=VALUE ... | --no-rule]
                      [--description TEXT]
 udevmon tags remove NAME
@@ -702,7 +756,9 @@ udevmon actions list
 udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT ...]
                     [--name NAME] [--timeout SECONDS] [--all-tags]
                     [--detach] [--lock NAME] [--retries N] [--retry-delay S]
-                    [--allow-unnamed | --named-only] -- COMMAND [ARG ...]
+                    [--order N] [--notify-on-failure]
+                    [--allow-unnamed | --named-only] [--file DROPIN]
+                    -- COMMAND [ARG ...]
 udevmon actions remove NAME
 udevmon actions disable|enable NAME...
 udevmon actions set NAME [--allow-unnamed | --named-only
@@ -712,13 +768,17 @@ udevmon actions set NAME [--allow-unnamed | --named-only
                     [--add-tag N ...] [--remove-tag N ...]
                     [--all-tags | --any-tags] [--detach | --no-detach]
                     [--lock NAME | --no-lock] [--retries N]
-                    [--retry-delay S] [-- COMMAND ...]
+                    [--retry-delay S] [--order N]
+                    [--notify-on-failure | --no-notify-on-failure]
+                    [-- COMMAND ...]
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
                                         what would run (§8.4)
 udevmon pause [--for DURATION]          stop every action (§8.5)
 udevmon resume                          let actions run again
 udevmon check                           validate: errors, warnings, notes
 udevmon reload                          SIGHUP the running daemon
+udevmon trigger DEVICE [EVENT] [--wait] run a present device's actions now
+                                        (§8.6)
 udevmon service install [--now] [--dest DIR]
                                         write the systemd user unit
                                         (and optionally enable it)
@@ -739,6 +799,18 @@ The editing commands (`devices add|remove|tag|untag`, `tags add|remove`,
 - `--match KEY=VALUE` may be repeated. On `tags add`, repeating a key builds a
   list (`--match fs_type=ext4 --match fs_type=exfat` → `["ext4", "exfat"]`); on
   `devices add` repeating a key is an error.
+- `devices add --from-mountpoint PATH` (instead of `--match`) asks udisks2 for
+  the filesystem mounted at `PATH` (any of its mount points, symlinks resolved)
+  and writes `match = { fs_uuid = ..., drive_serial = ... }`, with its
+  description unless `--description` is given. It refuses, writing nothing, when
+  nothing is mounted there, the filesystem has no `fs_uuid`, the drive's serial
+  is missing or suspicious (§5.2), or a device already matches the filesystem.
+- `present --json` prints a JSON list, one object per thing: `kind` (`usb` or
+  `filesystem`), `description`, `props` (all, `udev_*` included), `devices` and
+  `tags` (as resolved, §5.5) and `suggested_match` (the keys of §5.2).
+- `actions add` appends the new `[[actions]]` table at the end of the file (or
+  of the `--file` drop-in); `order` (§7, step 3), not the position, is the way
+  to run it before others.
 - `--device` and `--tag` may be repeated (lists) but not mixed.
   `--allow-unnamed` / `--named-only` (only with `--tag`) set `allow_unnamed`
   to `true` / `false`.
@@ -871,6 +943,32 @@ with the reason.
   the file once it starts. Pausing again replaces the previous pause.
 - `explain` prints `Note: automation is paused (...)`, and the editing commands and
   `scan`, after a successful change, print the same note.
+
+### 8.6 Trigger
+
+- The daemon listens on `$XDG_RUNTIME_DIR/udevmon.sock` (mode 0600, removed on
+  stop; a stale one is replaced, the lock file proving no other daemon runs).
+  A connection whose peer uid (`SO_PEERCRED`) is not the daemon's is refused.
+  One request per connection: one JSON line in, one out. Reading and replying
+  happen in a thread; the request is handled on the main loop (`idle_add`),
+  so it is ordered with events, and lock tickets are taken there as for events.
+  If the socket cannot be opened the daemon logs a warning and runs without it.
+- `{"cmd": "trigger", "device": NAME, "event": KIND, "wait": BOOL}`. `KIND` is
+  one of `startup` (default), `shutdown`, `connected` (a USB thing), `mounted`
+  (a filesystem with a mount point), `unmounted` (a filesystem; `surprise=0`).
+  Refused: an unknown device (in the daemon's configuration), an ignored one,
+  a pause, no present thing matching the device, none for which `KIND` fits.
+- For each present thing that is the device, an event of `KIND` is built from
+  its current properties and goes through `Engine.trigger`: resolution and
+  selection as for a real event (§5.5, §7), but no debounce (and it does not
+  count for it) and no presence end (no state folder removed). It is logged as
+  `KIND (udevmon trigger): NAME, N action(s)`, with each skip.
+- The reply lists, per thing, the actions submitted and those skipped with the
+  reason. With `wait`, it is sent once they finish, with each action's exit
+  status (`null`: timed out, not started, skipped or detached).
+- CLI: exit 1 when no daemon runs (lock file or socket), when an explicit
+  `--config` is not the daemon's, on a refusal, and with `--wait` when a status
+  is not 0.
 
 ## 9. Resource expectations
 

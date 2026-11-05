@@ -60,7 +60,8 @@ def render_tag(name, match, description="") -> str:
 
 
 def render_action(name, devices, tags, on, run, timeout=None, allow_unnamed=None,
-                  tag_mode=None, detach=False, lock=None, retries=0, retry_delay=None) -> str:
+                  tag_mode=None, detach=False, lock=None, retries=0, retry_delay=None,
+                  order=None, notify_on_failure=False) -> str:
     lines = ["[[actions]]", f"name = {_s(name)}"]
     lines.append(f"device = {_name_or_list(devices)}" if devices
                  else f"tag = {_name_or_list(tags)}")
@@ -77,6 +78,10 @@ def render_action(name, devices, tags, on, run, timeout=None, allow_unnamed=None
         lines.append(f"retries = {retries}")
     if retry_delay is not None:
         lines.append(f"retry_delay = {retry_delay:g}")
+    if order is not None and order != cfgmod.DEFAULT_ORDER:
+        lines.append(f"order = {order}")
+    if notify_on_failure:
+        lines.append("notify_on_failure = true")
     if allow_unnamed is not None:
         lines.append(f"allow_unnamed = {'true' if allow_unnamed else 'false'}")
     return "\n".join(lines) + "\n"
@@ -96,21 +101,44 @@ def _write(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def _edit(path: Path, new_text: str, verify) -> None:
-    """Write ``new_text`` (keeping a .bak); roll back if it fails validation."""
-    old = _read(path) if path.exists() else None
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if old is not None:
-        shutil.copy2(path, path.with_name(path.name + ".bak"))
-    _write(path, new_text)
+def _commit(main: Path, texts: dict, verify) -> None:
+    """Write each file's new text (keeping a .bak of each), then check the whole
+    configuration of ``main`` (with its drop-ins); roll every file back if it fails."""
+    old = {path: (_read(path) if path.exists() else None) for path in texts}
+    written = []
     try:
-        verify(cfgmod.load(path))
+        for path, text in texts.items():
+            if old[path] == text:
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if old[path] is not None:
+                shutil.copy2(path, path.with_name(path.name + ".bak"))
+            written.append(path)
+            _write(path, text)
+        verify(cfgmod.load(main))
     except Exception:
-        if old is None:
-            path.unlink()
-        else:
-            _write(path, old)
+        for path in written:
+            if old[path] is None:
+                path.unlink()
+            else:
+                _write(path, old[path])
         raise
+
+
+def _edit(path: Path, new_text: str, verify, main: Path | None = None) -> None:
+    """Write ``new_text`` to ``path`` (keeping a .bak); roll back if the configuration
+    of ``main`` (default: ``path``) fails validation."""
+    _commit(main or path, {path: new_text}, verify)
+
+
+def _file(cfg, kind: str, name: str, main: Path) -> Path:
+    """The file that defines the entry (the main file when it is not known)."""
+    return cfg.source(kind, name) or main
+
+
+def _target(main: Path, file) -> Path:
+    """Where an ``add`` writes: the main file, or the drop-in that ``file`` names."""
+    return main if file is None else cfgmod.dropin_path(main, str(file))
 
 
 def _append(path: Path, block: str) -> str:
@@ -130,43 +158,59 @@ def _check_variable(name: str) -> None:
 
 
 def add_device(path: Path, name, match, description="", tags=(), status=None,
-               exclude_tags=(), variables=None) -> None:
+               exclude_tags=(), variables=None, *, file=None) -> None:
+    """Add a device to the main file ``path``, or to the drop-in ``file``."""
     _check_name("device", name)
     for t in (*tags, *exclude_tags):
         _check_name("tag", t)
     for k in variables or {}:
         _check_variable(k)
+    target = _target(path, file)
     existing = cfgmod.load(path)
     if name in existing.devices:
-        raise cfgmod.ConfigError([f"device {name!r} already exists"])
-    _edit(path, _append(path, render_device(name, match, description,
-                                             list(dict.fromkeys(tags)), status,
-                                             list(dict.fromkeys(exclude_tags)), variables)),
-          lambda c: c.devices[name])
+        raise cfgmod.ConfigError([f"device {name!r} already exists"
+                                  + _in(existing, "device", name)])
+    _edit(target, _append(target, render_device(name, match, description,
+                                                 list(dict.fromkeys(tags)), status,
+                                                 list(dict.fromkeys(exclude_tags)), variables)),
+          lambda c: c.devices[name], main=path)
 
 
-def add_tag(path: Path, name, match, description="") -> None:
+def _in(cfg, kind: str, name: str) -> str:
+    """" (in config.d/NAME.toml)" for an entry of a drop-in file, else ""."""
+    label = cfg.label(kind, name)
+    return f" (in {label})" if label else ""
+
+
+def add_tag(path: Path, name, match, description="", *, file=None) -> None:
     _check_name("tag", name)
+    target = _target(path, file)
     existing = cfgmod.load(path)
     if name in existing.tags:
-        raise cfgmod.ConfigError([f"tag {name!r} already declared"])
-    _edit(path, _append(path, render_tag(name, match, description)), lambda c: c.tags[name])
+        raise cfgmod.ConfigError([f"tag {name!r} already declared" + _in(existing, "tag", name)])
+    _edit(target, _append(target, render_tag(name, match, description)), lambda c: c.tags[name],
+          main=path)
 
 
 def add_action(path: Path, name, devices, tags, on, run, timeout=None, allow_unnamed=None,
-               tag_mode=None, detach=False, lock=None, retries=0, retry_delay=None) -> str:
+               tag_mode=None, detach=False, lock=None, retries=0, retry_delay=None, *,
+               file=None, order: int | None = None, notify_on_failure: bool = False) -> str:
+    """Add an action at the end of the main file ``path`` (or of the drop-in ``file``)."""
+    target = _target(path, file)
     existing = cfgmod.load(path)
+    names = [a.name for a in existing.actions]
     if not name:
         base = f"{(devices or tags)[0]}-{'-'.join(on)}"
         name, n = base, 2
-        taken = {a.name for a in existing.actions}
-        while name in taken:
+        while name in names:
             name, n = f"{base}-{n}", n + 1
-    elif name in {a.name for a in existing.actions}:
-        raise cfgmod.ConfigError([f"action {name!r} already exists"])
-    _edit(path, _append(path, render_action(name, devices, tags, on, run, timeout, allow_unnamed,
-                                            tag_mode, detach, lock, retries, retry_delay)),
-          lambda c: [a for a in c.actions if a.name == name][0])
+    elif name in names:
+        raise cfgmod.ConfigError([f"action {name!r} already exists"
+                                  + _in(existing, "action", name)])
+    block = render_action(name, devices, tags, on, run, timeout, allow_unnamed, tag_mode,
+                          detach, lock, retries, retry_delay, order, notify_on_failure)
+    _edit(target, _append(target, block),
+          lambda c: [a for a in c.actions if a.name == name][0], main=path)
     return name
 
 
@@ -219,8 +263,9 @@ def remove_device(path: Path, name: str) -> None:
     def verify(c):
         if name in c.devices:
             raise cfgmod.ConfigError([f"removal of {name!r} did not take effect"])
-    _edit(path, _edited(path, lambda doc: doc["devices"].__delitem__(name), f"device {name!r}"),
-          verify)
+    f = _file(cfg, "device", name, path)
+    _edit(f, _edited(f, lambda doc: doc["devices"].__delitem__(name), f"device {name!r}"),
+          verify, main=path)
 
 
 def remove_tag(path: Path, name: str) -> None:
@@ -236,8 +281,9 @@ def remove_tag(path: Path, name: str) -> None:
     def verify(c):
         if name in c.tags:
             raise cfgmod.ConfigError([f"removal of {name!r} did not take effect"])
-    _edit(path, _edited(path, lambda doc: doc["tags"].__delitem__(name), f"tag {name!r}"),
-          verify)
+    f = _file(cfg, "tag", name, path)
+    _edit(f, _edited(f, lambda doc: doc["tags"].__delitem__(name), f"tag {name!r}"),
+          verify, main=path)
 
 
 def remove_action(path: Path, name: str) -> None:
@@ -254,7 +300,8 @@ def remove_action(path: Path, name: str) -> None:
     def verify(c):
         if name in {a.name for a in c.actions}:
             raise cfgmod.ConfigError([f"removal of {name!r} did not take effect"])
-    _edit(path, _edited(path, change), verify)
+    f = _file(cfg, "action", name, path)
+    _edit(f, _edited(f, change), verify, main=path)
 
 
 def _edit_device_names(path: Path, name: str, key: str, add=(), remove=()) -> None:
@@ -307,7 +354,8 @@ def _edit_device_names(path: Path, name: str, key: str, add=(), remove=()) -> No
     def verify(c):
         if list(getattr(c.devices[name], attr)) != new_names:
             raise cfgmod.ConfigError([f"the {key} edit on {name!r} did not take effect"])
-    _edit(path, _edited(path, change), verify)
+    f = _file(cfg, "device", name, path)
+    _edit(f, _edited(f, change), verify, main=path)
 
 
 def set_device_tags(path: Path, name: str, add=(), remove=()) -> None:
@@ -338,19 +386,24 @@ def set_device_status(path: Path, names, status: str | None) -> list[str]:
     want = status or "active"
     changed = [n for n in names if cfg.devices[n].status != want]
 
-    def change(doc):
-        for n in names:
-            table = doc["devices"][n]
-            if status is None:
-                table.pop("status", None)               # active is the absence of the key
-            else:
-                table["status"] = status
+    def change_in(f):
+        def change(doc):
+            for n in names:
+                if _file(cfg, "device", n, path) != f:
+                    continue
+                table = doc["devices"][n]
+                if status is None:
+                    table.pop("status", None)           # active is the absence of the key
+                else:
+                    table["status"] = status
+        return change
 
     def verify(c):
         wrong = [n for n in names if c.devices[n].status != want]
         if wrong:
             raise cfgmod.ConfigError([f"status change on {wrong} did not take effect"])
-    _edit(path, _edited(path, change), verify)
+    files = dict.fromkeys(_file(cfg, "device", n, path) for n in names)
+    _commit(path, {f: _edited(f, change_in(f)) for f in files}, verify)
     return changed
 
 
@@ -364,19 +417,24 @@ def set_action_enabled(path: Path, names, enabled: bool) -> list[str]:
         raise cfgmod.ConfigError([f"no such action(s): {', '.join(map(repr, missing))}"])
     changed = [n for n in names if by_name[n].enabled != enabled]
 
-    def change(doc):
-        for n in names:
-            _, item = _find_action(doc, n, "change")
-            if enabled:
-                item.pop("enabled", None)
-            else:
-                item["enabled"] = False
+    def change_in(f):
+        def change(doc):
+            for n in names:
+                if _file(cfg, "action", n, path) != f:
+                    continue
+                _, item = _find_action(doc, n, "change")
+                if enabled:
+                    item.pop("enabled", None)
+                else:
+                    item["enabled"] = False
+        return change
 
     def verify(c):
         wrong = [a.name for a in c.actions if a.name in names and a.enabled != enabled]
         if wrong:
             raise cfgmod.ConfigError([f"change of {wrong} did not take effect"])
-    _edit(path, _edited(path, change), verify)
+    files = dict.fromkeys(_file(cfg, "action", n, path) for n in names)
+    _commit(path, {f: _edited(f, change_in(f)) for f in files}, verify)
     return changed
 
 
@@ -402,6 +460,7 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
                        on=None, timeout: float | None = None, run=None, tag_mode=None,
                        detach: bool | None = None, lock: str | None = None,
                        retries: int | None = None, retry_delay: float | None = None,
+                       order: int | None = None, notify_on_failure: bool | None = None,
                        add_devices=(), remove_devices=(), add_tags=(), remove_tags=()):
     """Change an action's ``allow_unnamed``, events, timeout, command, lock or targets.
 
@@ -426,12 +485,14 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
                                   "apply to actions that use tags"])
     if (unnamed is None and on is None and timeout is None and run is None and tag_mode is None
             and detach is None and lock is None and retries is None and retry_delay is None
+            and order is None and notify_on_failure is None
             and not (device_edit or tag_edit)):
         raise cfgmod.ConfigError(["nothing to change: give --allow-unnamed, --named-only, "
                                   "--default-unnamed, --on, --timeout, --add-device, "
                                   "--remove-device, --add-tag, --remove-tag, --all-tags, "
                                   "--any-tags, --detach, --no-detach, --lock, --no-lock, "
-                                  "--retries, --retry-delay or a new command after --"])
+                                  "--retries, --retry-delay, --order, --notify-on-failure, "
+                                  "--no-notify-on-failure or a new command after --"])
     key = None
     targets = None
     if device_edit and tag_edit:
@@ -458,7 +519,8 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
             key = None
             if (unnamed is None and on is None and timeout is None and run is None
                     and tag_mode is None and detach is None and lock is None
-                    and retries is None and retry_delay is None):
+                    and retries is None and retry_delay is None and order is None
+                    and notify_on_failure is None):
                 return None
 
     def change(doc):
@@ -484,6 +546,15 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
         if retry_delay is not None:
             item["retry_delay"] = int(retry_delay) if float(retry_delay).is_integer() \
                 else float(retry_delay)
+        if notify_on_failure is True:
+            item["notify_on_failure"] = True
+        elif notify_on_failure is False:
+            item.pop("notify_on_failure", None)
+        if order is not None:
+            if order == cfgmod.DEFAULT_ORDER:
+                item.pop("order", None)                     # the default: no key
+            else:
+                item["order"] = order
         if lock:
             item["lock"] = lock
         elif lock == "":
@@ -529,9 +600,12 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
                 or (lock is not None and a.lock != (lock or None))
                 or (retries is not None and a.retries != retries)
                 or (retry_delay is not None and a.retry_delay != float(retry_delay))
+                or (order is not None and a.order != order)
+                or (notify_on_failure is not None and a.notify_on_failure != notify_on_failure)
                 or (key is not None and list(a.targets) != targets)):
             raise cfgmod.ConfigError([f"the change to {name!r} did not take effect"])
-    _edit(path, _edited(path, change), verify)
+    f = _file(cfg, "action", name, path)
+    _edit(f, _edited(f, change), verify, main=path)
     return targets
 
 
@@ -617,7 +691,8 @@ def set_device_fields(path: Path, name: str, *, match=None, description=None,
                 (description is not None and d.description != description) or \
                 ((set_vars or unset_vars) and dict(d.vars) != new_vars):
             raise cfgmod.ConfigError([f"the change to {name!r} did not take effect"])
-    _edit(path, _edited(path, change, f"device {name!r}"), verify)
+    f = _file(cfg, "device", name, path)
+    _edit(f, _edited(f, change, f"device {name!r}"), verify, main=path)
 
 
 def set_tag_fields(path: Path, name: str, *, match=None, clear_rule: bool = False,
@@ -668,7 +743,8 @@ def set_tag_fields(path: Path, name: str, *, match=None, clear_rule: bool = Fals
         if (clear_rule and t.match) or (want is not None and dict(t.match) != want) or \
                 (description is not None and t.description != description):
             raise cfgmod.ConfigError([f"the change to tag {name!r} did not take effect"])
-    _edit(path, _edited(path, change, f"tag {name!r}"), verify)
+    f = _file(cfg, "tag", name, path)
+    _edit(f, _edited(f, change, f"tag {name!r}"), verify, main=path)
 
 
 # -- renames -----------------------------------------------------------------------------
@@ -678,6 +754,7 @@ class RenameReport:
     updated: list[str] = field(default_factory=list)       # what referred to the old name
     generated: list[tuple[str, str]] = field(default_factory=list)   # made-up action names that changed
     mentions: list[tuple[int, str]] = field(default_factory=list)    # lines that still contain it
+    elsewhere: list[tuple[str, int, str]] = field(default_factory=list)  # same, in drop-ins
 
 
 def _swap(container, key: str, old: str, new: str) -> None:
@@ -739,8 +816,9 @@ def _rename(path: Path, kind: str, old: str, new: str) -> RenameReport:
         raise cfgmod.ConfigError([f"{new!r} is already its name"])
     if new in existing:
         raise cfgmod.ConfigError([f"{singular} {new!r} already exists"])
-    raw_actions = cfgmod.tomllib.loads(_read(path)).get("actions") or []
+    raw_actions = cfgmod.read_files(path)[0].get("actions") or []
     expected = _expected_after_rename(cfg, raw_actions, kind, old, new)
+    home = cfg.source(singular, old)            # the file with its block (None: tags only on devices)
 
     def change(doc):
         if kind == "devices":                            # every action that names the device
@@ -755,22 +833,32 @@ def _rename(path: Path, kind: str, old: str, new: str) -> RenameReport:
         else:
             _find_action(doc, old, "rename")[1]["name"] = new
 
-    text = _edited(path, change, f"{singular} {old!r}")
-    if kind in ("devices", "tags"):
-        has_block = old in (cfg.devices if kind == "devices" else cfg.tags)
-        text, headers = _rename_headers(text, kind, old, new)
-        if has_block and headers == 0:
-            raise cfgmod.ConfigError([f"{singular} {old!r} is not written as a [{kind}.{old}] "
-                                      "table (dotted keys?); rename it by hand"])
+    texts = {}
+    for f in (cfg.files if kind != "actions" else [home]):
+        text = _edited(f, change, f"{singular} {old!r}")
+        if kind in ("devices", "tags") and f == home:
+            text, headers = _rename_headers(text, kind, old, new)
+            if headers == 0:
+                raise cfgmod.ConfigError([f"{singular} {old!r} is not written as a "
+                                          f"[{kind}.{old}] table (dotted keys?); rename it by "
+                                          "hand"])
+        texts[f] = text
 
     def verify(c):
         got = (list(c.devices.items()), list(c.tags.items()), c.actions)
         if got != expected:
             raise cfgmod.ConfigError([f"renaming {old!r} would have changed something else in "
-                                      "the file; nothing was written"])
-    _edit(path, text, verify)
+                                      "the configuration; nothing was written"])
+    _commit(path, texts, verify)
 
-    report = RenameReport(mentions=_mentions(text, old))
+    report = RenameReport()
+    for f, text in texts.items():
+        found = _mentions(text, old)
+        if f == path:
+            report.mentions = found
+        else:
+            label = cfgmod.file_label(path, f)
+            report.elsewhere += [(label, n, line) for n, line in found]
     if kind == "devices":
         report.updated = [a.name for a in cfg.actions if old in a.devices]
     elif kind == "tags":

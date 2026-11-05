@@ -628,6 +628,27 @@ Filesystem X (ext4) at /media/x   unnamed   tags: storage
 Things that match no device and no tag are left out (a count says how many);
 `--all` lists them, and system filesystems too.
 
+### Running a device's actions now (`trigger`)
+
+`udevmon reload` does not fire `startup` again, so a drive you name while it
+is plugged in gets nothing until it is replugged. `udevmon trigger` asks the
+running daemon to run a present device's actions now, as for a real event:
+
+```
+udevmon trigger key-daily                # its startup actions
+udevmon trigger key-daily mounted --wait # wait and show exit statuses
+```
+
+The event is `startup` (default), `shutdown`, `connected` (a USB device),
+`mounted` (a mounted filesystem) or `unmounted` (a filesystem; it stays
+mounted). The usual rules, locks, timeouts and placeholders apply, and the log
+shows it like a real event, marked `udevmon trigger`. It is refused, with a
+message and status 1, when the daemon is not running, the device is not
+present or is ignored, or automation is paused; a disabled device's own
+actions are skipped, as always. With `--wait` a failed action also gives
+status 1. It talks to the daemon over `$XDG_RUNTIME_DIR/udevmon.sock`, which
+only you can use.
+
 ## Switching things off
 
 You can stop things running without deleting them.
@@ -857,6 +878,41 @@ run = ["~/bin/backup.sh", "{mountpoint}", "{device}"]
 An action has exactly one of `device` or `tag`. Tag names, device names and action names
 use letters, digits, `_`, `.` and `-`.
 
+### Drop-in files (`config.d`)
+
+Next to `config.toml`, every `config.d/*.toml` file is read too, after it and
+in the order of the file names. A drop-in has the same tables as the main file
+except `[daemon]`. Its devices, tags and actions join the others: an action in
+one file can use a device or a tag of another.
+
+This is for programs that install their own devices and actions: each owns a
+file and replaces or deletes it whole, without touching your `config.toml`.
+
+```
+~/.config/udevmon/config.toml               your own entries, read first
+~/.config/udevmon/config.d/50-kp-sync.toml  read second
+~/.config/udevmon/config.d/90-rclone.toml   read last
+```
+
+- **Order.** The actions of one event run by their `order` (see
+  [Running actions in a set order](#running-actions-in-a-set-order-order)),
+  and with the same `order` in the order the files are read: the main file's,
+  then each drop-in's. One file order cannot put a tool's setup first and its
+  teardown last, so between programs use `order`, not file names.
+- **Names are shared.** A device, declared tag or action defined in two files
+  is an error that names both files (`udevmon check` says so; a reload that
+  meets it keeps the previous configuration).
+- **Where things come from.** `udevmon check` lists the files it read;
+  `devices list`, `tags list`, `actions list`, `show` and `explain` mark the
+  entries of a drop-in with its name.
+- **Editing.** `devices add`, `tags add` and `actions add` write to
+  `config.toml`, or with `--file NAME` to `config.d/NAME.toml` (created if
+  needed). Every other editing command changes the entry where it is defined,
+  and a rename fixes the references in every file.
+- The same safety rule applies: each file and the `config.d` folder must be
+  owned by you and not writable by group or others. Hidden files and files not
+  ending in `.toml` are skipped. With `--config my.toml` the folder is `my.d`.
+
 ### How commands are run
 
 - `run` is an argument list, or a string split shell-style. It is
@@ -873,8 +929,9 @@ use letters, digits, `_`, `.` and `-`.
   at every event, so a script you add later is found without a reload, and
   `udevmon explain` shows the full path it will run. Without `script_dir` nothing
   changes: bare names use the `PATH`. A command with a `/` in it is used as
-  written. `udevmon check` warns about a folder that does not exist and about a
-  command found in none of them.
+  written. `udevmon check` warns about a command found in none of them, and about
+  a folder that does not exist, unless another folder of the list does: then a
+  missing one is only a note (an optional folder this machine does not have).
 - `{var_NAME}` is a variable of the device (see
   [Variables per device](#variables-per-device)).
 - `{name}` is replaced by a property value: `{mountpoint}`, `{serial}`,
@@ -902,8 +959,8 @@ use letters, digits, `_`, `.` and `-`.
 - Commands run as you, with your home directory as working directory and no
   standard input. Their output goes to the log, line by line as it arrives, each
   line prefixed with the action's name.
-- Several actions for one event run one after another, in file order.
-  A failing action does not stop the next.
+- Several actions for one event run one after another, by `order` (see
+  below), then in file order. A failing action does not stop the next.
 - An action that runs longer than its `timeout` is terminated (along with any
   child processes it started).
 
@@ -1035,6 +1092,46 @@ paused or the daemon is stopping, and a `lock` is held across all the attempts.
 `udevmon actions set NAME --retries N --retry-delay S` changes them (`--retries 0`
 removes the retries).
 
+### Being told when an action fails (`notify_on_failure`)
+
+A failed action is normally only in the log. With `notify_on_failure = true`
+(or `actions add --notify-on-failure`) the desktop shows a notification when
+it exits with a status other than 0, times out or cannot start: the action and
+device in the title, what happened in the text. With `retries`, only the last
+attempt counts. It goes through the desktop session's D-Bus; without one
+(no graphical login) nothing is shown and the log says so. It cannot be used
+with `detach`. `actions set NAME --no-notify-on-failure` turns it off.
+
+### Running actions in a set order (`order`)
+
+The actions of one event run one after another. By default that is file order,
+but `order` (a whole number, default 50; lower runs first) decides it when the
+order matters, whatever file each action is in. Equal ones keep file order.
+
+A typical case is one tool wrapped around another: credentials published when
+a drive arrives must be there before the sync that needs them, and removed
+only after the final sync when it goes:
+
+```
+[[actions]]
+name = "rclone-config-up"
+tag = "rclone"
+on = ["startup", "mounted"]
+order = 10                     # before the sync
+run = ["rclone-config", "up", "{mountpoint}", "{drive_serial}:{fs_uuid}"]
+
+[[actions]]
+name = "rclone-config-down"
+tag = "rclone"
+on = ["unmounted", "shutdown"]
+order = 90                     # after the final sync
+run = ["rclone-config", "down", "{mountpoint}", "{drive_serial}:{fs_uuid}"]
+```
+
+The sync's own actions keep the default 50. `actions add --order N` and
+`actions set NAME --order N` set it; `actions list` shows the actions in the
+order they run, and `explain` shows a non-default order.
+
 ### Running actions one at a time (`lock`)
 
 The actions of one event run one after another, but different events run at the same
@@ -1081,11 +1178,13 @@ The third row works because the actions of one event run in file order.
 ```
 udevmon scan [--present] [--no-prompt] [--all-props]
                                         watch events and name things
-udevmon present [--all] [--all-props]   list what is plugged in now
+udevmon present [--all] [--all-props] [--json]
+                                        list what is plugged in now
 udevmon devices list | show NAME | remove NAME
-udevmon devices add NAME --match KEY=VALUE ...
+udevmon devices add NAME (--match KEY=VALUE ... | --from-mountpoint PATH)
                     [--tag TAG ...] [--exclude-tag TAG ...]
                     [--var NAME=VALUE ...] [--description TEXT]
+                    [--file DROPIN]
 udevmon devices tag NAME TAG...         add explicit tags to a device
 udevmon devices set NAME [--match KEY=VALUE ...] [--description TEXT]
                     [--var NAME=VALUE ...] [--unset-var NAME ...]
@@ -1097,20 +1196,25 @@ udevmon devices exclude NAME TAG...     opt a device out of rule tags
 udevmon devices include NAME TAG...     stop opting it out
 udevmon tags list | show NAME | remove NAME
 udevmon tags add NAME [--match KEY=VALUE ...] [--description TEXT]
+                      [--file DROPIN]
 udevmon tags set NAME [--match KEY=VALUE ... | --no-rule]
                       [--description TEXT]
 udevmon actions list | remove NAME
 udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT...]
                     [--name NAME] [--timeout S] [--all-tags] [--detach]
                     [--lock NAME] [--retries N] [--retry-delay S]
-                    [--allow-unnamed | --named-only] -- COMMAND...
+                    [--order N] [--notify-on-failure]
+                    [--allow-unnamed | --named-only] [--file DROPIN]
+                    -- COMMAND...
 udevmon actions set NAME [--allow-unnamed | --named-only
                           | --default-unnamed] [--on EVENTS] [--timeout S]
                     [--add-device NAME ...] [--remove-device NAME ...]
                     [--add-tag NAME ...] [--remove-tag NAME ...]
                     [--all-tags | --any-tags] [--detach | --no-detach]
                     [--lock NAME | --no-lock] [--retries N]
-                    [--retry-delay S] [-- COMMAND...]
+                    [--retry-delay S] [--order N]
+                    [--notify-on-failure | --no-notify-on-failure]
+                    [-- COMMAND...]
 udevmon actions disable | enable NAME...
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
                                         what would run (see above)
@@ -1119,6 +1223,7 @@ udevmon resume                          let actions run again
 udevmon check                           validate the config
 udevmon run [--dry-run]                 run the daemon in the foreground
 udevmon reload                          make the running daemon reload
+udevmon trigger DEVICE [EVENT] [--wait] run its actions now (see above)
 udevmon service install [--now]         install the systemd user service
 udevmon service uninstall               stop and remove it
 udevmon completion bash | install | uninstall
@@ -1142,6 +1247,21 @@ A device can't be removed while an action lists it by name, and a declared tag (
 can't be removed while an action uses it; remove those actions first. Repeating `--match` with
 the same key on `tags add` builds a list (`--match fs_type=ext4 --match fs_type=exfat`);
 on `devices add` a repeated key is an error, since a device match is exact.
+
+A drive that is plugged in and mounted can be named from a script, without typing
+its identity:
+
+```
+udevmon devices add key-daily --from-mountpoint /media/$USER/KEYDRIVE \
+  --tag keepass
+```
+
+This matches the filesystem by `fs_uuid` and its drive by `drive_serial`, and
+takes its description. Nothing is written when nothing is mounted there, the
+filesystem has no UUID, the drive has no usable serial number, or a device
+already matches it. `udevmon present --json` prints what is plugged in as JSON
+(every property, the devices and tags each thing is, and the match `scan`
+would suggest).
 Actions created by hand without a `name` can't be removed through the CLI
 (edit the file instead).
 

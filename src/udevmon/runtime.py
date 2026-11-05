@@ -18,3 +18,8 @@ def lock_path() -> Path:
 
 def pause_path() -> Path:
     return runtime_dir() / "udevmon.paused"
+
+
+def socket_path() -> Path:
+    """The running daemon's control socket (``udevmon trigger`` talks to it)."""
+    return runtime_dir() / "udevmon.sock"

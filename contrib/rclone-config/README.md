@@ -86,10 +86,12 @@ Every command in that folder can then be used by its bare name in actions
 (`kp-sync` too), ahead of the system folders: a bare `python3` in an action
 becomes the environment's Python.
 
-Then add the two actions from [`udevmon.toml.example`](udevmon.toml.example)
-to your config, **above** any action that uses the credentials (actions of
-one event run in config order, so the credentials are ready first), and tag
-the drives that carry credentials:
+Then copy [`udevmon.toml.example`](udevmon.toml.example) to
+`~/.config/udevmon/config.d/rclone-config.toml` (udevmon 0.7.0 or later; or
+merge its two actions into `config.toml`). Their `order` (10 and 90) runs
+`up` before and `down` after the actions that use the credentials, which keep
+the default 50, whatever file those are in. Then tag the drives that carry
+credentials:
 
 ```
 udevmon devices tag KEYDRIVE-FS rclone

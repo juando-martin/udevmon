@@ -9,6 +9,7 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+from . import notify
 from . import pause as pause_flag
 from . import session, state
 from .config import Action, expand
@@ -35,8 +36,14 @@ def build_env(event: Event, device: str | None, tag: str | None = None,
 
 
 def run_action(action: Action, event: Event, device: str | None, tag: str | None = None, *,
-               dry_run: bool = False, variables=None, state_dir: str | None = None) -> int | None:
-    """Run one action; returns exit status (None if skipped/timeout-killed)."""
+               dry_run: bool = False, variables=None, state_dir: str | None = None,
+               outcome: dict | None = None) -> int | None:
+    """Run one action; returns exit status (None if skipped/timeout-killed).
+
+    ``outcome``, if given, gets ``failure``: how a None result failed (a timeout, a
+    command that could not start), for the notification; it is left alone otherwise.
+    """
+    outcome = {} if outcome is None else outcome
     props = dict(event.props)
     if state_dir:
         props["state_dir"] = state_dir
@@ -65,6 +72,7 @@ def run_action(action: Action, event: Event, device: str | None, tag: str | None
             text=True, errors="replace", start_new_session=True)
     except OSError as e:
         log.error("action %r failed to start: %s", action.name, e)
+        outcome["failure"] = f"could not start: {e}"
         return None
     # The output is logged as it arrives, by a reader that outlives the command if it has to:
     # a program the command leaves running in the background keeps the pipe open, and
@@ -80,6 +88,7 @@ def run_action(action: Action, event: Event, device: str | None, tag: str | None
         proc.wait(timeout=action.timeout)
     except subprocess.TimeoutExpired:
         log.error("action %r timed out after %gs; terminating", action.name, action.timeout)
+        outcome["failure"] = f"timed out after {action.timeout:g} s"
         _kill_group(proc)
         try:
             proc.wait(timeout=5)
@@ -185,11 +194,13 @@ class ActionRunner:
         return self._pool.submit(self._run_all, event, ticketed, ended)
 
     def _run_all(self, event, ticketed, ended=None):
+        """Run the jobs in order; returns [(action name, exit status or None)]."""
         done = 0
+        results = []
         try:
             for job, ticket in ticketed:
                 done += 1
-                self._run_one(event, job, ticket)
+                results.append((job.action.name, self._run_one(event, job, ticket)))
         except BaseException:
             for job, ticket in ticketed[done:]:            # never leave a ticket unserved
                 if ticket is not None:
@@ -200,6 +211,7 @@ class ActionRunner:
         finally:
             if ended:
                 state.remove(ended)
+        return results
 
     def _run_one(self, event, job, ticket):
         lock = self._lock(job.action.lock) if ticket is not None else None
@@ -207,9 +219,10 @@ class ActionRunner:
             if lock.wait(ticket):
                 log.info("action %r waited for lock %r", job.action.name, lock.name)
         try:
-            self._run_with_retries(event, job)
+            return self._run_with_retries(event, job)
         except Exception:
             log.exception("action %r crashed", job.action.name)
+            return None
         finally:
             if lock is not None:
                 lock.release()
@@ -226,6 +239,19 @@ class ActionRunner:
             return None
 
     def _run_with_retries(self, event, job):
+        """Run the action (with its retries); with ``notify_on_failure``, tell the user
+        when the last attempt failed (a non-zero exit, a timeout, a failure to start)."""
+        outcome: dict = {}
+        status = self._attempts(event, job, outcome)
+        if job.action.notify_on_failure and not self.dry_run:
+            what = outcome.get("failure") or (f"exit status {status}" if status else None)
+            if what:
+                if outcome.get("attempts", 1) > 1:
+                    what += f" (after {outcome['attempts']} attempts)"
+                notify.action_failed(job.action.name, job.device, what)
+        return status
+
+    def _attempts(self, event, job, outcome):
         """Run the action; after a non-zero exit run it again, up to ``retries`` more times.
 
         Not retried: a timeout, a command that cannot start, a skipped or dry run (they
@@ -235,8 +261,11 @@ class ActionRunner:
         action = job.action
         attempts = action.retries + 1
         for attempt in range(1, attempts + 1):
+            outcome.clear()
+            outcome["attempts"] = attempt
             status = run_action(action, event, job.device, job.tag, dry_run=self.dry_run,
-                                variables=job.vars, state_dir=self._state_dir(event))
+                                variables=job.vars, state_dir=self._state_dir(event),
+                                outcome=outcome)
             if status is None or status == 0:
                 return status
             if attempt == attempts:

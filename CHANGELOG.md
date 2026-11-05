@@ -12,6 +12,55 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ## [Unreleased]
 
+### Added
+
+- **Drop-in files: `config.d/*.toml`.** Read after `config.toml`, in file-name
+  order, with the same tables except `[daemon]`. Their devices, tags and
+  actions join the main file's, so a program can install its own in a file it
+  owns and replaces or deletes whole. With the same `order` (below), actions
+  run in the order the files are read, main file first. A name
+  defined in two files is an error naming both. `check` lists the files read;
+  `list`, `show` and `explain` mark entries from a drop-in. The `add` commands
+  take `--file NAME` to write to `config.d/NAME.toml`; the other editing
+  commands change an entry where it is defined, and a rename fixes references
+  in every file. With only `config.toml` nothing changes.
+- **`udevmon trigger DEVICE [EVENT]`** asks the running daemon to run a present
+  device's actions now, as for a real `startup` (default), `shutdown`,
+  `connected`, `mounted` or `unmounted`: for a drive named while plugged in, or
+  to test an action without unplugging. It follows pause, `disabled` and
+  `ignored`, and is logged like a real event. `--wait` waits for the actions
+  and shows their exit status. The daemon now listens on
+  `$XDG_RUNTIME_DIR/udevmon.sock` for this (only you can connect).
+- **`udevmon devices add NAME --from-mountpoint PATH`** names the plugged-in
+  drive mounted at `PATH` without typing its identity: the match is its
+  filesystem's `fs_uuid` and its drive's `drive_serial`. It refuses (and writes
+  nothing) when nothing is mounted there, the drive has no usable serial number,
+  or a device already matches that filesystem.
+- **`notify_on_failure = true` on an action** (`actions add|set
+  --notify-on-failure`): a desktop notification when it exits non-zero, times
+  out or cannot start, after its last attempt with `retries`. Sent on the
+  desktop's D-Bus; without a session bus nothing is shown. Off by default.
+- **`order` on an action** (a whole number, default 50): the actions of one
+  event run by `order`, lower first, then in config order. This nests one
+  tool's actions around another's across files, which one file order cannot
+  (credentials up first on plugging, down last on unplugging).
+  `actions add|set --order N` sets it; `actions list` shows the actions in the
+  order they run, and `explain` shows a non-default order. Without `order`
+  nothing changes.
+- **`udevmon present --json`**: what is plugged in, for scripts, with every
+  property, the devices and tags each thing is, and the suggested match.
+
+### Changed
+
+- **A missing optional `script_dir` folder is a note, not a warning.** When
+  another folder of the list exists, one that does not (an example's
+  `~/.local/udev/scripts` on a machine without it) is a note in `udevmon check`
+  and an ordinary line in the log at start and reload. A path that exists but is
+  not a folder, or a list where no folder exists, is still a warning.
+- **`contrib/rclone-config`: the example uses `order`** (10 for `up`, 90 for
+  `down`) and goes in `config.d/rclone-config.toml`, so it wraps the actions
+  that use the credentials whatever file they are in.
+
 ## [0.6.0] - 2026-11-03
 
 ### Added

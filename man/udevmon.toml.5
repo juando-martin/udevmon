@@ -1,6 +1,6 @@
 .\" Manual page for the udevmon configuration file. Keep it in step with
 .\" src/udevmon/config.py: tests/test_manpages.py fails when a key is missing.
-.TH UDEVMON.TOML 5 "2026-09-21" "udevmon" "File Formats"
+.TH UDEVMON.TOML 5 "2026-11-05" "udevmon" "File Formats"
 .SH NAME
 udevmon.toml \- configuration file of udevmon
 .SH DESCRIPTION
@@ -62,6 +62,60 @@ and
 .BR \- .
 A name with a dot must be quoted in a header:
 .BR [devices."usb.1"] .
+.SH "DROP-IN FILES"
+Next to
+.IR config.toml ,
+the files
+.I config.d/*.toml
+are read too, after it, in the order of their names (so
+.I 50\-kp\-sync.toml
+comes before
+.IR 90\-rclone\-config.toml ).
+They have the same tables, except
+.BR [daemon] ,
+which only the main file has.
+Their devices, tags and actions join those of the main file: an action of one file
+may use a device or tag of another.
+This lets a program that installs actions keep them in a file of its own, which
+it can replace or delete whole.
+.PP
+The actions of one event run by their
+.B order
+key (see
+.BR [[actions]] ),
+and actions with the same
+.B order
+in the order the files are read: those of the main file, then those of each
+drop\-in.
+One file order cannot put a tool's setup first and its teardown last, so between
+programs use
+.BR order ,
+not file names.
+A device, declared tag or action defined in two files is an error that names both.
+Each file, and the
+.I config.d
+folder, must be owned by you and not writable by group or others.
+Files whose name starts with a dot, or that do not end in
+.BR .toml ,
+are not read.
+With another
+.B \-\-config
+file,
+.IR NAME.toml ,
+the folder is
+.I NAME.d
+next to it.
+.PP
+.BR "udevmon check" ,
+.BR explain ,
+.B list
+and
+.B show
+say which drop\-in file each entry comes from.
+The editing commands change an entry in the file that defines it;
+.B add
+writes to the main file, or to the drop\-in given with
+.BR \-\-file .
 .SH "[daemon]"
 Every key is optional.
 .TP
@@ -120,6 +174,8 @@ Without
 .B script_dir
 bare names use the
 .BR PATH .
+A folder that does not exist is a warning, or only a note when another folder of
+the list exists.
 .SH "[devices.NAME]"
 A device is a name for one thing: a USB device or a filesystem.
 .TP
@@ -380,6 +436,35 @@ See
 .TP
 .B retry_delay
 Seconds, more than 0, default 1: how long to wait between attempts.
+.TP
+.B notify_on_failure
+Boolean, default false.
+When true, a desktop notification (title: the action and its device; text: the
+exit status, the timeout, or why the command could not start) is shown when the
+action fails.
+With
+.B retries
+only the last attempt counts.
+It is sent on the graphical session's D\-Bus (found like
+.BR DISPLAY ,
+else
+.IR $XDG_RUNTIME_DIR/bus );
+with no session bus nothing is shown, and the log says so.
+It cannot be combined with
+.BR detach .
+.TP
+.B order
+A whole number, default 50.
+The actions of one event run by
+.BR order ,
+lower first; actions with the same
+.B order
+run in config order (the main file, then the drop\-in files by name).
+Use it to nest one tool's actions around another's, whatever file each is in:
+.B order = 10
+for an action that must come first when a drive arrives,
+.B order = 90
+for one that must come last when it goes.
 .TP
 .B allow_unnamed
 Boolean, only for actions that use
@@ -861,7 +946,9 @@ Commands run as you, with your home directory as the working directory and no
 standard input.
 Their output goes to the log (the journal, under systemd).
 .IP \(bu 3
-Several actions for one event run one after another, in file order.
+Several actions for one event run one after another, by
+.B order
+and then in file order.
 A failing action does not stop the next.
 .IP \(bu 3
 Without
@@ -1116,6 +1203,10 @@ run = ["sh", "\-c",
 .TP
 .I ~/.config/udevmon/config.toml
 The configuration.
+.TP
+.I ~/.config/udevmon/config.d/*.toml
+Drop\-in files, read after it in name order (see
+.BR "DROP-IN FILES" ).
 .TP
 .I ~/.config/udevmon/config.toml.bak
 The previous version, written by every editing command.

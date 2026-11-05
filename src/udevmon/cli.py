@@ -11,7 +11,7 @@ from pathlib import Path
 from . import __version__
 from . import config as cfgmod
 from . import configedit
-from .events import VALID_KINDS, describe
+from .events import TRIGGER_KINDS, VALID_KINDS, describe
 from .matching import build_match, device_label, resolve, strength
 
 
@@ -91,6 +91,11 @@ def cmd_present(args):
     cfg = _load(args)
     endpoints = UdevSource(cfg.settings.udev_filters).snapshot() \
         + UdisksSource().snapshot(include_system=args.all)
+    if args.json:
+        import json
+        print(json.dumps([present_entry(cfg, d) for d in endpoints], indent=2,
+                         ensure_ascii=False))
+        return 0
     for d in endpoints:
         print(f"{describe(d)}   [{level_label(d)}]   {status_text(cfg, d)}")
         if args.all_props:
@@ -99,6 +104,31 @@ def cmd_present(args):
         else:
             print(f"    {format_props(d)}")
     return 0
+
+
+def present_entry(cfg, endpoint) -> dict:
+    """One present thing for ``present --json``: what it is, every property, and what it
+    is in the configuration."""
+    from .matching import default_match_keys
+    res = resolve(cfg, endpoint.props)
+    return {"kind": "filesystem" if endpoint.is_filesystem else "usb",
+            "description": describe(endpoint),
+            "props": dict(sorted(endpoint.props.items())),
+            "devices": [d.name for d in res.named],
+            "tags": list(res.tags),
+            "suggested_match": build_match(endpoint, default_match_keys(endpoint))}
+
+
+def _from(cfg, kind: str, name: str) -> str:
+    """"  [config.d/NAME.toml]" for an entry of a drop-in file, else ""."""
+    label = cfg.label(kind, name)
+    return f"  [{label}]" if label else ""
+
+
+def _file_line(cfg, kind: str, name: str) -> None:
+    label = cfg.label(kind, name)
+    if label:
+        print(f"  file: {label}")
 
 
 def _actions_for(cfg, device) -> list:
@@ -221,7 +251,7 @@ def cmd_devices_list(args):
     for d in cfg.devices.values():
         tags = f"  tags: {', '.join(d.tags)}" if d.tags else ""
         print(f"{device_label(d):<20} {strength(d.match):<7} {d.match}{tags}  "
-              f"({len(_actions_for(cfg, d))} action(s))")
+              f"({len(_actions_for(cfg, d))} action(s))" + _from(cfg, "device", d.name))
     return 0
 
 
@@ -232,6 +262,7 @@ def cmd_devices_show(args):
         print(f"error: no such device {args.name!r}", file=sys.stderr)
         return 1
     print(f"{d.name}: {d.description}\n  match: {d.match}  ({strength(d.match)})")
+    _file_line(cfg, "device", d.name)
     if d.status != "active":
         print(f"  status: {d.status}")
     if d.tags:
@@ -245,13 +276,50 @@ def cmd_devices_show(args):
     return 0
 
 
+def match_from_mount(cfg, endpoint, mountpoint: str) -> dict[str, str]:
+    """``{fs_uuid, drive_serial}`` of the filesystem mounted at ``mountpoint``.
+
+    ConfigError when nothing is mounted there, the filesystem has no UUID, its drive has
+    no usable serial, or a device of ``cfg`` already matches it.
+    """
+    from .matching import is_suspicious_serial
+    if endpoint is None:
+        raise cfgmod.ConfigError([f"{mountpoint} is not the mount point of a filesystem "
+                                  "udisks knows of (is the drive plugged in and mounted?)"])
+    p = endpoint.props
+    if not p.get("fs_uuid"):
+        raise cfgmod.ConfigError([f"the filesystem at {mountpoint} has no UUID; name it with "
+                                  "--match instead"])
+    serial = p.get("drive_serial", "")
+    if is_suspicious_serial(serial):
+        why = f"a placeholder serial {serial!r}" if serial else "no serial number"
+        raise cfgmod.ConfigError([f"the drive of {mountpoint} has {why}, so it cannot be told "
+                                  "from another drive; name it with --match instead"])
+    named = resolve(cfg, p).named
+    if named:
+        raise cfgmod.ConfigError([f"the filesystem at {mountpoint} already matches device(s) "
+                                  f"{', '.join(repr(d.name) for d in named)}"])
+    return {"fs_uuid": p["fs_uuid"], "drive_serial": serial}
+
+
 @_reloads
 def cmd_devices_add(args):
-    match = _guard(_parse_matches, args.match, allow_lists=False)
+    description = args.description or ""
+    if args.from_mountpoint is not None:
+        from .sources.udisks import UdisksSource
+        cfg = _load(args)
+        endpoint = UdisksSource().mounted_at(args.from_mountpoint)
+        match = _guard(match_from_mount, cfg, endpoint, args.from_mountpoint)
+        if args.description is None:
+            description = describe(endpoint)
+    else:
+        match = _guard(_parse_matches, args.match, allow_lists=False)
     variables = _guard(_parse_vars, args.var)
-    _guard(configedit.add_device, args.config, args.name, match, args.description or "",
-           args.tag or [], exclude_tags=args.exclude_tag or [], variables=variables)
-    print(f"Added device {args.name!r} ({strength(match)}).")
+    _guard(configedit.add_device, args.config, args.name, match, description,
+           args.tag or [], exclude_tags=args.exclude_tag or [], variables=variables,
+           file=args.file)
+    print(f"Added device {args.name!r} ({strength(match)})"
+          + (f": {match}." if args.from_mountpoint is not None else "."))
     return 0
 
 
@@ -322,13 +390,14 @@ def cmd_actions_set(args):
     targets = _guard(configedit.set_action_options, args.config, args.name,
                      unnamed=args.unnamed, on=on, timeout=args.timeout, run=args.cmd or None,
                      tag_mode=args.tag_mode, detach=args.detach, lock=args.lock,
-                     retries=args.retries, retry_delay=args.retry_delay,
+                     retries=args.retries, retry_delay=args.retry_delay, order=args.order,
+                     notify_on_failure=args.notify,
                      add_devices=args.add_device, remove_devices=args.remove_device,
                      add_tags=args.add_tag, remove_tags=args.remove_tag)
     retargeted = any((args.add_device, args.remove_device, args.add_tag, args.remove_tag))
     if (retargeted and targets is None and not args.cmd
             and (args.unnamed, args.on, args.timeout, args.tag_mode, args.detach, args.lock,
-                 args.retries, args.retry_delay) == (None,) * 8):
+                 args.retries, args.retry_delay, args.order, args.notify) == (None,) * 10):
         print(f"Action {args.name!r} already targets that; nothing changed.")
         return 0
     print(f"Updated action {args.name!r}.")
@@ -349,13 +418,15 @@ def _say_renamed(kind: str, args, report) -> None:
               "changed name:")
         for was, now in report.generated:
             print(f"    {was} -> {now}")
-    if report.mentions:
-        print(f"  {args.old!r} still appears in the file (comments, descriptions, commands); "
-              "left as they are:")
-        for number, line in report.mentions[:8]:
-            print(f"    line {number}: {line[:70]}")
-        if len(report.mentions) > 8:
-            print(f"    ... and {len(report.mentions) - 8} more")
+    if report.mentions or report.elsewhere:
+        mentions = [("line", n, line) for n, line in report.mentions] + \
+            [(f"{label} line", n, line) for label, n, line in report.elsewhere]
+        print(f"  {args.old!r} still appears in the file{'s' if report.elsewhere else ''} "
+              "(comments, descriptions, commands); left as they are:")
+        for where, number, line in mentions[:8]:
+            print(f"    {where} {number}: {line[:70]}")
+        if len(mentions) > 8:
+            print(f"    ... and {len(mentions) - 8} more")
 
 
 @_reloads
@@ -428,7 +499,8 @@ def cmd_tags_list(args):
         members = [d.name for d in cfg.devices.values() if name in d.tags]
         n_actions = sum(1 for x in cfg.actions if name in x.tags)
         print(f"{name:<20} {_rule_text(tag.match) if tag else '(explicit members only)'}"
-              f"  members: {', '.join(members) or '-'}  ({n_actions} action(s))")
+              f"  members: {', '.join(members) or '-'}  ({n_actions} action(s))"
+              + _from(cfg, "tag", name))
     return 0
 
 
@@ -439,6 +511,7 @@ def cmd_tags_show(args):
         return 1
     tag = cfg.tags.get(args.name)
     print(f"{args.name}: {tag.description if tag else ''}")
+    _file_line(cfg, "tag", args.name)
     print(f"  rule: {_rule_text(tag.match) if tag else '(none; explicit members only)'}"
           + (f"  ({strength(tag.match, wild=True)})" if tag and tag.match else ""))
     print(f"  explicit members: {', '.join(d.name for d in cfg.devices.values() if args.name in d.tags) or '-'}")
@@ -452,7 +525,8 @@ def cmd_tags_show(args):
 @_reloads
 def cmd_tags_add(args):
     rule = _guard(_parse_matches, args.match or [], allow_lists=True)
-    _guard(configedit.add_tag, args.config, args.name, rule, args.description or "")
+    _guard(configedit.add_tag, args.config, args.name, rule, args.description or "",
+           file=args.file)
     print(f"Added tag {args.name!r}" + (f" with a rule ({strength(rule, wild=True)})." if rule else "."))
     return 0
 
@@ -478,7 +552,7 @@ def cmd_tags_remove(args):
 
 def cmd_actions_list(args):
     cfg = _load(args)
-    for x in cfg.actions:
+    for x in sorted(cfg.actions, key=lambda a: a.order):     # the order they run in
         target = (f"device:{','.join(x.devices)}" if x.devices
                   else f"tag:{('+' if x.tag_mode == 'all' else ',').join(x.tags)}")
         flag = {True: " [allow_unnamed]", False: " [named only]", None: ""}[x.allow_unnamed]
@@ -486,8 +560,11 @@ def cmd_actions_list(args):
         flag += " [detach]" if x.detach else ""
         flag += f" [lock: {x.lock}]" if x.lock else ""
         flag += f" [retries: {x.retries}]" if x.retries else ""
+        flag += f" [order: {x.order}]" if x.order != cfgmod.DEFAULT_ORDER else ""
+        flag += " [notify on failure]" if x.notify_on_failure else ""
         off = " [disabled]" if not x.enabled else ""
-        print(f"{x.name:<24} {target:<22} on {','.join(x.on):<24} {list(x.run)}{flag}{off}")
+        print(f"{x.name:<24} {target:<22} on {','.join(x.on):<24} {list(x.run)}{flag}{off}"
+              + _from(cfg, "action", x.name))
     if not cfg.actions:
         print("No actions.")
     return 0
@@ -537,9 +614,14 @@ def cmd_actions_add(args):
         print("error: --timeout has no meaning with --detach (a detached command is not "
               "waited for)", file=sys.stderr)
         return 1
+    if args.detach and args.notify_on_failure:
+        print("error: --notify-on-failure has no meaning with --detach (a detached command's "
+              "result is not waited for)", file=sys.stderr)
+        return 1
     name = _guard(configedit.add_action, args.config, args.name, args.device or (),
                   args.tag or (), on, args.cmd, args.timeout, args.allow_unnamed, args.tag_mode,
-                  args.detach, args.lock, args.retries or 0, args.retry_delay)
+                  args.detach, args.lock, args.retries or 0, args.retry_delay,
+                  file=args.file, order=args.order, notify_on_failure=args.notify_on_failure)
     print(f"Added action {name!r}.")
     return 0
 
@@ -560,8 +642,15 @@ def cmd_check(args):
         return 1
     for w in [*cfg.warnings, *cfgmod.command_problems(cfg)]:
         print(f"warning: {w}")
-    for n in cfg.notes:
+    for n in [*cfg.notes, *cfgmod.command_notes(cfg)]:
         print(f"note: {n}")
+    if any(f != cfg.main for f in cfg.files):
+        print("Files, in the order they are read:")
+        for f in cfg.files:
+            count = {kind: sum(1 for (k, _), src in cfg.sources.items() if k == kind and src == f)
+                     for kind in ("device", "tag", "action")}
+            print(f"  {cfgmod.file_label(cfg.main, f)}: {count['device']} device(s), "
+                  f"{count['tag']} tag rule(s), {count['action']} action(s)")
     print(f"OK: {len(cfg.devices)} device(s), {len(cfg.tags)} tag rule(s), "
           f"{len(cfg.actions)} action(s)")
     return 0
@@ -633,6 +722,49 @@ def cmd_reload(args):
     return 1
 
 
+def cmd_trigger(args):
+    from . import control
+    from .daemon import _same_file, running_daemon
+    found = running_daemon()
+    if found is None:
+        print("error: udevmon is not running (start it, or run `udevmon run`)", file=sys.stderr)
+        return 1
+    _, its_config = found
+    if args.config_explicit and its_config and not _same_file(args.config, its_config):
+        print(f"error: the running daemon uses {its_config}, not {args.config}",
+              file=sys.stderr)
+        return 1
+    try:
+        reply = control.request({"cmd": "trigger", "device": args.device, "event": args.event,
+                                 "wait": args.wait}, timeout=None if args.wait else 30.0)
+    except control.NotRunning:
+        print("error: udevmon is not running (no answer on its control socket)",
+              file=sys.stderr)
+        return 1
+    except (OSError, ValueError) as e:
+        print(f"error: no usable answer from the daemon: {e}", file=sys.stderr)
+        return 1
+    if not reply.get("ok"):
+        print(f"error: {reply.get('message', 'the daemon refused')}", file=sys.stderr)
+        return 1
+    for thing in reply["things"]:
+        ran = ", ".join(thing["actions"]) or "nothing to run"
+        print(f"{reply['event']} for {reply['device']} ({thing['thing']}): {ran}")
+        for name, reason in thing["skipped"]:
+            print(f"  skipped {name}: {reason}")
+    failed = False
+    for name, status in reply.get("statuses", []):
+        if status is None:
+            print(f"  {name}: no exit status (timed out, could not start, or detached; "
+                  "see the log)")
+        else:
+            print(f"  {name}: exit status {status}")
+        failed |= status != 0
+    if args.wait and not reply.get("statuses"):
+        print("Nothing ran.")
+    return 1 if failed else 0
+
+
 def cmd_service_install(args):
     from .service import install
     unit = install(args.dest, args.now, args.config if args.config_explicit else None)
@@ -652,6 +784,9 @@ def build_parser() -> argparse.ArgumentParser:
     edits = argparse.ArgumentParser(add_help=False)          # shared by the editing commands
     edits.add_argument("--no-reload", action="store_true",
                        help="don't tell the running daemon to reload")
+    adds = argparse.ArgumentParser(add_help=False, parents=[edits])     # the `add` commands
+    adds.add_argument("--file", metavar="DROPIN",
+                      help="write to this drop-in (config.d/NAME.toml) instead of the main file")
 
     s = sub.add_parser("run", help="run the daemon")
     s.add_argument("--dry-run", action="store_true", help="log actions instead of running them")
@@ -665,8 +800,19 @@ def build_parser() -> argparse.ArgumentParser:
                    help="print every property, including the raw udev_* ones")
     s.set_defaults(fn=cmd_scan)
 
+    s = sub.add_parser("trigger", help="run a present device's actions now, as for an event")
+    s.add_argument("device", metavar="DEVICE")
+    s.add_argument("event", nargs="?", default="startup", metavar="EVENT",
+                   choices=TRIGGER_KINDS,
+                   help="startup (default), shutdown, connected, mounted or unmounted")
+    s.add_argument("--wait", action="store_true",
+                   help="wait for the actions to finish and show their exit status")
+    s.set_defaults(fn=cmd_trigger)
+
     s = sub.add_parser("present", help="list USB devices and filesystems that are present now")
     s.add_argument("--all", action="store_true", help="include system filesystems")
+    s.add_argument("--json", action="store_true",
+                   help="print a JSON list for scripts (every property, devices and tags)")
     s.add_argument("--all-props", action="store_true",
                    help="print every property, including the raw udev_* ones")
     s.set_defaults(fn=cmd_present)
@@ -675,9 +821,12 @@ def build_parser() -> argparse.ArgumentParser:
     g = dev.add_subparsers(dest="sub", required=False)
     x = g.add_parser("list", help="list named devices"); x.set_defaults(fn=cmd_devices_list)
     x = g.add_parser("show"); x.add_argument("name"); x.set_defaults(fn=cmd_devices_show)
-    x = g.add_parser("add", parents=[edits])
+    x = g.add_parser("add", parents=[adds])
     x.add_argument("name")
-    x.add_argument("--match", action="append", required=True, metavar="KEY=VALUE")
+    grp = x.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--match", action="append", metavar="KEY=VALUE")
+    grp.add_argument("--from-mountpoint", metavar="PATH",
+                     help="match the filesystem mounted there by fs_uuid and drive_serial")
     x.add_argument("--tag", action="append", metavar="TAG", help="explicit tag (repeatable)")
     x.add_argument("--exclude-tag", action="append", metavar="TAG",
                    help="rule tag to opt out of (repeatable)")
@@ -725,7 +874,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="sub", required=True)
     x = tg.add_parser("list"); x.set_defaults(fn=cmd_tags_list)
     x = tg.add_parser("show"); x.add_argument("name"); x.set_defaults(fn=cmd_tags_show)
-    x = tg.add_parser("add", help="declare a tag, optionally with a rule", parents=[edits])
+    x = tg.add_parser("add", help="declare a tag, optionally with a rule", parents=[adds])
     x.add_argument("name")
     x.add_argument("--match", action="append", metavar="KEY=VALUE",
                    help="rule pair; repeat a key to allow several values")
@@ -748,11 +897,15 @@ def build_parser() -> argparse.ArgumentParser:
     x = a.add_parser("list"); x.set_defaults(fn=cmd_actions_list)
     x = a.add_parser("add", help="actions add (--device N ... | --tag N ...) EVENT[,EVENT] "
                                  "[--name N] [--allow-unnamed|--named-only] -- CMD [ARG...]",
-                     parents=[edits])
+                     parents=[adds])
     x.add_argument("on", help="comma-separated: " + ", ".join(sorted(VALID_KINDS)))
     x.add_argument("--device", action="append", metavar="NAME", help="target device (repeatable)")
     x.add_argument("--tag", action="append", metavar="NAME", help="target tag (repeatable)")
     x.add_argument("--name")
+    x.add_argument("--order", type=int, metavar="N",
+                   help="within one event, lower runs first (default 50; ties: file order)")
+    x.add_argument("--notify-on-failure", action="store_true",
+                   help="show a desktop notification when it fails or times out")
     x.add_argument("--timeout", type=float)
     x.add_argument("--all-tags", dest="tag_mode", action="store_const", const="all",
                    help="with several --tag: run only for things that have all of them "
@@ -794,6 +947,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="run again after a non-zero exit, up to N more times (0 removes it)")
     x.add_argument("--retry-delay", type=float, metavar="SECONDS",
                    help="seconds between attempts")
+    x.add_argument("--order", type=int, metavar="N",
+                   help="within one event, lower runs first (50, the default, removes it)")
+    nt = x.add_mutually_exclusive_group()
+    nt.add_argument("--notify-on-failure", dest="notify", action="store_const", const=True,
+                    help="show a desktop notification when it fails or times out")
+    nt.add_argument("--no-notify-on-failure", dest="notify", action="store_const",
+                    const=False, help="stop notifying")
     lk = x.add_mutually_exclusive_group()
     lk.add_argument("--lock", dest="lock", metavar="NAME", default=None,
                     help="actions with the same lock name never run at the same time")

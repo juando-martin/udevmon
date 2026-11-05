@@ -36,6 +36,8 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
     SHUTDOWN: _USB_KEYS | _FS_KEYS | {"mountpoint"} | _COMMON,
 }
 VALID_KINDS = frozenset(KNOWN_KEYS)
+# What `udevmon trigger` can fire for a present thing (the others say it is gone).
+TRIGGER_KINDS = (STARTUP, SHUTDOWN, CONNECTED, MOUNTED, UNMOUNTED)
 
 # Properties that change per plug / per event; useless (and misleading) in match rules.
 VOLATILE_KEYS = frozenset({

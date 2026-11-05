@@ -18,7 +18,7 @@ import os
 from pathlib import Path
 
 from . import config as cfgmod
-from .events import KNOWN_KEYS, STARTUP, VALID_KINDS, VOLATILE_KEYS
+from .events import KNOWN_KEYS, STARTUP, TRIGGER_KINDS, VALID_KINDS, VOLATILE_KEYS
 
 WORDS, NOSPACE, FILES, DIRS = "words", "nospace", "files", "dirs"
 
@@ -28,6 +28,7 @@ RULE_KEYS = sorted(set(MATCH_KEYS) - VOLATILE_KEYS)
 
 # Positional arguments per command: what each slot completes ("*" repeats the last).
 POSITIONALS = {
+    ("trigger",): ["device", "trigger-event"],
     ("devices", "show"): ["device"],
     ("devices", "remove"): ["device"],
     ("devices", "tag"): ["device", "tag*"],
@@ -54,7 +55,7 @@ POSITIONALS = {
 
 # Every kind a positional slot above may use (tests check these tables against the CLI).
 SLOT_KINDS = {"device", "tag", "declared-tag", "action", "device-tag", "events", "event", "new",
-              "rule-tag", "device-exclusion"}
+              "rule-tag", "device-exclusion", "trigger-event"}
 
 # Slots that take a new name typed by the user: nothing to complete.
 FREE_SLOT_KINDS = {"new"}
@@ -65,8 +66,9 @@ NO_COMPLETION = {("devices", "add"), ("tags", "add")}
 # Options that take a value: those completed by _option_value, and free text.
 OPTION_VALUE_DESTS = {"config", "dest", "device", "tag", "match", "prop", "on",
                       "add_device", "remove_device", "add_tag", "remove_tag", "exclude_tag",
-                      "var", "unset_var", "lock"}
-FREE_TEXT_DESTS = {"name", "timeout", "description", "duration", "retries", "retry_delay"}
+                      "var", "unset_var", "lock", "from_mountpoint", "file"}
+FREE_TEXT_DESTS = {"name", "timeout", "description", "duration", "retries", "retry_delay",
+                   "order"}
 
 HEADER = "# bash completion for udevmon"   # marks a file as ours (uninstall checks it)
 
@@ -265,6 +267,12 @@ def _option_value(st: _State, cur: str):
         return FILES, []
     if dest == "dest":
         return (DIRS if path[:1] == ("service",) else FILES), []
+    if dest == "from_mountpoint":
+        return DIRS, []
+    if dest == "file":                   # the drop-ins there are, or the folder for a new one
+        main = Path(st.config).expanduser() if st.config else cfgmod.default_config_path()
+        existing = [cfgmod.file_label(main, f) for f in cfgmod.dropin_files(main)]
+        return NOSPACE, _startswith([cfgmod.dropin_dir(main).name + "/", *existing], cur)
     if dest in ("device", "tag"):
         cfg = _config(st.config)
         return WORDS, _startswith(_names("device" if dest == "device" else "tag", cfg), cur)
@@ -303,6 +311,8 @@ def _positional(st: _State, cur: str, cfg):
         return WORDS, _events(cur)
     if kind == "event":
         return WORDS, _startswith(sorted(VALID_KINDS), cur)
+    if kind == "trigger-event":
+        return WORDS, _startswith(sorted(TRIGGER_KINDS), cur)
     if kind in FREE_SLOT_KINDS:
         return WORDS, []
     return WORDS, _startswith(_names(kind, cfg, st.positionals), cur)

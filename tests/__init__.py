@@ -30,3 +30,7 @@ atexit.register(_runtime.cleanup)
 os.environ.pop("INVOCATION_ID", None)
 os.environ["DISPLAY"] = ":udevmon-tests"
 os.environ.pop("WAYLAND_DISPLAY", None)
+
+# No test may show a real desktop notification (notify_on_failure): no session bus. The
+# runtime folder above has no `bus` socket either; tests/test_notify.py fakes the sending.
+os.environ.pop("DBUS_SESSION_BUS_ADDRESS", None)

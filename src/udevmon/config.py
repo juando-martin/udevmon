@@ -68,6 +68,8 @@ class Action:
     lock: str | None = None         # actions sharing a lock name never overlap (spec 7.3)
     retries: int = 0                # run again after a non-zero exit, up to N more times (7.4)
     retry_delay: float = 1.0        # seconds between attempts
+    order: int = 50                 # within one event, lower runs first; ties: config order
+    notify_on_failure: bool = False  # a desktop notification when the last attempt fails
 
     @property
     def targets(self) -> tuple[str, ...]:
@@ -90,6 +92,22 @@ class Config:
     actions: list[Action] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    main: Path | None = None            # the main config file (config.toml)
+    files: list[Path] = field(default_factory=list)     # the files read, in order
+    # ("device" | "tag" | "action", name) -> the file that defines it
+    sources: dict[tuple[str, str], Path] = field(default_factory=dict)
+
+    def source(self, kind: str, name: str) -> Path | None:
+        """The file that defines this device, declared tag or action."""
+        return self.sources.get((kind, name))
+
+    def label(self, kind: str, name: str) -> str:
+        """Where the entry comes from, for display: "" for the main file, else the
+        drop-in file as ``config.d/NAME.toml``."""
+        path = self.source(kind, name)
+        if path is None or self.main is None or path == self.main:
+            return ""
+        return file_label(self.main, path)
 
     def all_tag_names(self) -> set[str]:
         """Every tag that exists: declared, or carried by a device."""
@@ -128,7 +146,9 @@ _DAEMON = {"debounce", "udev_filters", "max_workers", "script_dir"}
 _DEVICE = {"description", "match", "tags", "status", "exclude_tags", "vars"}
 _TAG = {"description", "match"}
 _ACTION = {"name", "device", "tag", "on", "run", "timeout", "allow_unnamed", "enabled",
-           "tag_mode", "detach", "lock", "retries", "retry_delay"}
+           "tag_mode", "detach", "lock", "retries", "retry_delay", "order",
+           "notify_on_failure"}
+DEFAULT_ORDER = 50
 
 
 def _names(value, where: str, problems: list[str]) -> tuple[str, ...] | None:
@@ -145,9 +165,19 @@ def _scalar_str(v) -> str | None:
     return str(v) if isinstance(v, (str, int)) and not isinstance(v, bool) else None
 
 
-def parse(data: dict) -> Config:
+def parse(data: dict, origins: dict | None = None) -> Config:
+    """Validate the configuration ``data`` (the main file and drop-ins already merged).
+
+    ``origins`` labels the entries that come from a drop-in file, for the messages:
+    ("device" | "tag", name) -> label, and ("action", index) -> (label, index in its file).
+    """
     problems: list[str] = []
     cfg = Config()
+    origins = origins or {}
+
+    def at(kind: str, name: str) -> str:
+        label = origins.get((kind, name))
+        return f"{label}: " if label else ""
 
     def unknown(where: str, got, allowed):
         for k in got:
@@ -176,7 +206,7 @@ def parse(data: dict) -> Config:
 
     # ---- devices
     for name, a in (data.get("devices") or {}).items():
-        where = f"[devices.{name}]"
+        where = f"{at('device', name)}[devices.{name}]"
         if not NAME_RE.match(name):
             problems.append(f"{where}: invalid name")
             continue
@@ -241,7 +271,7 @@ def parse(data: dict) -> Config:
 
     # ---- tags (rules)
     for name, t in (data.get("tags") or {}).items():
-        where = f"[tags.{name}]"
+        where = f"{at('tag', name)}[tags.{name}]"
         if not NAME_RE.match(name):
             problems.append(f"{where}: invalid name")
             continue
@@ -274,7 +304,9 @@ def parse(data: dict) -> Config:
     # ---- actions
     seen: set[str] = set()
     for i, a in enumerate(data.get("actions") or [], 1):
-        where = f"[[actions]] #{i}"
+        label, local = origins.get(("action", i), ("", i))
+        prefix = f"{label}: " if label else ""
+        where = f"{prefix}[[actions]] #{local}"
         if not isinstance(a, dict):
             problems.append(f"{where}: must be a table")
             continue
@@ -296,7 +328,7 @@ def parse(data: dict) -> Config:
             if tags is None:
                 continue
         name = a.get("name") or f"{(devices or tags)[0]}-{i}"
-        where = f"action {name!r}"
+        where = f"{prefix}action {name!r}"
         if not isinstance(name, str) or not NAME_RE.match(name):
             problems.append(f"{where}: invalid name")
             continue
@@ -338,6 +370,19 @@ def parse(data: dict) -> Config:
         if detach and ("retries" in a or "retry_delay" in a):
             problems.append(f"{where}: 'retries' and 'retry_delay' have no meaning with "
                             "'detach' (a detached command's result is not waited for)")
+            continue
+        notify = a.get("notify_on_failure", False)
+        if not isinstance(notify, bool):
+            problems.append(f"{where}: 'notify_on_failure' must be true or false")
+            continue
+        if notify and detach:
+            problems.append(f"{where}: 'notify_on_failure' has no meaning with 'detach' (a "
+                            "detached command's result is not waited for)")
+            continue
+        order = a.get("order", DEFAULT_ORDER)
+        if not (isinstance(order, int) and not isinstance(order, bool)):
+            problems.append(f"{where}: 'order' must be a whole number (default "
+                            f"{DEFAULT_ORDER}; lower runs first)")
             continue
         lock = a.get("lock")
         if "lock" in a and not (isinstance(lock, str) and NAME_RE.match(lock)):
@@ -387,7 +432,8 @@ def parse(data: dict) -> Config:
             problems.append(f"{where}: invalid timeout")
             continue
         cfg.actions.append(Action(name, devices, tags, on, tuple(run), timeout, allow, enabled,
-                                  tag_mode, detach, lock, retries, float(retry_delay)))
+                                  tag_mode, detach, lock, retries, float(retry_delay), order,
+                                  notify))
 
     if problems:
         raise ConfigError(problems)
@@ -503,6 +549,22 @@ def uses_script_dir(settings: Settings, program: str) -> bool:
     return bool(settings.script_dir) and "/" not in program and "{" not in program
 
 
+def _optional_missing(settings: Settings) -> list[str]:
+    """``script_dir`` entries that do not exist while another entry is a folder: optional
+    folders (an example's, say) that this machine does not have, worth only a note."""
+    dirs = settings.script_dir
+    if not any(os.path.isdir(os.path.expanduser(d)) for d in dirs):
+        return []
+    return [d for d in dirs if not os.path.lexists(os.path.expanduser(d))]
+
+
+def command_notes(cfg: Config) -> list[str]:
+    """Notes about the folders and programs found on this machine (``check`` prints them,
+    the daemon logs them at the normal level)."""
+    return [f"script_dir {d!r} does not exist; it is skipped (another script_dir folder does)"
+            for d in _optional_missing(cfg.settings)]
+
+
 def command_problems(cfg: Config, path: str | None = None) -> list[str]:
     """Actions whose program cannot be run, judged with PATH (default: this process's).
 
@@ -510,8 +572,9 @@ def command_problems(cfg: Config, path: str | None = None) -> list[str]:
     is often shorter than a login shell's PATH.
     """
     problems = []
+    quiet = set(_optional_missing(cfg.settings))
     for d in cfg.settings.script_dir:
-        if not os.path.isdir(os.path.expanduser(d)):
+        if d not in quiet and not os.path.isdir(os.path.expanduser(d)):
             problems.append(f"script_dir {d!r} is not a folder")
     for a in cfg.actions:
         prog = os.path.expanduser(a.run[0])
@@ -546,15 +609,152 @@ def check_permissions(path: Path) -> None:
                            "(run: chmod go-w on it)"])
 
 
-def load(path: Path, *, must_exist: bool = False) -> Config:
-    if not path.exists():
-        if must_exist:
-            raise ConfigError([f"{path} does not exist"])
-        return Config()
+# -- drop-in files -------------------------------------------------------------------
+#
+# Next to config.toml, config.d/*.toml are read after it, in file-name order, with the
+# same schema except [daemon]. Their devices, tags and actions join the main file's; a
+# name defined in two files is an error. Actions run in that order: the main file's,
+# then each drop-in's.
+
+def dropin_dir(main: Path) -> Path:
+    """The folder of drop-in files for ``main``: ``config.d`` next to ``config.toml``."""
+    return main.with_suffix(".d")
+
+
+def file_label(main: Path, path: Path) -> str:
+    """``path`` as shown to the user: the main file's name, or ``config.d/NAME.toml``."""
+    if path == main:
+        return main.name
+    if path.parent == dropin_dir(main):
+        return f"{path.parent.name}/{path.name}"
+    return str(path)
+
+
+DROPIN_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*\.toml$")
+
+
+def dropin_files(main: Path) -> list[Path]:
+    """The drop-in files of ``main``, in the order they are read (by file name).
+
+    Hidden files and names other than ``NAME.toml`` (an editor's backup, udevmon's own
+    ``.bak``) are not read.
+    """
+    folder = dropin_dir(main)
+    if not folder.is_dir():
+        return []
+    return sorted((p for p in folder.iterdir() if DROPIN_RE.match(p.name) and p.is_file()),
+                  key=lambda p: p.name)
+
+
+def dropin_path(main: Path, name: str) -> Path:
+    """The file meant by ``--file NAME``: the main file, or a drop-in given as ``NAME``,
+    ``NAME.toml``, ``config.d/NAME.toml`` or its full path. ConfigError for anything
+    else (a file that would not be read)."""
+    folder = dropin_dir(main)
+    given = Path(os.path.expanduser(name))
+    if given.is_absolute():
+        if given == main:
+            return main
+        if given.parent != folder:
+            raise ConfigError([f"--file {name}: only {main} or a file in {folder} is read"])
+        given = Path(given.name)
+    if str(given) in (main.name, str(main)):
+        return main
+    if len(given.parts) == 2 and given.parts[0] == folder.name:
+        given = Path(given.parts[1])
+    file = given.name if given.suffix == ".toml" else given.name + ".toml"
+    if len(given.parts) != 1 or not DROPIN_RE.match(file):
+        raise ConfigError([f"--file {name}: give a drop-in as NAME or {folder.name}/NAME.toml "
+                           "(letters, digits, _ . -)"])
+    return folder / file
+
+
+def _read_toml(path: Path) -> dict:
     check_permissions(path)
     try:
         with open(path, "rb") as f:
-            data = tomllib.load(f)
+            return tomllib.load(f)
     except tomllib.TOMLDecodeError as e:
         raise ConfigError([f"{path}: {e}"]) from e
-    return parse(data)
+
+
+def read_files(main: Path):
+    """Read ``main`` and its drop-ins.
+
+    Returns (merged data, origins for ``parse``, the files read, sources: (kind, name) ->
+    file for devices and tags, the file of each action by position).
+    """
+    files = ([main] if main.exists() else []) + dropin_files(main)
+    folder = dropin_dir(main)
+    if len(files) > (1 if main.exists() else 0):
+        check_permissions(folder)
+    data: dict = {}
+    origins: dict = {}
+    sources: dict = {}
+    action_files: list[Path] = []
+    problems: list[str] = []
+    for path in files:
+        raw = _read_toml(path)
+        label = file_label(main, path)
+        if path == main:
+            data = {k: v for k, v in raw.items() if k not in ("devices", "tags", "actions")}
+        elif "daemon" in raw:
+            problems.append(f"{label}: [daemon] is only read from {main.name}")
+        for key in raw:
+            if path != main and key not in _TOP:
+                problems.append(f"{label}: top level: unknown key {key!r}")
+        for key, kind in (("devices", "device"), ("tags", "tag")):
+            tables = raw.get(key)
+            if tables is None:
+                continue
+            if not isinstance(tables, dict):
+                problems.append(f"{label}: '{key}' must be a table")
+                continue
+            merged = data.setdefault(key, {})
+            for name, table in tables.items():
+                if name in merged:
+                    problems.append(f"{kind} {name!r} is defined in both "
+                                    f"{file_label(main, sources[(kind, name)])} and {label}")
+                    continue
+                merged[name] = table
+                sources[(kind, name)] = path
+                if path != main:
+                    origins[(kind, name)] = label
+        actions = raw.get("actions")
+        if actions is None:
+            continue
+        if not isinstance(actions, list):
+            problems.append(f"{label}: 'actions' must be an array of tables ([[actions]])")
+            continue
+        merged = data.setdefault("actions", [])
+        for local, action in enumerate(actions, 1):
+            name = action.get("name") if isinstance(action, dict) else None
+            if isinstance(name, str) and sources.get(("action", name), path) != path:
+                problems.append(f"action {name!r} is defined in both "
+                                f"{file_label(main, sources[('action', name)])} and {label}")
+                continue
+            merged.append(action)
+            action_files.append(path)
+            if isinstance(name, str):
+                sources[("action", name)] = path
+            if path != main:
+                origins[("action", len(merged))] = (label, local)
+    if problems:
+        raise ConfigError(problems)
+    sources = {k: v for k, v in sources.items() if k[0] != "action"}
+    return data, origins, files, sources, action_files
+
+
+def load(path: Path, *, must_exist: bool = False) -> Config:
+    """The configuration of ``path`` (config.toml) and its drop-ins (config.d/*.toml)."""
+    path = Path(path)
+    if not path.exists() and not dropin_files(path):
+        if must_exist:
+            raise ConfigError([f"{path} does not exist"])
+        return Config(main=path)
+    data, origins, files, sources, action_files = read_files(path)
+    cfg = parse(data, origins)
+    cfg.main, cfg.files, cfg.sources = path, files, sources
+    for action, file in zip(cfg.actions, action_files):
+        cfg.sources[("action", action.name)] = file
+    return cfg
