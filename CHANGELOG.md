@@ -12,6 +12,8 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-10
+
 ### Changed
 
 - **`scan` now confirms before saving, and lets you go back.** Before anything is
