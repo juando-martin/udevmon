@@ -24,12 +24,11 @@ unprivileged user.
 
 - No TUI/GUI (the config format and CLI are designed so one can be added).
 - No root component, no udev rules installed (optional later, see §12).
-- No control socket between CLI and daemon (reload is by `SIGHUP`).
+- The control socket (§8.6) carries `trigger` only; reload is still by `SIGHUP`
+  and pause by a flag file.
 - No Bluetooth / network / display sources yet (extension points exist, see §11).
 - No backwards compatibility with earlier config spellings while the tool is
   preliminary; format changes are made in place.
-- Tags have "any of" semantics only, and a named device cannot be excluded from
-  a rule tag (see §12).
 
 ## 3. Platform and dependencies
 
@@ -1021,16 +1020,71 @@ No disk I/O apart from reading the config.
   kinds, with no change to config format, matching, tags or actions.
 - **More udev device classes** need only `udev_filters` plus `udev_<prop>`
   match keys, no code; tag rules make them selectable as a class.
-- **TUI/GUI** can edit the same TOML via the config-edit module, and could
-  later talk to the daemon over a control socket.
+- **TUI/GUI** can edit the same TOML via the config-edit module, and talk to the
+  daemon over the control socket (§8.6).
 
 ## 12. Optional later work
 
+Nothing here is started. Ordered roughly from small to large.
+
+**Small**
+
+- Completion for `pause --for` durations (`15m 30m 1h 2h 1d`), so TAB shows
+  the format. Needs a new option kind in `completion.py`.
+- `check` notes:
+  - a device whose match is a subset of another's, so the two can never be
+    told apart;
+  - a `lock` name used by one action only (it then orders only that action's
+    own runs: intended, or a typo);
+  - an `exclude_tags` entry whose rule can never match the device;
+  - two configured devices matching the same thing from different files, where
+    `{device}` then depends on file names (§7 step 2).
+- `$UDEVMON_SCRIPT_DIR` and `$UDEVMON_STATE_ROOT` in the action environment
+  (today a script computes its own path, and `dirname "$UDEVMON_STATE_DIR"`).
+- Retry back-off (`retry_delay` growing each attempt); retrying `shutdown`
+  actions, which stopping currently ends.
+- zsh and fish completion: only a small wrapper per shell around
+  `udevmon _complete`.
+
+**Medium**
+
+- `udevmon edit [FILE]`, like `visudo`: open the main file or a drop-in in
+  `$EDITOR` on a copy, check it on save as `check` does (across all files),
+  offer to edit again or discard on errors, else replace the file (keeping the
+  `.bak`) and reload. Covers every key without per-option UI; this replaced the
+  interactive menu idea.
+- Tag-level default variables that devices override (needs a rule for devices
+  in several tags).
+- Per-action environment and working directory.
+- `pause`, `resume` and `reload` through the control socket instead of a flag
+  file and `SIGHUP`; `scan` showing live events through the running daemon, so
+  that only one process watches.
+
+**Needs a design decision**
+
+- The lock and the worker pool: a job waiting for its lock occupies a worker
+  (accepted, documented). A queue per lock would free it, at the cost of the
+  per-event run order (§7) unless the event's worker waits anyway.
+- Marking a USB device's `disconnected` as a surprise when one of its
+  filesystems was still mounted. Needs a link from the USB device to its
+  filesystems: `drive_serial == serial` when both exist, or walking the block
+  device's sysfs path up to its USB device (exact, more work).
+
+**Large**
+
 - One-time root udev rule forwarding events to a socket-activated user
-  service for zero idle footprint / device permission tweaks.
-- Control socket (live scan through the daemon, no SIGHUP).
-- Per-action environment/cwd, `enabled = false`, startup replay option.
-- Tag-level default variables that devices override.
+  service, for zero idle footprint and device permission tweaks (optional,
+  since the design avoids root).
+- Other event sources: Bluetooth (BlueZ), power (UPower), network
+  (NetworkManager); each a `sources/` module plus new event kinds (§11).
+- A `changed` event (udev `change`, `bind`, `unbind`) and watching every
+  subsystem; non-USB defaults in `scan`.
+
+**Deliberately not planned**
+
+- The old prototype's `environ` globs, `name:filter` INI format and importer,
+  and `[abc]` glob classes: everything is exported as `UDEVMON_*`, and `*` and
+  `?` cover rules.
 
 ## 13. Layout and testing
 
@@ -1038,8 +1092,8 @@ No disk I/O apart from reading the config.
 pyproject.toml
 setup.py                          version from git (§13.1)
 src/udevmon/{__init__,__main__,cli,config,configedit,events,matching,
-             engine,actions,daemon,scan,service,completion,explain,pause,
-             runtime,_scm}.py
+             engine,actions,daemon,control,notify,session,state,scan,
+             service,completion,explain,pause,runtime,_scm}.py
 src/udevmon/sources/{__init__,udev,udisks}.py
 contrib/rclone-config/            helper run as an action (own package)
 tests/…   (unittest)
@@ -1050,7 +1104,10 @@ of the udevmon package and import nothing from it; each has its own README and i
 installed on its own (`rclone-config` is a separate small package). `rclone-config` publishes the rclone config of a drive tagged for it while
 the drive is present.
 
-`completion.py` holds the shell completion (§8.2); `explain.py` the report of §8.4.
+`completion.py` holds the shell completion (§8.2); `explain.py` the report of §8.4;
+`control.py` the control socket (§8.6); `notify.py` the desktop notifications of
+`notify_on_failure`; `session.py` the lookup of the graphical session's variables for
+actions; `state.py` the per-instance state folders.
 `matching.py` holds device matching, tag rules, strength and the resolver
 (§5.5); `config.py` the loader, validation, warnings and notes.
 

@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DOCS = ["README.md", "SPECIFICATIONS.md", "CHANGELOG.md"]
+DOCS = ["README.md", "SPECIFICATIONS.md", "CHANGELOG.md", "DEVELOPMENT.md"]
 CODE_LIMIT = 76          # widest code line that still fits an 80-column glow
 
 

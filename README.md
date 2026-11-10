@@ -1495,6 +1495,7 @@ prints PASS or FAIL for each check. If one fails it writes
 `usb-test-report.txt` in the current folder. `--keep-popups` leaves the
 desktop setting alone.
 
-`SPECIFICATIONS.md` describes the design, data model and behaviour in detail.
-`CHANGELOG.md` records what changed in each version; add a line under
-"Unreleased" with any change a user would notice.
+`SPECIFICATIONS.md` describes the design, data model and behaviour in detail,
+and `CHANGELOG.md` what changed in each version. `DEVELOPMENT.md` is for working
+on udevmon: the checks that keep docs and code in step, live testing and
+releasing.
