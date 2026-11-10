@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """`{udev_NAME}` placeholders: raw udev properties usable in a command."""
 
 import unittest

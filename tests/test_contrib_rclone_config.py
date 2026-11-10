@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """contrib/rclone-config: publish a drive's rclone config while the drive is present.
 
 Drives are folders in the per-run temp folder; lsblk is faked (in-process by

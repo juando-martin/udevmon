@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """Surprise removal: the `removed` event and the `surprise` property."""
 
 import unittest

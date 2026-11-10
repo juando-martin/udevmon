@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """The daemon's control socket: the CLI asks the running daemon to do something now.
 
 A Unix stream socket in the user's runtime folder (private to the user; the peer's uid

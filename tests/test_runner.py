@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """The runner waits for the command, not for its output pipe, and `detach` does not wait."""
 
 import contextlib

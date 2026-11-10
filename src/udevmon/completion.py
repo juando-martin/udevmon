@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """Shell tab completion.
 
 The bash side is a few lines (SCRIPT) that call ``udevmon _complete``; the logic is

@@ -1,9 +1,9 @@
 # The sdist: the package (found by setuptools), plus the docs, man pages, tests and tools.
-include README.md SPECIFICATIONS.md DEVELOPMENT.md CHANGELOG.md CLAUDE.md
+include LICENSE README.md SPECIFICATIONS.md DEVELOPMENT.md CHANGELOG.md CLAUDE.md
 recursive-include man *.1 *.5
-recursive-include docs *.rst *.py *.css
+recursive-include docs *.rst *.py *.css *.txt
 recursive-include tools *.py
 recursive-include tests *.py
-recursive-include contrib *.md *.py *.toml *.example
+recursive-include contrib *.md *.py *.toml *.example LICENSE
 prune docs/_build
 global-exclude *.py[cod] *.local.md

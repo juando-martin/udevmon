@@ -1,0 +1,3 @@
+# Read the Docs installs only this (.readthedocs.yaml); keep it in step
+# with the docs extra in pyproject.toml.
+sphinx>=8,<10

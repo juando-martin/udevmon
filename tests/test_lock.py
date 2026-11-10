@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """`lock = "name"`: actions sharing a lock never run at the same time, in event order."""
 
 import contextlib

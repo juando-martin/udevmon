@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """Drop-in files: config.d/*.toml next to config.toml, read after it in file-name order."""
 
 import contextlib

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """The long-running daemon: sources -> engine -> runner, on one GLib main loop."""
 
 from __future__ import annotations

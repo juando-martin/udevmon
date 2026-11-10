@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """The HTML manual: tools/docs.py (strict build, loopback-only preview) and an offline build.
 
 The build test needs Sphinx (the ``docs`` extra) and is skipped without it.

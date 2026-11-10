@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """Edits to existing entries go through tomlkit: they must keep however the file was written."""
 
 import contextlib

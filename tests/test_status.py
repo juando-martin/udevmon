@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """Device status (disabled / ignored), action enabled, and `actions set`."""
 
 import contextlib

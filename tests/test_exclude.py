@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """A named device can opt out of a rule tag (`exclude_tags`)."""
 
 import contextlib

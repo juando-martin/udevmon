@@ -20,6 +20,19 @@ to the version and date, and start a new empty **Unreleased** above it.
   generated from the parser, and the module reference from the docstrings.
   The core modules gained docstrings for it. The sdist now includes the docs,
   man pages, tests and tools.
+- **Licensed under GPL-3.0-or-later**: `LICENSE`, an SPDX header in every
+  Python file (a test checks them), and the license in the package metadata.
+  The same for `contrib/rclone-config`.
+- **Ready for PyPI, GitHub and Read the Docs**: project metadata (readme,
+  authors, URLs, classifiers), install instructions with `pipx`, CI and a
+  release workflow that publishes a `vX.Y.Z` tag to PyPI, and a Read the
+  Docs configuration. The README says which interfaces other programs can
+  use (the CLI, the config format, what actions receive, `present --json`)
+  and that the Python modules are internal.
+
+### Changed
+
+- The examples and tests use neutral drive labels, serials and host names.
 
 ## [0.8.0] - 2026-11-10
 

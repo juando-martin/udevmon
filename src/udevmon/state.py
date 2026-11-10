@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """Per-instance state folders: a private place where the actions of one plug (or one mount)
 can leave notes for each other, e.g. what a connect script found out for its disconnect.
 

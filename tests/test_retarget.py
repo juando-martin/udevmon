@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """`actions set --add-device|--remove-device|--add-tag|--remove-tag`."""
 
 import contextlib

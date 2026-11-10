@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """Scan mode: watch events live and let the user name things as devices."""
 
 from __future__ import annotations

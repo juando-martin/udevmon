@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """The ``udevmon-modules`` directive: autodoc for every module no other page documents.
 
 It scans the top-level ``docs/*.rst`` pages for ``.. automodule::`` lines and documents

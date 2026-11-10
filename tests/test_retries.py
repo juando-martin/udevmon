@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """`retries` and `retry_delay`: run again after a non-zero exit."""
 
 import contextlib

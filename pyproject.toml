@@ -1,14 +1,42 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "udevmon"
 dynamic = ["version"]              # from git, see setup.py
 description = "Run user-defined actions when USB devices or removable filesystems appear or disappear"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
+authors = [{name = "Juan Domingo Martín"}]
+keywords = ["udev", "udisks2", "usb", "mount", "automation", "hotplug", "removable"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Hardware",
+    "Topic :: System :: Hardware :: Universal Serial Bus (USB)",
+    "Topic :: Utilities",
+]
 dependencies = ["pyudev", "PyGObject", "tomlkit>=0.11.7,!=0.15.0",
                 "tomli>=1.1; python_version < '3.11'"]
+
+[project.urls]
+Homepage = "https://github.com/juando-martin/udevmon"
+Documentation = "https://udevmon.readthedocs.io/"
+Source = "https://github.com/juando-martin/udevmon"
+Issues = "https://github.com/juando-martin/udevmon/issues"
+Changelog = "https://github.com/juando-martin/udevmon/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 docs = ["sphinx>=8,<10"]           # the HTML manual: tools/docs.py (DEVELOPMENT.md)

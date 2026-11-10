@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """`notify_on_failure`: a desktop notification when an action's last attempt fails.
 
 Nothing is ever sent for real: `notify.send` is replaced in every test.

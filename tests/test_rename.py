@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """devices set, and renaming devices, tags and actions without disturbing the file."""
 
 import contextlib

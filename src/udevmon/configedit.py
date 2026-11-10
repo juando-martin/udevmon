@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """Comment-preserving edits to the config file (append / remove whole blocks)."""
 
 from __future__ import annotations

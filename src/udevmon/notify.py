@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """Desktop notifications for failed actions (``notify_on_failure``).
 
 Sent with the freedesktop Notifications D-Bus interface on the session bus, which needs

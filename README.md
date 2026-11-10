@@ -45,7 +45,32 @@ Concepts:
 
 ## Installation
 
-From the project directory, install for your user only (no root needed):
+udevmon is on PyPI. The simplest install is with
+[pipx](https://pipx.pypa.io/), for your user only (no root needed):
+
+```
+pipx install --system-site-packages udevmon
+```
+
+`--system-site-packages` lets udevmon use the system's `python3-gi` and
+`python3-pyudev` (on Debian/Ubuntu/Mint: `apt install python3-gi
+gir1.2-glib-2.0 python3-pyudev`, usually already there). Without it, pip
+builds PyGObject from source, which needs the GObject introspection
+headers (`libgirepository-2.0-dev`, or `libgirepository1.0-dev` on older
+releases; needs root), and PyGObject 3.51 and later need GLib 2.80 or newer.
+On an older system (Ubuntu 22.04, for example) install `'PyGObject<3.51'`
+first.
+
+A plain virtual environment works the same way:
+
+```
+python3 -m venv --system-site-packages ~/.venvs/udevmon
+~/.venvs/udevmon/bin/pip install udevmon
+```
+
+(`python3 -m venv` needs the `python3-venv` package.) To install from a
+source checkout instead, run `pip install .` in the project folder, or for
+your user without a virtual environment:
 
 ```
 pip install --user --break-system-packages .
@@ -53,19 +78,11 @@ pip install --user --break-system-packages .
 
 `--break-system-packages` is required on Debian 12+/Ubuntu 23.04+ because of
 PEP 668. It is safe here: `--user` installs into `~/.local` and does not touch
-system files. If you'd rather use a virtual environment, install
-`python3-venv` first (needs root) and use
-`python3 -m venv --system-site-packages ~/.venvs/udevmon`
-(the flag keeps the system `gi` and `pyudev` visible), then
-`~/.venvs/udevmon/bin/pip install .`.
+system files.
 
-A virtual environment *without* `--system-site-packages` works too, but then
-pip builds PyGObject from source. That needs the GObject introspection headers
-(`libgirepository1.0-dev` on Debian/Ubuntu, needs root), and PyGObject 3.51
-and later need GLib 2.80 or newer. On an older system (Ubuntu 22.04, for
-example) install `'PyGObject<3.51'` first.
-
-Make sure `~/.local/bin` is on your `PATH` and check:
+pipx and `pip install --user` put the command in `~/.local/bin`; make sure
+it is on your `PATH` (a virtual environment has it in its own `bin`) and
+check:
 
 ```
 udevmon --version
@@ -120,8 +137,9 @@ man udevmon
 man udevmon.toml
 ```
 
-For a user install they go to `~/.local/share/man`, which `man` finds when
-`~/.local/bin` is on your `PATH`. From a source checkout, read them without
+pipx and a user install put them in `~/.local/share/man`, which `man` finds
+when `~/.local/bin` is on your `PATH`. A virtual environment keeps them in
+its own `share/man`. From a source checkout, read them without
 installing: `man -l man/udevmon.1` and `man -l man/udevmon.toml.5`.
 
 ### Uninstalling
@@ -131,7 +149,7 @@ Remove the extras first, then the package:
 ```
 udevmon service uninstall       # stop the daemon, remove the unit
 udevmon completion uninstall    # remove the tab-completion script
-pip uninstall udevmon
+pipx uninstall udevmon          # or: pip uninstall udevmon
 ```
 
 - `service uninstall` runs `systemctl --user disable --now`, so the daemon
@@ -144,7 +162,7 @@ pip uninstall udevmon
   mirroring `install --dest`.
 - Your configuration in `~/.config/udevmon/` (and its `.bak`) is never
   touched. Delete it yourself if you no longer want it.
-- `pip uninstall` alone leaves the unit file and the completion script
+- Uninstalling the package alone leaves the unit file and the completion script
   behind, which is why they come first.
 
 ### The version number
@@ -1393,7 +1411,7 @@ udevmon actions add --tag backup mounted --named-only -- \
 ```
 
 Carry rclone credentials on a drive, available only while it is plugged in:
-the helper in [`contrib/rclone-config/`](contrib/rclone-config/README.md)
+the helper in [`contrib/rclone-config/`](https://github.com/juando-martin/udevmon/tree/main/contrib/rclone-config)
 publishes the drive's `config/rclone/rclone.conf` to
 `$XDG_RUNTIME_DIR/rclone/rclone.conf` and removes it as soon as the drive is
 gone. It's a separate small package that udevmon runs as an action, not
@@ -1467,6 +1485,24 @@ trust the *contents* of the device without care.
   ignored); there are no regular expressions. Variables belong to devices, not to tags.
 - No GUI or TUI yet; configuration is the TOML file plus the CLI.
 
+## Using udevmon from other programs
+
+Other programs use udevmon through its command line, not by importing it.
+These are the interface, still provisional while udevmon is at 0.x (each
+change is in the changelog):
+
+- the commands, their options and exit statuses;
+- the configuration format, including drop-in files that a program owns
+  (`config.d/NN-NAME.toml`);
+- what an action receives: placeholders, the `UDEVMON_*` environment
+  variables and the state folder;
+- the JSON from `udevmon present --json`.
+
+The Python modules, the control socket and the files in
+`$XDG_RUNTIME_DIR` are internal and may change in any release. The
+[manual](https://udevmon.readthedocs.io/) has the details, in "Interfaces
+and stability" and "Integration contracts".
+
 ## Development
 
 ```
@@ -1495,7 +1531,8 @@ prints PASS or FAIL for each check. If one fails it writes
 `usb-test-report.txt` in the current folder. `--keep-popups` leaves the
 desktop setting alone.
 
-`SPECIFICATIONS.md` describes the design, data model and behaviour in detail,
-and `CHANGELOG.md` what changed in each version. `DEVELOPMENT.md` is for working
-on udevmon: the checks that keep docs and code in step, live testing and
-releasing.
+[`SPECIFICATIONS.md`](https://github.com/juando-martin/udevmon/blob/main/SPECIFICATIONS.md) describes the design, data
+model and behaviour in detail, and [`CHANGELOG.md`](https://github.com/juando-martin/udevmon/blob/main/CHANGELOG.md) what
+changed in each version. [`DEVELOPMENT.md`](https://github.com/juando-martin/udevmon/blob/main/DEVELOPMENT.md) is for
+working on udevmon: the checks that keep docs and code in step, live
+testing and releasing.

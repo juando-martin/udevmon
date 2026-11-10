@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """Test isolation.
 
 * Every temporary file or folder the tests create lives in one per-run folder that is

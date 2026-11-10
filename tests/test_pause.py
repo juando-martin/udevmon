@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """The global pause: udevmon pause / resume and the daemon honouring it."""
 
 import contextlib

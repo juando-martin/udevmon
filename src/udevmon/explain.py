@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """``udevmon explain``: what would run for a thing, without plugging anything in.
 
 Uses the engine's ``plan()``, so it applies exactly the rules the daemon applies

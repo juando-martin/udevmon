@@ -1,12 +1,16 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "udevmon-rclone-config"
 version = "0.1.0"
 description = "udevmon helper: publish a drive's rclone config while the drive is present"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
+authors = [{name = "Juan Domingo Martín"}]
 dependencies = []                  # standard library only
 
 [project.scripts]
@@ -14,3 +18,8 @@ rclone-config = "rclone_config:entry"
 
 [tool.setuptools]
 py-modules = ["rclone_config"]
+
+[project.urls]
+Homepage = "https://github.com/juando-martin/udevmon/tree/main/contrib/rclone-config"
+Source = "https://github.com/juando-martin/udevmon"
+Issues = "https://github.com/juando-martin/udevmon/issues"

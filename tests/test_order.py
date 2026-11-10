@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """`order` on an action: within one event, lower runs first; ties keep config order."""
 
 import contextlib

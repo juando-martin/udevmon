@@ -40,6 +40,7 @@ change, not by loosening the test.
 | `test_manpages` | a command, option, config key, event or property is not described in `man/`, the example config there is invalid, or `groff` warns |
 | `test_documentation` | the HTML manual has a warning (broken reference, bad docstring markup), or building it reads the config, starts a source, opens a socket or runs a command other than `git`; skipped without Sphinx |
 | `test_docs` | a code block in `README.md`, `SPECIFICATIONS.md`, `CHANGELOG.md` or this file is unbalanced, empty, or has a line wider than 76 characters (it must fit an 80-column `glow`) |
+| `test_license` | a Python file lacks the two-line SPDX header (after any `#!` line), or `LICENSE` or the license metadata of udevmon or `contrib/rclone-config` is missing |
 
 So a new option normally touches: the parser in `cli.py`, `completion.py`, both
 man pages where relevant, README, SPECIFICATIONS, and the changelog.
@@ -51,6 +52,15 @@ man pages where relevant, README, SPECIFICATIONS, and the changelog.
 - Man pages: when a page's content changes, set the date in its `.TH` line to
   the day of the change (`man/udevmon.1`, `man/udevmon.toml.5`).
 - Prose is plain and short; examples are real commands that work.
+- Every Python file starts with the license header (after a `#!` line):
+
+  ```
+  # SPDX-License-Identifier: GPL-3.0-or-later
+  # Copyright (C) 2026 Juan Domingo Martín
+  ```
+- No personal data in tracked files: examples use neutral drive labels
+  (`KEYDRIVE`), serials (`1111222233334444`), UUIDs (`AB12-CD34`) and host
+  names (`alpha`, `beta`).
 - No backwards compatibility while udevmon is preliminary: a format change is
   made in place, and existing configs are fixed by hand, not by migration code.
 
@@ -123,7 +133,9 @@ nothing in the source holds it.
    which stays, empty, above it.
 3. Check the man page dates (see Docs) and run the tests.
 4. Commit as `Release X.Y.Z`, then tag: `git tag -a vX.Y.Z -m "udevmon X.Y.Z"`.
-5. Push `main` and the tag.
+5. Push `main` and the tag. On GitHub the tag starts the release workflow
+   (`.github/workflows/release.yml`): it checks the tag against the version
+   from git, builds, and publishes to PyPI. Never re-upload a version.
 6. Reinstall where it is used, and restart the service if the daemon changed.
 
 ## Installing a development build

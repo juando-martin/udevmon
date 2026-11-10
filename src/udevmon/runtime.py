@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """Files udevmon keeps in the user's runtime directory (cleared at logout or reboot)."""
 
 from __future__ import annotations

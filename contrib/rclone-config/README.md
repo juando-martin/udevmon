@@ -61,21 +61,28 @@ until the end. For kp-sync that's part of its own design; see its
 ## Installing
 
 It's a small Python package (standard library only, Python 3.10 or newer)
-that provides the `rclone-config` command. Install it into the virtual
-environment you keep your tools in, e.g. `~/.venvs/tools`, from the udevmon
-source folder:
+that provides the `rclone-config` command. It is not on PyPI: install it
+from udevmon's repository on GitHub, with pipx or into the virtual
+environment you keep your tools in (e.g. `~/.venvs/tools`):
 
 ```
-uv pip install --python ~/.venvs/tools/bin/python ./contrib/rclone-config
+repo=git+https://github.com/juando-martin/udevmon
+pipx install "$repo#subdirectory=contrib/rclone-config"
+# or
+uv pip install --python ~/.venvs/tools/bin/python \
+  "$repo#subdirectory=contrib/rclone-config"
 ```
 
-(or `~/.venvs/tools/bin/pip install --no-deps ./contrib/rclone-config` if
-that environment has pip). The command lands in `~/.venvs/tools/bin`. The
-same command updates it. Building leaves `build/` and `*.egg-info` in
-`contrib/rclone-config/`; they are git-ignored and can be deleted.
+From a udevmon source folder, `./contrib/rclone-config` works in place of
+the URL (with uv, or `~/.venvs/tools/bin/pip install --no-deps` if that
+environment has pip). pipx puts the command in `~/.local/bin`, a virtual
+environment in its own `bin`. The same command updates it. Building from a
+source folder leaves `build/` and `*.egg-info` in `contrib/rclone-config/`;
+they are git-ignored and can be deleted.
 
 udevmon looks up bare command names only in `[daemon] script_dir` and the
-system folders, so add the environment's `bin` to `script_dir`:
+system folders, so add the folder that has the command to `script_dir`
+(here the virtual environment's; `~/.local/bin` with pipx):
 
 ```toml
 [daemon]
@@ -86,7 +93,7 @@ Every command in that folder can then be used by its bare name in actions
 (`kp-sync` too), ahead of the system folders: a bare `python3` in an action
 becomes the environment's Python.
 
-Then copy [`udevmon.toml.example`](udevmon.toml.example) to
+Then copy [`udevmon.toml.example`](https://github.com/juando-martin/udevmon/blob/main/contrib/rclone-config/udevmon.toml.example) to
 `~/.config/udevmon/config.d/rclone-config.toml` (udevmon 0.7.0 or later; or
 merge its two actions into `config.toml`). Their `order` (10 and 90) runs
 `up` before and `down` after the actions that use the credentials, which keep
@@ -111,7 +118,7 @@ are present. It never shows the config itself.
 
 ## Removing
 
-Delete the two actions, then
+Delete the two actions, then `pipx uninstall udevmon-rclone-config` or
 `uv pip uninstall --python ~/.venvs/tools/bin/python udevmon-rclone-config`.
 If a config is still published,
 unplug the drive first (or remove `$XDG_RUNTIME_DIR/rclone/rclone.conf`).

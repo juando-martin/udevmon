@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """`scan --all-props` and `present --all-props`: every property, raw udev ones included."""
 
 import contextlib

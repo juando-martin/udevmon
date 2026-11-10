@@ -10,3 +10,6 @@ dist/
 *.swo
 *~
 src/udevmon/_version.py
+
+# untracked notes (CLAUDE.local.md among them)
+*.local.md

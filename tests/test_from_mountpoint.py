@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """`devices add --from-mountpoint` and `present --json`: naming a plugged drive from a script."""
 
 import contextlib

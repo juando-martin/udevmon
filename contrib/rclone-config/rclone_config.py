@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """Publish an rclone config from a removable drive while the drive is present.
 
 Run by udevmon actions (see README.md next to this file):

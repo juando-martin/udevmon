@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """`tag_mode = "all"`: an action on several tags that needs every one of them."""
 
 import contextlib

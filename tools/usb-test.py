@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """Guided real-hardware test for udevmon. Run it from the source tree:
 
     python3 tools/usb-test.py

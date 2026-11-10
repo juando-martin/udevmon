@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """The ``udevmon-help`` directive: the CLI reference, from the argparse parser.
 
 Nothing is run: the parser is built (``udevmon.cli.build_parser``, which has no side

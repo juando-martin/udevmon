@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """Resolve events to devices/tags, select actions, debounce, and dispatch (spec 5.5, 7)."""
 
 from __future__ import annotations

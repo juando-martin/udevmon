@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """`udevmon trigger DEVICE [EVENT]`: run a present device's actions now, through the daemon."""
 
 import contextlib

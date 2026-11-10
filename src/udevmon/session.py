@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """Find the graphical session's variables (DISPLAY and friends) for the actions.
 
 A systemd user service gets its environment from the user manager when it starts. The

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """`[daemon] script_dir`: folders searched for a command given by bare name, then only the
 standard system paths (never the daemon's own PATH)."""
 

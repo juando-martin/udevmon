@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """Run actions as subprocesses (never via a shell)."""
 
 from __future__ import annotations

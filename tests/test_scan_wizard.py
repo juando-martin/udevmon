@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """The scan-mode registration wizard: choosing device vs. category, the confirm-and-edit
 screen (rename, change match/rule, change tags, cancel), and the small helpers it is built
 from."""

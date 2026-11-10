@@ -1023,6 +1023,14 @@ No disk I/O apart from reading the config.
 - **TUI/GUI** can edit the same TOML via the config-edit module, and talk to the
   daemon over the control socket (§8.6).
 
+**Interface for other programs.** Other programs use udevmon through the CLI
+(commands, options, exit statuses), the configuration format with drop-in
+files (§6.0), what an action receives (placeholders, `UDEVMON_*` variables,
+the state folder; §7.2, §7.5) and `present --json`. These are provisional
+while udevmon is 0.x. The Python modules, the control socket protocol and the
+files in the runtime folder are internal: there is no public Python API
+(`docs/api.rst` keeps the list).
+
 ## 12. Optional later work
 
 Nothing here is started. Ordered roughly from small to large.
@@ -1079,6 +1087,16 @@ Nothing here is started. Ordered roughly from small to large.
   (NetworkManager); each a `sources/` module plus new event kinds (§11).
 - A `changed` event (udev `change`, `bind`, `unbind`) and watching every
   subsystem; non-USB defaults in `scan`.
+- A public API (§11 says there is none). Most reusable: the event layer
+  (`events`, `sources/`), USB and mount events without root, which needs a
+  blocking `watch()` helper (today `start(emit)` assumes the caller's GLib
+  main loop), a declared source protocol and public names; it could become
+  its own package. Then reading the configuration (`config.load`,
+  `matching.resolve`) and editing it (`configedit`), which kp-sync now
+  reimplements or calls as commands. Until then, `--json` for `check`,
+  `explain`, `trigger --wait` and `--version` covers what integrations
+  parse from text today, and a documented, versioned control-socket
+  protocol would serve a GUI.
 
 **Deliberately not planned**
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """Sphinx configuration. Offline: importing it reads no user config and starts nothing."""
 
 import sys

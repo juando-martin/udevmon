@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """`instance` (one value per plug or mount) and the per-instance state folder."""
 
 import os

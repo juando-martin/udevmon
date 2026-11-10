@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """A global pause: a flag file that the daemon checks for every event.
 
 While ``udevmon.paused`` exists in the runtime directory no action runs. Its content

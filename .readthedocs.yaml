@@ -1,0 +1,21 @@
+# Read the Docs build: same strict settings as tools/docs.py. Only Sphinx is
+# installed: docs/conf.py imports udevmon from src/, and building the manual
+# needs none of udevmon's dependencies (so PyGObject is not built).
+version: 2
+
+build:
+  os: ubuntu-24.04
+  tools:
+    python: "3.13"
+  jobs:
+    post_checkout:
+      # the version comes from git tags; Read the Docs clones shallow
+      - git fetch --unshallow --tags || true
+
+sphinx:
+  configuration: docs/conf.py
+  fail_on_warning: true
+
+python:
+  install:
+    - requirements: docs/requirements.txt

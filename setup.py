@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """The version comes from git (see src/udevmon/_scm.py); everything else is in pyproject.toml."""
 
 import sys

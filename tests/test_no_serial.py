@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Juan Domingo Martín
 """Devices with no serial number: nothing identifies the unit, so `scan` asks what to tie it to,
 `present` says what a match would really identify, and `check` notes rules that use port_path."""
 
