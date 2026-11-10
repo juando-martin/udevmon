@@ -666,7 +666,7 @@ ticket is being served and serves the next one when the job has finished, howeve
 finished (a crash, or an exit that is not an exception, still serves it, and so do the
 tickets of the rest of that event's jobs). So the jobs of one lock run one at a time, in
 arrival order; jobs without a lock, and locks with other names, are not affected;
-within one event the jobs still run in file order.
+within one event the jobs still run by `order`, then file order.
 
 - **No deadlock:** a job only waits for jobs of earlier events (or earlier in its own
   event, which run before it in the same worker), and the pool starts tasks in arrival

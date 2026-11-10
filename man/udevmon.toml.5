@@ -1035,7 +1035,9 @@ Actions that share a lock name never run at the same time, and they run in the o
 their events arrived: a quick unplug cannot overtake its plug, even if a worker is
 free.
 Actions without a lock, and locks with other names, are not affected, and within one
-event the actions still run in file order.
+event the actions still run by
+.BR order ,
+then file order.
 The lock lives inside udevmon: there is no lock file, and it does not protect against
 the same script being run by hand.
 .PP
