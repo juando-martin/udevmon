@@ -20,6 +20,8 @@ class build_py_with_version(build_py):
 
     def run(self):
         super().run()
+        if getattr(self, "editable_mode", False):
+            return          # an editable install runs from src/, which asks git
         _scm.write_version_file(Path(self.build_lib) / "udevmon" / "_version.py", VERSION)
 
 

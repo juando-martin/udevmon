@@ -5,11 +5,11 @@
 import re
 import shutil
 import subprocess
-import tomllib
 import unittest
 from pathlib import Path
 
 from udevmon import cli, config as C
+from udevmon.config import tomllib  # tomli on Python 3.10
 from udevmon.events import VALID_KINDS
 
 from .test_completion import _commands

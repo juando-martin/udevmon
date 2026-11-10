@@ -30,6 +30,12 @@ to the version and date, and start a new empty **Unreleased** above it.
   use (the CLI, the config format, what actions receive, `present --json`)
   and that the Python modules are internal.
 
+### Fixed
+
+- An editable install (`pip install -e .`) failed while writing
+  `_version.py`; it now skips that file and asks git, like a source checkout.
+- `tests/test_manpages.py` failed to import on Python 3.10 (`tomllib`).
+
 ### Changed
 
 - The examples and tests use neutral drive labels, serials and host names.
