@@ -1096,8 +1096,16 @@ src/udevmon/{__init__,__main__,cli,config,configedit,events,matching,
              service,completion,explain,pause,runtime,_scm}.py
 src/udevmon/sources/{__init__,udev,udisks}.py
 contrib/rclone-config/            helper run as an action (own package)
+docs/                             Sphinx sources of the HTML manual
+docs/_ext/{cli_help,module_reference}.py   generated reference pages
+tools/docs.py                     build (strict) or preview (127.0.0.1)
 tests/…   (unittest)
 ```
+
+The HTML manual (optional, `docs` extra) is for integrators and maintainers;
+README and the man pages remain the user documentation. Its command reference
+is generated from `cli.build_parser()`, its module reference from docstrings.
+Building it imports the package but reads no config and starts nothing.
 
 `contrib/` holds helpers that udevmon runs as ordinary actions; they are not part
 of the udevmon package and import nothing from it; each has its own README and is
@@ -1136,7 +1144,9 @@ identical.
 Automated tests cover: editing hand-formatted files (sub-tables, multi-line values,
 commented headers, CRLF, rollback, a missing `tomlkit`), auto-reload and the lock file, the missing-program check,
 `explain` and the engine's `plan()`, the docs' renderability (balanced code fences,
-code lines that fit an 80-column glow), service and completion uninstall (never touching the real
+code lines that fit an 80-column glow), the HTML manual (strict offline build with
+every config, source, socket and subprocess entry point made to fail; preview on
+127.0.0.1 only), service and completion uninstall (never touching the real
 systemd), shell completion (engine, helper protocol, the real
 bash function, and a guard that fails when a command, positional argument or
 value option of the CLI is not covered by the completion tables), config parsing/validation (including the error, warning

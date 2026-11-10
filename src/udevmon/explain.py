@@ -22,6 +22,7 @@ _FS_PROPS = {"fs_uuid", "fs_label", "fs_type", "part_uuid", "mountpoint", "surpr
 
 
 def kinds_for(endpoint: Endpoint) -> tuple[str, ...]:
+    """The event kinds that can happen to ``endpoint``."""
     return FS_KINDS if endpoint.is_filesystem else USB_KINDS
 
 

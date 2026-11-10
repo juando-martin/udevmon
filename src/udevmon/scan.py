@@ -39,6 +39,7 @@ def format_props(endpoint: Endpoint) -> str:
 
 
 class Scanner:
+    """The ``udevmon scan`` session: print events as they come and offer to name things."""
     def __init__(self, config_path: Path, prompt: bool, present: bool = False,
                  all_props: bool = False):
         self.config_path = config_path
@@ -346,6 +347,7 @@ class Scanner:
               "-- notify-send 'hello'")
 
     def run(self) -> int:
+        """Watch both sources until Ctrl-C; return the exit status (1: invalid configuration)."""
         from gi.repository import GLib
         try:
             cfg = cfgmod.load(self.config_path)

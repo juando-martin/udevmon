@@ -73,6 +73,7 @@ def status(now: float | None = None) -> tuple[bool, float | None]:
 
 
 def is_paused() -> bool:
+    """Whether a pause is on now. An expired ``--for`` pause is not, and its flag file is removed."""
     return status()[0]
 
 

@@ -55,23 +55,31 @@ TRUSTED_PLACEHOLDERS = frozenset({
 
 @dataclass(frozen=True)
 class Endpoint:
+    """A thing that is present: a USB device (source ``udev``) or a filesystem (``udisks``).
+
+    ``key`` stays the same while it is present (the sysfs path, or the udisks2 object
+    path); ``props`` are its normalized properties (spec 4.2).
+    """
     source: str                     # "udev" | "udisks"
     key: str                        # stable while present (syspath / object path)
     props: Mapping[str, str]
 
     @property
     def is_filesystem(self) -> bool:
+        """Whether it is a filesystem from udisks2, not a USB device."""
         return self.source == "udisks"
 
 
 @dataclass(frozen=True)
 class Event:
+    """Something that happened to an endpoint; ``kind`` is an event kind (``connected``, ...)."""
     kind: str
     endpoint: Endpoint
     time: float = field(default_factory=time.time)
 
     @property
     def props(self) -> dict[str, str]:
+        """The endpoint's properties plus ``event``, as matching and placeholders see them."""
         return {**self.endpoint.props, "event": self.kind}
 
 

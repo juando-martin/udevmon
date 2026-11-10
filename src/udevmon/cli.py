@@ -776,6 +776,7 @@ def cmd_service_install(args):
 
 # -- parser ------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
+    """The argument parser. Building it has no side effects (the docs use it)."""
     p = argparse.ArgumentParser(prog="udevmon", description=__doc__ or "")
     p.add_argument("--version", action="version", version=__version__)
     p.add_argument("--config", type=Path, default=None, help="config file path")
@@ -1020,6 +1021,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    """Run the command in ``argv`` (default ``sys.argv[1:]``) and return its exit status."""
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["_complete"]:        # not a documented command: see completion.py
         return _complete_words(argv[1:])

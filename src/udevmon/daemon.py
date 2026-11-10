@@ -67,6 +67,12 @@ def _same_file(a, b) -> bool:
 
 
 class Daemon:
+    """The ``udevmon run`` process: sources, engine, action runner and control socket on one
+    GLib main loop.
+
+    One per user: :meth:`run` takes the lock file in the runtime folder. With ``dry_run``
+    actions are logged instead of run.
+    """
     def __init__(self, config_path: Path, dry_run: bool = False):
         self.config_path = config_path
         self.dry_run = dry_run
@@ -105,6 +111,7 @@ class Daemon:
                 log.exception("error firing shutdown events")
 
     def present_things(self) -> list[Endpoint]:
+        """Everything the sources know to be present now."""
         return [e for s in self.sources for e in s.present()]
 
     def control(self, req: dict):
@@ -158,6 +165,11 @@ class Daemon:
         return reply, wait
 
     def reload(self) -> bool:
+        """Read the configuration again (on SIGHUP).
+
+        An invalid one is logged and the previous one kept; a change of ``udev_filters``
+        needs a restart. Always returns True, which keeps the signal handler.
+        """
         try:
             new = cfgmod.load(self.config_path)
         except cfgmod.ConfigError as e:
@@ -175,6 +187,12 @@ class Daemon:
         return True
 
     def run(self) -> int:
+        """Run until SIGTERM or SIGINT and return the exit status (1: invalid configuration).
+
+        Raises ``SystemExit`` when another daemon holds the lock. Needs udev, the system bus
+        (udisks2) and a GLib main loop. At the end it sends ``shutdown`` for everything still
+        present, waits for those actions, and removes the state folders.
+        """
         from gi.repository import GLib
         self._lock_fd = self._acquire_lock()
         try:

@@ -18,6 +18,7 @@ _UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
 
 
 def root() -> Path:
+    """The folder that holds every state folder."""
     return runtime_dir() / "udevmon" / "state"
 
 
@@ -27,12 +28,14 @@ def path_for(instance: str) -> Path:
 
 
 def ensure(instance: str) -> Path:
+    """The state folder of ``instance``, created (mode 0700) if missing."""
     p = path_for(instance)
     p.mkdir(mode=0o700, parents=True, exist_ok=True)
     return p
 
 
 def remove(instance: str) -> None:
+    """Remove the state folder of ``instance``, if there is one."""
     shutil.rmtree(path_for(instance), ignore_errors=True)
 
 

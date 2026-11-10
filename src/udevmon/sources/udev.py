@@ -13,6 +13,7 @@ log = logging.getLogger("udevmon.udev")
 
 
 def parse_filters(filters) -> list[tuple[str, str | None]]:
+    """``usb/usb_device`` to ``("usb", "usb_device")``; a filter without ``/`` has no devtype."""
     out = []
     for f in filters:
         sub, _, devtype = f.partition("/")
@@ -73,6 +74,12 @@ def _device_props(dev) -> dict[str, str]:
 
 
 class UdevSource:
+    """USB devices from udev: ``connected`` and ``disconnected``.
+
+    ``filters`` are ``subsystem/devtype`` strings (``udev_filters``). With
+    ``announce_present``, :meth:`start` sends ``startup`` for the devices already
+    there.
+    """
     name = "udev"
 
     def __init__(self, filters=("usb/usb_device",), announce_present=False):
@@ -89,6 +96,11 @@ class UdevSource:
 
     # -- pure state handling (unit-testable) --------------------------------
     def handle(self, action: str, props: dict[str, str]) -> Event | None:
+        """The event for a udev ``action`` (``add``, ``remove``) with normalized ``props``, or None.
+
+        Pure state handling, no I/O: keeps the present devices and the ``instance`` of each plug,
+        so a ``disconnected`` carries the properties seen at connect.
+        """
         key = props["syspath"]
         if action == "add":
             endpoint = Endpoint(self.name, key, self._with_instance(props))
@@ -112,6 +124,7 @@ class UdevSource:
         return pyudev, pyudev.Context()
 
     def snapshot(self) -> list[Endpoint]:
+        """The devices present now, asked from udev."""
         pyudev, ctx = self._context()
         endpoints = []
         for sub, devtype in self.filters:
@@ -124,6 +137,7 @@ class UdevSource:
         return endpoints
 
     def start(self, emit: Callable[[Event], None]) -> None:
+        """Watch udev from the GLib main loop and call ``emit`` with each event."""
         from gi.repository import GLib
         pyudev, ctx = self._context()
         self._emit = emit
@@ -156,6 +170,7 @@ class UdevSource:
         return True
 
     def stop(self) -> None:
+        """Stop watching."""
         from gi.repository import GLib
         if self._watch_id is not None:
             GLib.source_remove(self._watch_id)

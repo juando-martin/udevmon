@@ -17,6 +17,7 @@ log = logging.getLogger("udevmon.engine")
 
 
 class Job(NamedTuple):
+    """One action to run for an event, with the device, tag and variables its placeholders use."""
     action: Action
     device: str | None      # name of the named device that applies (None: unnamed thing)
     tag: str | None         # for tag actions: the tag that selected it
@@ -24,6 +25,7 @@ class Job(NamedTuple):
 
 
 class Skip(NamedTuple):
+    """An action that applies to the event but will not run, and why."""
     action: Action
     reason: str
 
@@ -50,6 +52,12 @@ def presence_ends(event: Event) -> str | None:
 
 
 class Engine:
+    """Turns events into jobs for the action runner (spec 5.5, 7).
+
+    Used from the daemon's main loop only; not thread-safe. ``runner`` needs
+    ``submit(event, jobs, ended=None)``; ``paused`` is a callable that says whether a
+    pause is on (the pause flag file by default).
+    """
     def __init__(self, config: Config, runner, clock=time.monotonic, paused=None):
         self.config = config
         self.runner = runner
@@ -60,9 +68,11 @@ class Engine:
         self._last: dict[str, tuple[str, float]] = {}
 
     def set_config(self, config: Config) -> None:
+        """Use a new configuration (after a reload); the debounce history is kept."""
         self.config = config
 
     def plan(self, event: Event) -> Plan:
+        """What ``event`` would do, for ``explain``: no pause, no debounce, nothing submitted."""
         res = resolve(self.config, event.props)
         skipped: list[Skip] = []
         return Plan(res, self.select(event, res, skipped), skipped)
@@ -171,6 +181,12 @@ class Engine:
         return paused
 
     def handle(self, event: Event) -> list[Job]:
+        """Handle a real event and return the jobs submitted.
+
+        Nothing runs while paused, and a repeat within ``debounce`` is dropped. When the event
+        ends a presence the runner is told even without jobs, so that it removes the state
+        folder after them.
+        """
         jobs = self._dispatch(event)
         ended = presence_ends(event)
         if ended:                        # tidy up after the actions, even when there are none

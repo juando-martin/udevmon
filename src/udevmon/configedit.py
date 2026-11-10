@@ -30,6 +30,7 @@ def _name_or_list(items) -> str:
 
 def render_device(name, match, description="", tags=(), status=None, exclude_tags=(),
                   variables=None) -> str:
+    """The ``[devices.NAME]`` block for a device, as ``devices add`` writes it."""
     lines = [f"[devices.{_key(name)}]"]
     if description:
         lines.append(f"description = {_s(description)}")
@@ -62,6 +63,7 @@ def render_tag(name, match, description="") -> str:
 def render_action(name, devices, tags, on, run, timeout=None, allow_unnamed=None,
                   tag_mode=None, detach=False, lock=None, retries=0, retry_delay=None,
                   order=None, notify_on_failure=False) -> str:
+    """The ``[[actions]]`` block for an action, as ``actions add`` writes it."""
     lines = ["[[actions]]", f"name = {_s(name)}"]
     lines.append(f"device = {_name_or_list(devices)}" if devices
                  else f"tag = {_name_or_list(tags)}")
@@ -183,6 +185,7 @@ def _in(cfg, kind: str, name: str) -> str:
 
 
 def add_tag(path: Path, name, match, description="", *, file=None) -> None:
+    """Declare a tag, with a rule when ``match`` is given, in ``path`` or the drop-in ``file``."""
     _check_name("tag", name)
     target = _target(path, file)
     existing = cfgmod.load(path)
@@ -253,6 +256,7 @@ def _find_action(doc, name: str, verb: str):
 
 
 def remove_device(path: Path, name: str) -> None:
+    """Remove a device from the file that defines it; refused while an action names it."""
     cfg = cfgmod.load(path, must_exist=True)
     if name not in cfg.devices:
         raise cfgmod.ConfigError([f"no such device {name!r}"])
@@ -287,6 +291,7 @@ def remove_tag(path: Path, name: str) -> None:
 
 
 def remove_action(path: Path, name: str) -> None:
+    """Remove an action from the file that defines it."""
     cfg = cfgmod.load(path, must_exist=True)
     if name not in {a.name for a in cfg.actions}:
         raise cfgmod.ConfigError([f"no such action {name!r}"])
@@ -751,6 +756,8 @@ def set_tag_fields(path: Path, name: str, *, match=None, clear_rule: bool = Fals
 
 @dataclass
 class RenameReport:
+    """What a rename changed, and what it left for the user to look at."""
+
     updated: list[str] = field(default_factory=list)       # what referred to the old name
     generated: list[tuple[str, str]] = field(default_factory=list)   # made-up action names that changed
     mentions: list[tuple[int, str]] = field(default_factory=list)    # lines that still contain it
@@ -870,12 +877,15 @@ def _rename(path: Path, kind: str, old: str, new: str) -> RenameReport:
 
 
 def rename_device(path: Path, old: str, new: str) -> RenameReport:
+    """Rename a device and every reference to it, in every file."""
     return _rename(path, "devices", old, new)
 
 
 def rename_tag(path: Path, old: str, new: str) -> RenameReport:
+    """Rename a tag wherever it is used, in every file."""
     return _rename(path, "tags", old, new)
 
 
 def rename_action(path: Path, old: str, new: str) -> RenameReport:
+    """Rename an action, in the file that defines it."""
     return _rename(path, "actions", old, new)

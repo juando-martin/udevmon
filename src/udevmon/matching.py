@@ -19,6 +19,9 @@ _PLACEHOLDER_SERIALS = {
 
 
 def is_suspicious_serial(serial: str) -> bool:
+    """Whether a serial number looks made up (empty, a known placeholder, one repeated character),
+    so it cannot tell one device from another (spec 5.3.1).
+    """
     s = serial.strip().lower()
     if not s or s in _PLACEHOLDER_SERIALS:
         return True
@@ -91,6 +94,7 @@ def strength(match: Mapping[str, Any], wild: bool = False) -> str:
 
 
 def strength_note(level: str) -> str:
+    """A short explanation of a match strength, for messages."""
     return {
         STRONG: "identifies this exact device",
         MEDIUM: "matches any device of this model in this port",
@@ -150,6 +154,7 @@ def level_label(endpoint: Endpoint, keys: list[str] | None = None) -> str:
 
 
 def build_match(endpoint: Endpoint, keys: list[str]) -> dict[str, str]:
+    """The match on ``keys`` with ``endpoint``'s values; keys it has no value for are left out."""
     return {k: endpoint.props[k] for k in keys if endpoint.props.get(k)}
 
 
@@ -162,6 +167,7 @@ class Resolution:
 
     @property
     def is_named(self) -> bool:
+        """Whether at least one named device matches."""
         return bool(self.named)
 
     @property

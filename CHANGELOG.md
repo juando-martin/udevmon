@@ -12,6 +12,15 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ## [Unreleased]
 
+### Added
+
+- **An HTML reference manual** (Sphinx, optional `docs` extra):
+  `python tools/docs.py build` or `serve`. It has the integration contracts,
+  which interfaces are provisional and which internal, the command reference
+  generated from the parser, and the module reference from the docstrings.
+  The core modules gained docstrings for it. The sdist now includes the docs,
+  man pages, tests and tools.
+
 ## [0.8.0] - 2026-11-10
 
 ### Changed

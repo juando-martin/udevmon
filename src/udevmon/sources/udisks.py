@@ -115,6 +115,7 @@ class UdisksTracker:
         return []
 
     def interfaces_added(self, path: str, ifaces: dict) -> list[Event]:
+        """The events for an ``InterfacesAdded`` signal."""
         self.objects.setdefault(path, {}).update({i: dict(v) for i, v in ifaces.items()})
         return self._reconcile(path)
 
@@ -129,6 +130,7 @@ class UdisksTracker:
         return self._reconcile(path)
 
     def interfaces_removed(self, path: str, iface_names) -> list[Event]:
+        """The events for an ``InterfacesRemoved`` signal."""
         ifaces = self.objects.get(path)
         if ifaces is None:
             return []
@@ -148,6 +150,7 @@ class UdisksTracker:
         return events
 
     def filesystems(self, include_system: bool = False) -> list[Endpoint]:
+        """The filesystems in the tree; system ones only with ``include_system``."""
         out = []
         for path, ifaces in self.objects.items():
             if I_FS not in ifaces:
@@ -174,6 +177,11 @@ class UdisksTracker:
 
 
 class UdisksSource:
+    """Filesystems from udisks2 on the system bus: ``mounted``, ``unmounted`` and ``removed``.
+
+    It follows udisks2 starting and stopping. With ``announce_present`` the filesystems
+    already there get ``startup`` once, when udisks2 is first seen.
+    """
     name = "udisks"
 
     def __init__(self, announce_present=False, include_system=True):
@@ -199,6 +207,9 @@ class UdisksSource:
         return self.tracker.filesystems(self.include_system)
 
     def snapshot(self, include_system: bool = False) -> list[Endpoint]:
+        """The filesystems present now, asked from udisks2; empty (with a warning) when it cannot
+        be reached.
+        """
         from gi.repository import Gio
         try:
             conn = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
@@ -222,6 +233,7 @@ class UdisksSource:
         return tracker.mounted_at(mountpoint)
 
     def start(self, emit: Callable[[Event], None]) -> None:
+        """Watch udisks2 from the GLib main loop and call ``emit`` with each event."""
         from gi.repository import Gio
         self._emit = emit
         self._watch = Gio.bus_watch_name(
@@ -229,6 +241,7 @@ class UdisksSource:
             self._appeared, self._vanished)
 
     def stop(self) -> None:
+        """Stop watching."""
         from gi.repository import Gio
         if self._watch is not None:
             Gio.bus_unwatch_name(self._watch)

@@ -23,12 +23,17 @@ VAR_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 
 class ConfigError(Exception):
+    """An invalid configuration, or an edit that cannot be made.
+
+    ``problems`` holds each message; ``str()`` joins them with semicolons.
+    """
     def __init__(self, problems: list[str]):
         self.problems = problems
         super().__init__("; ".join(problems))
 
 
 def default_config_path() -> Path:
+    """``$XDG_CONFIG_HOME/udevmon/config.toml`` (``~/.config`` by default). Reads nothing."""
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
     return Path(base) / "udevmon" / "config.toml"
 
@@ -41,8 +46,8 @@ class Device:
     description: str = ""
     tags: tuple[str, ...] = ()
     status: str = "active"          # "active" | "disabled" | "ignored" (spec 5.7)
-    exclude_tags: tuple[str, ...] = ()   # rule tags this device opts out of (spec 5.8)
-    vars: Mapping[str, str] = field(default_factory=dict)   # {var_NAME} values (spec 5.9)
+    exclude_tags: tuple[str, ...] = ()   # rule tags this device opts out of (spec 5.4)
+    vars: Mapping[str, str] = field(default_factory=dict)   # {var_NAME} values (spec 5.8)
 
 
 @dataclass(frozen=True)
@@ -55,6 +60,10 @@ class Tag:
 
 @dataclass(frozen=True)
 class Action:
+    """One ``[[actions]]`` entry: the command ``run`` for the events ``on`` (spec 6).
+
+    Exactly one of ``devices`` and ``tags`` is non-empty.
+    """
     name: str
     devices: tuple[str, ...]        # exactly one of devices / tags is non-empty
     tags: tuple[str, ...]
@@ -73,11 +82,13 @@ class Action:
 
     @property
     def targets(self) -> tuple[str, ...]:
+        """Its devices, else its tags."""
         return self.devices or self.tags
 
 
 @dataclass(frozen=True)
 class Settings:
+    """The ``[daemon]`` table."""
     debounce: float = 1.0
     udev_filters: tuple[str, ...] = ("usb/usb_device",)
     max_workers: int = 4
@@ -86,6 +97,11 @@ class Settings:
 
 @dataclass
 class Config:
+    """A loaded configuration: the main file and its drop-ins, merged.
+
+    Built by :func:`load`, which also fills ``warnings`` and ``notes`` (what ``check``
+    reports). ``sources`` says which file defines each device, tag and action.
+    """
     settings: Settings = field(default_factory=Settings)
     devices: dict[str, Device] = field(default_factory=dict)
     tags: dict[str, Tag] = field(default_factory=dict)
@@ -601,6 +617,7 @@ def command_problems(cfg: Config, path: str | None = None) -> list[str]:
 
 
 def check_permissions(path: Path) -> None:
+    """Raise :class:`ConfigError` unless ``path`` is the user's and not group or world writable."""
     st = path.stat()
     if st.st_uid != os.getuid():
         raise ConfigError([f"{path} is not owned by you; refusing to load"])
@@ -746,7 +763,15 @@ def read_files(main: Path):
 
 
 def load(path: Path, *, must_exist: bool = False) -> Config:
-    """The configuration of ``path`` (config.toml) and its drop-ins (config.d/*.toml)."""
+    """The configuration of ``path`` (``config.toml``) and its drop-ins (``config.d/*.toml``).
+
+    Only reads files. A missing main file with no drop-ins gives an empty configuration,
+    unless ``must_exist``.
+
+    Raises:
+        ConfigError: a file is missing (``must_exist``), unsafe (:func:`check_permissions`)
+            or invalid; every problem found is listed.
+    """
     path = Path(path)
     if not path.exists() and not dropin_files(path):
         if must_exist:

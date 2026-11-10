@@ -320,5 +320,6 @@ def _positional(st: _State, cur: str, cfg):
 
 # -- installing -----------------------------------------------------------------------
 def default_install_path() -> Path:
+    """Where bash-completion loads the user's completions for ``udevmon`` from."""
     base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
     return Path(base) / "bash-completion" / "completions" / "udevmon"

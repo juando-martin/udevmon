@@ -20,6 +20,10 @@ log = logging.getLogger("udevmon.actions")
 
 def build_env(event: Event, device: str | None, tag: str | None = None,
               variables=None, state_dir: str | None = None) -> dict[str, str]:
+    """The environment for an action: the daemon's own plus ``UDEVMON_EVENT``,
+    ``UDEVMON_DEVICE``, ``UDEVMON_TAG``, ``UDEVMON_<PROPERTY>``, ``UDEVMON_VAR_<NAME>`` and
+    ``UDEVMON_STATE_DIR``, each when it applies.
+    """
     env = dict(os.environ)
     env["UDEVMON_EVENT"] = event.kind
     if device:
@@ -152,6 +156,7 @@ class FifoLock:
         self._serving = 0         # the ticket whose turn it is
 
     def take(self) -> int:
+        """Take the next ticket: a place in the queue, for :meth:`wait`."""
         with self._cond:
             ticket = self._next
             self._next += 1
@@ -166,12 +171,19 @@ class FifoLock:
             return waited
 
     def release(self) -> None:
+        """End the current turn and let the next ticket go."""
         with self._cond:
             self._serving += 1
             self._cond.notify_all()
 
 
 class ActionRunner:
+    """Runs the jobs of each event on a pool of ``max_workers`` threads.
+
+    The jobs of one event run one after another in one worker; those of different events
+    can overlap, unless their actions share a ``lock``. With ``dry_run`` the commands are
+    logged, not run.
+    """
     def __init__(self, max_workers: int = 4, dry_run: bool = False):
         self.dry_run = dry_run
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="action")
@@ -285,5 +297,8 @@ class ActionRunner:
         return None
 
     def shutdown(self, wait=False):
+        """Stop retrying and shut the pool down: with ``wait``, after the running and queued jobs;
+        else queued jobs are cancelled.
+        """
         self._stopping.set()
         self._pool.shutdown(wait=wait, cancel_futures=not wait)

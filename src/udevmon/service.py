@@ -36,6 +36,7 @@ def _exe(config: Path | None) -> str:
 
 
 def unit_dir() -> Path:
+    """Where systemd looks for the user's own units: ``$XDG_CONFIG_HOME/systemd/user``."""
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
     return Path(base) / "systemd" / "user"
 
@@ -69,6 +70,11 @@ def uninstall(dest: Path | None) -> tuple[str, Path]:
 
 
 def install(dest: Path | None, now: bool, config: Path | None = None) -> Path:
+    """Write ``udevmon.service`` and return its path.
+
+    Into the user's unit folder, then ``systemctl --user daemon-reload`` (and ``enable --now``
+    with ``now``); or into ``dest``, without systemctl.
+    """
     real = dest is None
     if dest is None:
         dest = unit_dir()

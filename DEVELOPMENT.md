@@ -38,6 +38,7 @@ change, not by loosening the test.
 |---|---|
 | `test_completion` | a command, positional argument or value option of the CLI is missing from the completion tables in `completion.py` |
 | `test_manpages` | a command, option, config key, event or property is not described in `man/`, the example config there is invalid, or `groff` warns |
+| `test_documentation` | the HTML manual has a warning (broken reference, bad docstring markup), or building it reads the config, starts a source, opens a socket or runs a command other than `git`; skipped without Sphinx |
 | `test_docs` | a code block in `README.md`, `SPECIFICATIONS.md`, `CHANGELOG.md` or this file is unbalanced, empty, or has a line wider than 76 characters (it must fit an 80-column `glow`) |
 
 So a new option normally touches: the parser in `cli.py`, `completion.py`, both
@@ -52,6 +53,34 @@ man pages where relevant, README, SPECIFICATIONS, and the changelog.
 - Prose is plain and short; examples are real commands that work.
 - No backwards compatibility while udevmon is preliminary: a format change is
   made in place, and existing configs are fixed by hand, not by migration code.
+
+### The HTML manual
+
+`docs/` is a Sphinx manual for integrators and maintainers: integration
+contracts, what is provisional and what internal, the command reference
+(generated from the parser) and the module reference (from docstrings).
+Sphinx is optional (the `docs` extra); install it in a private virtual
+environment, never in `~/.venvs/tools`:
+
+```
+python3 -m venv --system-site-packages /path/to/venv
+/path/to/venv/bin/python -m pip install -e '.[docs]'
+/path/to/venv/bin/python tools/docs.py build
+/path/to/venv/bin/python tools/docs.py serve --port 8000
+```
+
+The build is fresh, nitpicky and fails on any warning; the output, in
+`docs/_build/html` (ignored by git) or `--output PATH`, is never committed.
+The preview listens on 127.0.0.1 only, does not rebuild after edits, and
+stops with Ctrl-C. Run the test suite with that venv's Python too, so that
+`test_documentation` builds the manual instead of being skipped.
+
+Docstrings are PEP 257 and reStructuredText (double backquotes for code);
+Napoleon reads Google-style `Args:`, `Returns:` and `Raises:` sections. Give
+the contract a caller needs (blocking work, files written, subprocesses,
+failure), not boilerplate for trivial helpers. A new module shows up in the
+manual by itself, under "Other modules"; list a core one in
+`docs/internals.rst`. `docs/contributing.rst` has the details.
 
 ## Live testing
 

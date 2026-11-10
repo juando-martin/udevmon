@@ -73,6 +73,7 @@ class ControlServer:
         self._watch = None
 
     def start(self) -> None:
+        """Listen on the socket (mode 0600, replacing a stale one) from the GLib main loop."""
         from gi.repository import GLib
         try:
             os.unlink(self.path)                      # left by a crash; we hold the lock
@@ -91,6 +92,7 @@ class ControlServer:
                                         self._accept)
 
     def stop(self) -> None:
+        """Stop listening and remove the socket."""
         from gi.repository import GLib
         if self._watch is not None:
             GLib.source_remove(self._watch)
