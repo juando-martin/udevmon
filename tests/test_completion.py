@@ -84,8 +84,9 @@ class EngineTests(unittest.TestCase):
 
     def test_groups_and_subcommands(self):
         self.assertEqual(self.words("udevmon devices "),
-                         ["add", "disable", "enable", "exclude", "ignore", "include", "list",
-                          "remove", "rename", "set", "show", "tag", "untag"])
+                         ["add", "disable", "enable", "exclude", "identify", "ignore",
+                          "include", "list", "remove", "rename", "set", "show", "tag",
+                          "untag"])
         self.assertEqual(self.words("udevmon actions "),
                          ["add", "disable", "enable", "list", "remove", "rename", "set"])
         self.assertEqual(self.words("udevmon tags "), ["add", "list", "remove", "rename", "set", "show"])
@@ -124,6 +125,13 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.words("udevmon actions add --name "), [])
         self.assertEqual(self.words("udevmon actions add --timeout "), [])
 
+    def test_pause_durations(self):
+        from udevmon import pause
+        self.assertEqual(set(self.words("udevmon pause --for ")), set(completion.PAUSE_DURATIONS))
+        self.assertEqual(self.words("udevmon pause --for 1"), ["15m", "1h", "1d"])
+        for text in completion.PAUSE_DURATIONS:          # each one is a valid duration
+            self.assertGreater(pause.parse_duration(text), 0)
+
     def test_match_keys(self):
         mode, found = self.comp("udevmon devices add x --match ser")
         self.assertEqual((mode, found), (NOSPACE, ["serial="]))
@@ -158,7 +166,7 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.comp("udevmon explain --prop fs_t"), (NOSPACE, ["fs_type="]))
         self.assertIn("mountpoint=", self.comp("udevmon explain --prop ")[1])   # any property
         self.assertEqual(set(self.words("udevmon explain --")),
-                         {"--device", "--prop", "--all", "--help"})
+                         {"--device", "--prop", "--all", "--json", "--help"})
 
     def test_status_and_action_commands(self):
         self.assertEqual(self.words("udevmon devices disable "), ["stick", "disk"])
@@ -176,7 +184,7 @@ class EngineTests(unittest.TestCase):
                           "--remove-device", "--add-tag", "--remove-tag", "--all-tags", "--any-tags",
                           "--detach", "--no-detach", "--lock", "--no-lock", "--retries",
                           "--retry-delay", "--order", "--notify-on-failure",
-                          "--no-notify-on-failure"})
+                          "--no-notify-on-failure", "--dry-run"})
         self.assertEqual(self.words("udevmon actions set log --timeout "), [])   # free text
         self.assertIn("--no-reload", self.words("udevmon devices ignore --"))
 
@@ -184,7 +192,7 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.words("udevmon pa", config=False), ["pause"])
         self.assertEqual(self.words("udevmon res", config=False), ["resume"])
         self.assertEqual(set(self.words("udevmon pause --", config=False)), {"--for", "--help"})
-        self.assertEqual(self.comp("udevmon pause --for ", config=False), (WORDS, []))   # free text
+        self.assertIn("1h", self.comp("udevmon pause --for ", config=False)[1])   # examples
         self.assertEqual(self.words("udevmon resume ", config=False), [])
 
     def test_no_reload_flag(self):
@@ -293,7 +301,8 @@ def drift_problems(parser, cfg_path):
                         continue                       # a new name: nothing to offer
                     before = [fill[k.rstrip("*")] for k in slots[:i]]
                     words = ["udevmon", "--config", str(cfg_path), *path, *before, ""]
-                    if not completion.complete(parser, words, len(words) - 1)[1]:
+                    mode, offered = completion.complete(parser, words, len(words) - 1)
+                    if mode == WORDS and not offered:          # FILES/DIRS: the shell's paths
                         problems.append(f"{' '.join(path)}: slot {slot!r} offers nothing")
         for action in _value_options(node):
             dest = action.dest

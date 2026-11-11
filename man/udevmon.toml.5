@@ -1,6 +1,6 @@
 .\" Manual page for the udevmon configuration file. Keep it in step with
 .\" src/udevmon/config.py: tests/test_manpages.py fails when a key is missing.
-.TH UDEVMON.TOML 5 "2026-11-10" "udevmon" "File Formats"
+.TH UDEVMON.TOML 5 "2026-11-11" "udevmon" "File Formats"
 .SH NAME
 udevmon.toml \- configuration file of udevmon
 .SH DESCRIPTION
@@ -726,6 +726,11 @@ The whole
 folder is wiped when the daemon starts and when it stops, so nothing outlives a restart;
 .B startup
 is where a script rebuilds what it needs.
+.TP
+.B UDEVMON_STATE_ROOT
+The folder that holds every state folder,
+.IR $XDG_RUNTIME_DIR/udevmon/state ,
+for notes shared by all instances; it lasts as long as the daemon.
 .PP
 Two plugged\-in things have two folders, so several keys work at once.
 A detached action must not rely on the folder after the last event's actions have
@@ -918,8 +923,17 @@ The same information is in the environment:
 .BI UDEVMON_VAR_ NAME
 for every variable of the device,
 .B UDEVMON_STATE_DIR
+and
+.B UDEVMON_STATE_ROOT
 (see
 .BR "MATCHING AN UNPLUG WITH ITS PLUG" ),
+.B UDEVMON_SCRIPT_DIR
+(the folder of the program when
+.I run[0]
+is a path or was found in
+.BR script_dir ;
+a relative path counts from the home folder; unset for a bare name left to
+.BR PATH ),
 and
 .BI UDEVMON_ PROPERTY
 for every property, for example
@@ -1038,6 +1052,9 @@ Actions without a lock, and locks with other names, are not affected, and within
 event the actions still run by
 .BR order ,
 then file order.
+A lock name only one action uses is legal (its own runs never overlap);
+.B udevmon check
+notes it, with the closest other name in case of a typo.
 The lock lives inside udevmon: there is no lock file, and it does not protect against
 the same script being run by hand.
 .PP
@@ -1144,7 +1161,14 @@ variable an action uses, an
 .B allow_unnamed
 action that uses a variable, an
 .B exclude_tags
-entry with nothing to opt out of, disabled things, and choices about
+entry with nothing to opt out of (the tag has no rule, or its rule can never match
+the device), two devices one of whose
+.B match
+contains all of the other's (a tag action's
+.B {device}
+is then the one read first; across files, the file names decide it), a
+.B lock
+only one action uses, disabled things, and choices about
 .BR allow_unnamed .
 When a reload finds an invalid file, the daemon logs the error and keeps its old
 configuration.

@@ -84,6 +84,62 @@ class DocsToolTests(unittest.TestCase):
         build.assert_not_called()
 
 
+def _undocumented(path: Path) -> list[str]:
+    """What autodoc would leave out of the manual in one module: public functions,
+    classes and methods without a docstring, and public module constants and class
+    fields without a ``#:`` comment (autodoc skips an undocumented member silently).
+    A ``#:`` comment has no ": ", which napoleon would turn into a "Type" field."""
+    import ast
+    lines = path.read_text().splitlines()
+    tree = ast.parse(path.read_text())
+    missing = [] if ast.get_docstring(tree) else ["(module docstring)"]
+
+    def commented(node, prefix) -> bool:
+        line, above = lines[node.lineno - 1], lines[node.lineno - 2].strip()
+        text = line.partition("#:")[2] if "#:" in line else above[2:] if above.startswith("#:") \
+            else None
+        if text is not None and ": " in text:   # napoleon would read "X: Y" as "type: text"
+            missing.append(f"{prefix}{names(node)[0]} (no ': ' in a #: comment)")
+        return text is not None
+
+    def names(node) -> list[str]:
+        target = node.targets[0] if isinstance(node, ast.Assign) else node.target
+        found = target.elts if isinstance(target, ast.Tuple) else [target]
+        return [n.id for n in found if isinstance(n, ast.Name)]
+
+    def walk(body, prefix, in_class):
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if not node.name.startswith("_"):
+                    if not ast.get_docstring(node):
+                        missing.append(prefix + node.name)
+                    if isinstance(node, ast.ClassDef):
+                        walk(node.body, f"{prefix}{node.name}.", True)
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                public = [n for n in names(node) if not n.startswith("_") and n != "log"]
+                if public and len(names(node)) > 1:
+                    missing.append(f"{prefix}{', '.join(public)} (one per line, to document)")
+                elif public and not commented(node, prefix):
+                    missing.append(prefix + public[0])
+    walk(tree.body, "", False)
+    return missing
+
+
+class DocstringCoverageTests(unittest.TestCase):
+    """Every module is in the manual through autodoc (:doc:`internals`, :doc:`modules`)."""
+
+    def test_every_public_object_is_documented(self):
+        package = ROOT / "src" / "udevmon"
+        gaps = {}
+        for path in sorted(package.rglob("*.py")):
+            if path.name in ("__main__.py", "_version.py"):
+                continue
+            missing = _undocumented(path)
+            if missing:
+                gaps[str(path.relative_to(package))] = missing
+        self.assertEqual(gaps, {}, "add a docstring, or a #: comment for a constant or field")
+
+
 def _failing(original, error):
     """A stand-in for ``original`` that raises ``error``. It keeps its name, module and
     docstring, so autodoc still documents it (a Mock would vanish from the manual)."""

@@ -64,6 +64,11 @@ def _fits(kind: str, endpoint: Endpoint) -> bool:
     return endpoint.is_filesystem                    # unmounted
 
 
+def _refused(error: str, message: str) -> tuple[dict, None]:
+    """A control reply that refuses: ``error`` is a fixed code, ``message`` the text."""
+    return {"ok": False, "error": error, "message": message}, None
+
+
 def _same_file(a, b) -> bool:
     return os.path.realpath(os.path.expanduser(str(a))) == os.path.realpath(os.path.expanduser(str(b)))
 
@@ -121,31 +126,30 @@ class Daemon:
         from . import pause
         from .matching import resolve
         if req.get("cmd") != "trigger":
-            return {"ok": False, "message": f"unknown request {req.get('cmd')!r}"}, None
+            return _refused("bad-request", f"unknown request {req.get('cmd')!r}")
         name, kind = req.get("device"), req.get("event") or STARTUP
         if kind not in TRIGGER_KINDS:
-            return {"ok": False, "message": f"cannot trigger {kind!r}: only "
-                    f"{', '.join(TRIGGER_KINDS)} (the others say the thing is gone)"}, None
+            return _refused("bad-request", f"cannot trigger {kind!r}: only "
+                            f"{', '.join(TRIGGER_KINDS)} (the others say the thing is gone)")
         device = self.cfg.devices.get(name) if isinstance(name, str) else None
         if device is None:
-            return {"ok": False, "message": f"no device {name!r} in the configuration the "
-                    "daemon runs with"}, None
+            return _refused("unknown-device", f"no device {name!r} in the configuration the "
+                            "daemon runs with")
         if device.status == "ignored":
-            return {"ok": False, "message": f"device {name!r} is ignored: nothing runs for "
-                    "it"}, None
+            return _refused("ignored", f"device {name!r} is ignored: nothing runs for it")
         if pause.is_paused():
-            return {"ok": False, "message": "automation is paused: nothing runs "
-                    "(`udevmon resume` first)"}, None
+            return _refused("paused", "automation is paused: nothing runs "
+                            "(`udevmon resume` first)")
         things = [e for e in self.present_things()
                   if any(d.name == name for d in resolve(self.cfg, e.props).named)]
         if not things:
-            return {"ok": False, "message": f"device {name!r} is not present"}, None
+            return _refused("not-present", f"device {name!r} is not present")
         fitting = [e for e in things if _fits(kind, e)]
         if not fitting:
             what = ("a filesystem that is mounted" if kind == MOUNTED else "a filesystem"
                     if kind == UNMOUNTED else "a USB device")
-            return {"ok": False, "message": f"{kind!r} needs {what}; device {name!r} is "
-                    f"{'; '.join(describe(e) for e in things)}"}, None
+            return _refused("wrong-event", f"{kind!r} needs {what}; device {name!r} is "
+                            f"{'; '.join(describe(e) for e in things)}")
         results, futures = [], []
         for endpoint in fitting:
             if kind == UNMOUNTED:                       # as after a clean unmount

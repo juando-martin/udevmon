@@ -38,7 +38,7 @@ change, not by loosening the test.
 |---|---|
 | `test_completion` | a command, positional argument or value option of the CLI is missing from the completion tables in `completion.py` |
 | `test_manpages` | a command, option, config key, event or property is not described in `man/`, the example config there is invalid, or `groff` warns |
-| `test_documentation` | the HTML manual has a warning (broken reference, bad docstring markup), or building it reads the config, starts a source, opens a socket or runs a command other than `git`; skipped without Sphinx |
+| `test_documentation` | a public function, class or method has no docstring, or a public constant or class field no `#:` comment (autodoc would leave it out); the HTML manual has a warning (broken reference, bad docstring markup), or building it reads the config, starts a source, opens a socket or runs a command other than `git`; skipped without Sphinx |
 | `test_docs` | a code block in `README.md`, `SPECIFICATIONS.md`, `CHANGELOG.md` or this file is unbalanced, empty, or has a line wider than 76 characters (it must fit an 80-column `glow`) |
 | `test_license` | a Python file lacks the two-line SPDX header (after any `#!` line), or `LICENSE` or the license metadata of udevmon or `contrib/rclone-config` is missing |
 
@@ -88,8 +88,9 @@ stops with Ctrl-C. Run the test suite with that venv's Python too, so that
 Docstrings are PEP 257 and reStructuredText (double backquotes for code);
 Napoleon reads Google-style `Args:`, `Returns:` and `Raises:` sections. Give
 the contract a caller needs (blocking work, files written, subprocesses,
-failure), not boilerplate for trivial helpers. A new module shows up in the
-manual by itself, under "Other modules"; list a core one in
+failure), not boilerplate. Every public object needs one, and every public
+constant and class field a `#:` comment without `: ` in it; private
+`_helpers` need none. A new module shows up in the manual by itself, under "Other modules"; list a core one in
 `docs/internals.rst`. `docs/contributing.rst` has the details.
 
 ## Live testing

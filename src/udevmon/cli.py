@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import __version__
 from . import config as cfgmod
-from . import configedit
+from . import configedit, jsonout
 from .events import TRIGGER_KINDS, VALID_KINDS, describe
 from .matching import build_match, device_label, resolve, strength
 
@@ -59,10 +59,65 @@ def _pause_note() -> str | None:
     return f"automation is paused ({pause.describe_until(until)}): nothing runs."
 
 
+def _dry_run(fn, args) -> int:
+    """Run the editing command ``fn`` on a copy of the configuration, then print what it
+    would change as a unified diff. Writes nothing and tells no daemon to reload."""
+    import contextlib
+    import difflib
+    import io
+    import shutil
+    import tempfile
+    main = Path(args.config)
+    with tempfile.TemporaryDirectory(prefix="udevmon-dry-run-") as tmp:
+        copy = Path(tmp) / main.name
+        real = {copy: main}
+        if main.exists():
+            shutil.copy2(main, copy)
+        for f in cfgmod.dropin_files(main):
+            cfgmod.dropin_dir(copy).mkdir(mode=0o700, exist_ok=True)
+            shutil.copy2(f, cfgmod.dropin_dir(copy) / f.name)
+        before = {f: f.read_text() for f in [copy, *cfgmod.dropin_files(copy)] if f.exists()}
+        out, err = io.StringIO(), io.StringIO()
+        args.config = copy
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                try:
+                    rc = fn(args)
+                except SystemExit as e:
+                    rc = e.code
+        finally:
+            args.config = main
+        def shown(text):                          # the real folder, not the copy's
+            return text.replace(str(Path(tmp)), str(main.parent))
+        sys.stderr.write(shown(err.getvalue()))
+        if rc:
+            sys.stdout.write(shown(out.getvalue()))
+            return rc
+        after = {f: f.read_text() for f in [copy, *cfgmod.dropin_files(copy)] if f.exists()}
+        changed = False
+        for f in sorted(set(before) | set(after), key=lambda f: (f != copy, f.name)):
+            old, new = before.get(f), after.get(f)
+            if old == new:
+                continue
+            changed = True
+            target = str(real.get(f) or cfgmod.dropin_dir(main) / f.name)
+            sys.stdout.writelines(difflib.unified_diff(
+                (old or "").splitlines(keepends=True), (new or "").splitlines(keepends=True),
+                fromfile=target if old is not None else "/dev/null", tofile=target))
+        if not changed:
+            print("No file would change.")
+        sys.stdout.write(shown(out.getvalue()))
+        print("Dry run: nothing was written.")
+    return 0
+
+
 def _reloads(fn):
-    """Run an editing command, then reload the daemon if it succeeded."""
+    """Run an editing command, then reload the daemon if it succeeded (with
+    ``--dry-run``, only show what it would change)."""
     @functools.wraps(fn)
     def wrapper(args):
+        if getattr(args, "dry_run", False):
+            return _dry_run(fn, args)
         rc = fn(args)
         if not rc:
             _reload_after_edit(args)
@@ -73,19 +128,28 @@ def _reloads(fn):
     return wrapper
 
 
+def _print_json(data) -> None:
+    import json
+    print(json.dumps(data, indent=2, ensure_ascii=False))
+
+
 # -- commands ------------------------------------------------------------------
 def cmd_run(args):
+    """``udevmon run``: run the daemon in the foreground until it is stopped."""
     from .daemon import Daemon
     return Daemon(args.config, args.dry_run).run()
 
 
 def cmd_scan(args):
+    """``udevmon scan``: print events as they come and offer to name what was plugged in."""
     from .scan import Scanner
     return Scanner(args.config, prompt=not args.no_prompt and sys.stdin.isatty(),
                    present=args.present, all_props=args.all_props).run()
 
 
 def cmd_present(args):
+    """``udevmon present``: the USB devices and filesystems present now (``--json``:
+    :func:`present_entry` each)."""
     from .sources.udev import UdevSource
     from .sources.udisks import UdisksSource
     from .scan import format_all_props, format_props, status_text
@@ -94,9 +158,7 @@ def cmd_present(args):
     endpoints = UdevSource(cfg.settings.udev_filters).snapshot() \
         + UdisksSource().snapshot(include_system=args.all)
     if args.json:
-        import json
-        print(json.dumps([present_entry(cfg, d) for d in endpoints], indent=2,
-                         ensure_ascii=False))
+        _print_json([present_entry(cfg, d) for d in endpoints])
         return 0
     for d in endpoints:
         print(f"{describe(d)}   [{level_label(d)}]   {status_text(cfg, d)}")
@@ -180,6 +242,7 @@ def _parse_props(pairs) -> dict:
 
 
 def cmd_pause(args):
+    """``udevmon pause [DURATION]``: stop running actions until ``resume`` or the time is up."""
     from . import pause
     from .daemon import running_pid
     seconds = None
@@ -201,25 +264,35 @@ def cmd_pause(args):
 
 
 def cmd_resume(args):
+    """``udevmon resume``: end a pause."""
     from . import pause
     print("Automation resumed." if pause.resume() else "Automation was not paused.")
     return 0
 
 
 def cmd_explain(args):
-    from . import explain
+    """``udevmon explain``: what each event would run for the things present, or for a
+    simulated one (``--device``, ``--prop``); runs nothing."""
+    from . import explain, pause
     cfg = _load(args)
-    note = _pause_note()
+    note = None if args.json else _pause_note()
     if note:
         print(f"Note: {note}\n")
     props = _guard(_parse_props, args.prop)
     if args.device is not None and args.device not in cfg.devices:
         print(f"error: no such device {args.device!r}", file=sys.stderr)
         return 1
-    if args.device is not None or props:                     # a simulated thing
+    kinds = [args.event] if args.event else None
+    simulated = args.device is not None or bool(props)
+    if simulated:
         endpoint = explain.simulated(cfg, args.device, props, args.event)
+        if args.json:
+            _print_json({"paused": pause.is_paused(), "simulated": True,
+                         "things": [explain.explain_data(cfg, endpoint, kinds)],
+                         "not_shown": 0})
+            return 0
         shown = "  ".join(f"{k}={v}" for k, v in endpoint.props.items())
-        lines = explain.explain_endpoint(cfg, endpoint, [args.event] if args.event else None,
+        lines = explain.explain_endpoint(cfg, endpoint, kinds,
                                          header=f"Simulated thing ({shown})")
         print("\n".join(lines))
         print("\nOnly the properties above are known; add --prop KEY=VALUE for others "
@@ -229,7 +302,7 @@ def cmd_explain(args):
     from .sources.udisks import UdisksSource
     things = UdevSource(cfg.settings.udev_filters).snapshot() \
         + UdisksSource().snapshot(include_system=args.all)
-    blocks, idle = [], 0
+    shown, idle = [], 0
     for endpoint in things:
         if args.event and args.event not in explain.kinds_for(endpoint):
             continue
@@ -237,8 +310,13 @@ def cmd_explain(args):
         if not args.all and not res.named and not res.tags:
             idle += 1                    # matches no device or tag: nothing can ever run for it
             continue
-        blocks.append("\n".join(explain.explain_endpoint(
-            cfg, endpoint, [args.event] if args.event else None)))
+        shown.append(endpoint)
+    if args.json:
+        _print_json({"paused": pause.is_paused(), "simulated": False,
+                     "things": [explain.explain_data(cfg, e, kinds) for e in shown],
+                     "not_shown": idle})
+        return 0
+    blocks = ["\n".join(explain.explain_endpoint(cfg, e, kinds)) for e in shown]
     print("\n\n".join(blocks) if blocks else "Nothing present matches a device or a tag.")
     if idle:
         print(f"\nNot shown: {idle} present thing(s) that match no device or tag "
@@ -247,7 +325,12 @@ def cmd_explain(args):
 
 
 def cmd_devices_list(args):
+    """``udevmon devices list``: every device (``--json``:
+    :func:`~udevmon.jsonout.device_entry` each)."""
     cfg = _load(args)
+    if getattr(args, "json", False):           # bare `udevmon devices` has no --json
+        _print_json([jsonout.device_entry(cfg, d) for d in cfg.devices.values()])
+        return 0
     if not cfg.devices:
         print("No devices. Run `udevmon scan` to create some.")
     for d in cfg.devices.values():
@@ -258,11 +341,15 @@ def cmd_devices_list(args):
 
 
 def cmd_devices_show(args):
+    """``udevmon devices show NAME``: one device and the actions that target it."""
     cfg = _load(args, must_exist=True)
     d = cfg.devices.get(args.name)
     if not d:
         print(f"error: no such device {args.name!r}", file=sys.stderr)
         return 1
+    if args.json:
+        _print_json(jsonout.device_entry(cfg, d))
+        return 0
     print(f"{d.name}: {d.description}\n  match: {d.match}  ({strength(d.match)})")
     _file_line(cfg, "device", d.name)
     if d.status != "active":
@@ -278,11 +365,13 @@ def cmd_devices_show(args):
     return 0
 
 
-def match_from_mount(cfg, endpoint, mountpoint: str) -> dict[str, str]:
-    """``{fs_uuid, drive_serial}`` of the filesystem mounted at ``mountpoint``.
+def mount_identity(endpoint, mountpoint: str) -> dict[str, str]:
+    """``{fs_uuid, drive_serial}`` of the filesystem mounted at ``mountpoint``: the match
+    ``devices add --from-mountpoint`` writes, and the values actions get as
+    ``{fs_uuid}`` and ``{drive_serial}``.
 
-    ConfigError when nothing is mounted there, the filesystem has no UUID, its drive has
-    no usable serial, or a device of ``cfg`` already matches it.
+    ConfigError when nothing is mounted there, the filesystem has no UUID, or its drive
+    has no usable serial.
     """
     from .matching import is_suspicious_serial
     if endpoint is None:
@@ -297,15 +386,70 @@ def match_from_mount(cfg, endpoint, mountpoint: str) -> dict[str, str]:
         why = f"a placeholder serial {serial!r}" if serial else "no serial number"
         raise cfgmod.ConfigError([f"the drive of {mountpoint} has {why}, so it cannot be told "
                                   "from another drive; name it with --match instead"])
-    named = resolve(cfg, p).named
+    return {"fs_uuid": p["fs_uuid"], "drive_serial": serial}
+
+
+def match_from_mount(cfg, endpoint, mountpoint: str) -> dict[str, str]:
+    """:func:`mount_identity`, and ConfigError too when a device of ``cfg`` already
+    matches the filesystem."""
+    match = mount_identity(endpoint, mountpoint)
+    named = resolve(cfg, endpoint.props).named
     if named:
         raise cfgmod.ConfigError([f"the filesystem at {mountpoint} already matches device(s) "
                                   f"{', '.join(repr(d.name) for d in named)}"])
-    return {"fs_uuid": p["fs_uuid"], "drive_serial": serial}
+    return match
+
+
+def identify_entry(cfg, endpoint, mountpoint: str) -> dict:
+    """``devices identify --json``: the filesystem at ``mountpoint``, the identity udevmon
+    gives it, and the devices and tags it has in the configuration."""
+    try:
+        match, problem = mount_identity(endpoint, mountpoint), None
+    except cfgmod.ConfigError as e:
+        match, problem = None, e.problems[0]
+    res = resolve(cfg, endpoint.props)
+    return {"mountpoint": endpoint.props.get("mountpoint", mountpoint),
+            "description": describe(endpoint),
+            "fs_uuid": endpoint.props.get("fs_uuid"),
+            "drive_serial": endpoint.props.get("drive_serial"),
+            "match": match, "problem": problem,
+            "devices": [{"name": d.name, "status": d.status,
+                         **jsonout.where(cfg, "device", d.name)} for d in res.named],
+            "tags": list(res.tags), "props": dict(sorted(endpoint.props.items()))}
+
+
+def cmd_devices_identify(args):
+    """``udevmon devices identify MOUNTPOINT``: the identity of the filesystem mounted
+    there (:func:`identify_entry`); 1 when nothing udisks knows is mounted there."""
+    from .sources.udisks import UdisksSource
+    cfg = _load(args)
+    endpoint = UdisksSource().mounted_at(args.mountpoint)
+    if endpoint is None:
+        print(f"error: {args.mountpoint} is not the mount point of a filesystem udisks knows "
+              "of (is the drive plugged in and mounted?)", file=sys.stderr)
+        return 1
+    entry = identify_entry(cfg, endpoint, args.mountpoint)
+    if args.json:
+        _print_json(entry)
+        return 0
+    print(f"{entry['mountpoint']}: {entry['description']}")
+    print(f"  fs_uuid: {entry['fs_uuid'] or '-'}")
+    print(f"  drive_serial: {entry['drive_serial'] or '-'}")
+    if entry["problem"]:
+        print(f"  cannot be named by fs_uuid and drive_serial: {entry['problem']}")
+    for d in entry["devices"]:
+        print(f"  device: {d['name']}" + (f" [{d['status']}]" if d["status"] != "active" else "")
+              + _from(cfg, "device", d["name"]))
+    if not entry["devices"]:
+        print("  device: none (unnamed)")
+    if entry["tags"]:
+        print(f"  tags: {', '.join(entry['tags'])}")
+    return 0
 
 
 @_reloads
 def cmd_devices_add(args):
+    """``udevmon devices add NAME``: add a device, from ``--match`` or ``--from-mountpoint``."""
     description = args.description or ""
     if args.from_mountpoint is not None:
         from .sources.udisks import UdisksSource
@@ -327,6 +471,7 @@ def cmd_devices_add(args):
 
 @_reloads
 def cmd_devices_remove(args):
+    """``udevmon devices remove NAME``: remove a device (refused while actions target it)."""
     _guard(configedit.remove_device, args.config, args.name)
     print(f"Removed device {args.name!r}.")
     return 0
@@ -342,6 +487,7 @@ def _say_changed(changed, names, done, already) -> None:
 
 @_reloads
 def cmd_devices_disable(args):
+    """``udevmon devices disable NAME...``: set ``status = "disabled"``."""
     changed = _guard(configedit.set_device_status, args.config, args.names, "disabled")
     _say_changed(changed, args.names, "Disabled", "disabled")
     return 0
@@ -349,6 +495,7 @@ def cmd_devices_disable(args):
 
 @_reloads
 def cmd_devices_ignore(args):
+    """``udevmon devices ignore NAME...``: set ``status = "ignored"``."""
     changed = _guard(configedit.set_device_status, args.config, args.names, "ignored")
     _say_changed(changed, args.names, "Ignored", "ignored")
     return 0
@@ -356,6 +503,7 @@ def cmd_devices_ignore(args):
 
 @_reloads
 def cmd_devices_enable(args):
+    """``udevmon devices enable NAME...``: make devices active again."""
     changed = _guard(configedit.set_device_status, args.config, args.names, None)
     _say_changed(changed, args.names, "Enabled", "enabled")
     return 0
@@ -363,6 +511,7 @@ def cmd_devices_enable(args):
 
 @_reloads
 def cmd_actions_disable(args):
+    """``udevmon actions disable NAME...``: set ``enabled = false``."""
     changed = _guard(configedit.set_action_enabled, args.config, args.names, False)
     _say_changed(changed, args.names, "Disabled", "disabled")
     return 0
@@ -370,6 +519,7 @@ def cmd_actions_disable(args):
 
 @_reloads
 def cmd_actions_enable(args):
+    """``udevmon actions enable NAME...``: enable actions again."""
     changed = _guard(configedit.set_action_enabled, args.config, args.names, True)
     _say_changed(changed, args.names, "Enabled", "enabled")
     return 0
@@ -377,6 +527,7 @@ def cmd_actions_enable(args):
 
 @_reloads
 def cmd_actions_set(args):
+    """``udevmon actions set NAME``: change an action's options, targets or command."""
     if _retry_problem(args):
         return 1
     on = None
@@ -433,24 +584,28 @@ def _say_renamed(kind: str, args, report) -> None:
 
 @_reloads
 def cmd_devices_rename(args):
+    """``udevmon devices rename OLD NEW``, and every reference to it."""
     _say_renamed("device", args, _guard(configedit.rename_device, args.config, args.old, args.new))
     return 0
 
 
 @_reloads
 def cmd_tags_rename(args):
+    """``udevmon tags rename OLD NEW``, and every reference to it."""
     _say_renamed("tag", args, _guard(configedit.rename_tag, args.config, args.old, args.new))
     return 0
 
 
 @_reloads
 def cmd_actions_rename(args):
+    """``udevmon actions rename OLD NEW``."""
     _say_renamed("action", args, _guard(configedit.rename_action, args.config, args.old, args.new))
     return 0
 
 
 @_reloads
 def cmd_devices_set(args):
+    """``udevmon devices set NAME``: change a device's match, description or variables."""
     match = _guard(_parse_matches, args.match, allow_lists=False) if args.match else None
     _guard(configedit.set_device_fields, args.config, args.name, match=match,
            description=args.description, set_vars=_guard(_parse_vars, args.var),
@@ -461,6 +616,7 @@ def cmd_devices_set(args):
 
 @_reloads
 def cmd_devices_tag(args):
+    """``udevmon devices tag NAME TAG...``: add explicit tags."""
     _guard(configedit.set_device_tags, args.config, args.name, add=args.tags)
     print(f"Tagged {args.name!r}: {', '.join(args.tags)}.")
     return 0
@@ -468,6 +624,7 @@ def cmd_devices_tag(args):
 
 @_reloads
 def cmd_devices_exclude(args):
+    """``udevmon devices exclude NAME TAG...``: opt the device out of rule tags."""
     _guard(configedit.set_device_exclusions, args.config, args.name, add=args.tags)
     print(f"{args.name!r} now opts out of the rule tag(s): {', '.join(args.tags)}.")
     return 0
@@ -475,6 +632,7 @@ def cmd_devices_exclude(args):
 
 @_reloads
 def cmd_devices_include(args):
+    """``udevmon devices include NAME TAG...``: undo ``exclude``."""
     _guard(configedit.set_device_exclusions, args.config, args.name, remove=args.tags)
     print(f"{args.name!r} no longer opts out of: {', '.join(args.tags)}.")
     return 0
@@ -482,6 +640,7 @@ def cmd_devices_include(args):
 
 @_reloads
 def cmd_devices_untag(args):
+    """``udevmon devices untag NAME TAG...``: remove explicit tags."""
     _guard(configedit.set_device_tags, args.config, args.name, remove=args.tags)
     print(f"Removed tag(s) {', '.join(args.tags)} from {args.name!r}.")
     return 0
@@ -492,8 +651,13 @@ def _rule_text(rule) -> str:
 
 
 def cmd_tags_list(args):
+    """``udevmon tags list``: every tag, declared or only used (``--json``:
+    :func:`~udevmon.jsonout.tag_entry` each)."""
     cfg = _load(args)
     names = sorted(cfg.all_tag_names())
+    if args.json:
+        _print_json([jsonout.tag_entry(cfg, n) for n in names])
+        return 0
     if not names:
         print("No tags.")
     for name in names:
@@ -507,10 +671,14 @@ def cmd_tags_list(args):
 
 
 def cmd_tags_show(args):
+    """``udevmon tags show NAME``: one tag, its rule, members and actions."""
     cfg = _load(args, must_exist=True)
     if args.name not in cfg.all_tag_names():
         print(f"error: no such tag {args.name!r}", file=sys.stderr)
         return 1
+    if args.json:
+        _print_json(jsonout.tag_entry(cfg, args.name))
+        return 0
     tag = cfg.tags.get(args.name)
     print(f"{args.name}: {tag.description if tag else ''}")
     _file_line(cfg, "tag", args.name)
@@ -526,6 +694,7 @@ def cmd_tags_show(args):
 
 @_reloads
 def cmd_tags_add(args):
+    """``udevmon tags add NAME``: declare a tag, with a rule from ``--match`` or none."""
     rule = _guard(_parse_matches, args.match or [], allow_lists=True)
     _guard(configedit.add_tag, args.config, args.name, rule, args.description or "",
            file=args.file)
@@ -535,6 +704,7 @@ def cmd_tags_add(args):
 
 @_reloads
 def cmd_tags_set(args):
+    """``udevmon tags set NAME``: change a declared tag's rule or description."""
     rule = _guard(_parse_matches, args.match, allow_lists=True) if args.match else None
     _guard(configedit.set_tag_fields, args.config, args.name, match=rule,
            clear_rule=args.no_rule, description=args.description)
@@ -547,13 +717,19 @@ def cmd_tags_set(args):
 
 @_reloads
 def cmd_tags_remove(args):
+    """``udevmon tags remove NAME``: remove a declared tag (refused while it is used)."""
     _guard(configedit.remove_tag, args.config, args.name)
     print(f"Removed tag {args.name!r}.")
     return 0
 
 
 def cmd_actions_list(args):
+    """``udevmon actions list``: every action, in the order they run (``--json``: in
+    file order, :func:`~udevmon.jsonout.action_entry` each)."""
     cfg = _load(args)
+    if args.json:                                # in file order, as `order` ties are
+        _print_json([jsonout.action_entry(cfg, x) for x in cfg.actions])
+        return 0
     for x in sorted(cfg.actions, key=lambda a: a.order):     # the order they run in
         target = (f"device:{','.join(x.devices)}" if x.devices
                   else f"tag:{('+' if x.tag_mode == 'all' else ',').join(x.tags)}")
@@ -589,6 +765,7 @@ def _retry_problem(args) -> bool:
 
 @_reloads
 def cmd_actions_add(args):
+    """``udevmon actions add --on EVENTS (--device|--tag) ... -- COMMAND``: add an action."""
     on = [k.strip() for k in args.on.split(",") if k.strip()]
     bad = [k for k in on if k not in VALID_KINDS]
     if bad or not on:
@@ -630,35 +807,61 @@ def cmd_actions_add(args):
 
 @_reloads
 def cmd_actions_remove(args):
+    """``udevmon actions remove NAME``."""
     _guard(configedit.remove_action, args.config, args.name)
     print(f"Removed action {args.name!r}.")
     return 0
 
 
+def cmd_edit(args):
+    """``udevmon edit [FILE]``: change the main file or a drop-in in ``$EDITOR``; the
+    whole configuration is checked before it is saved (:mod:`udevmon.edit`)."""
+    from . import edit
+    main = Path(args.config)
+    target = main if args.file is None else _guard(cfgmod.dropin_path, main, args.file, "edit")
+    ask = input if sys.stdin.isatty() else None
+    rc, saved = edit.edit_file(main, target, ask=ask)
+    if saved:
+        _reload_after_edit(args)
+    return rc
+
+
 def cmd_check(args):
+    """``udevmon check``: load the configuration and report problems; 1 on errors."""
     try:
         cfg = cfgmod.load(args.config, must_exist=True)
     except cfgmod.ConfigError as e:
+        if args.json:
+            _print_json({"ok": False, "errors": list(e.problems), "warnings": [], "notes": [],
+                         "files": [], "devices": 0, "tags": 0, "actions": 0})
+            return 1
         for p in e.problems:
             print(f"error: {p}")
         return 1
-    for w in [*cfg.warnings, *cfgmod.command_problems(cfg)]:
+    warnings = [*cfg.warnings, *cfgmod.command_problems(cfg)]
+    notes = [*cfg.notes, *cfgmod.command_notes(cfg)]
+    files = jsonout.file_entries(cfg)
+    if args.json:
+        _print_json({"ok": True, "errors": [], "warnings": warnings, "notes": notes,
+                     "files": files, "devices": len(cfg.devices), "tags": len(cfg.tags),
+                     "actions": len(cfg.actions)})
+        return 0
+    for w in warnings:
         print(f"warning: {w}")
-    for n in [*cfg.notes, *cfgmod.command_notes(cfg)]:
+    for n in notes:
         print(f"note: {n}")
     if any(f != cfg.main for f in cfg.files):
         print("Files, in the order they are read:")
-        for f in cfg.files:
-            count = {kind: sum(1 for (k, _), src in cfg.sources.items() if k == kind and src == f)
-                     for kind in ("device", "tag", "action")}
-            print(f"  {cfgmod.file_label(cfg.main, f)}: {count['device']} device(s), "
-                  f"{count['tag']} tag rule(s), {count['action']} action(s)")
+        for f, entry in zip(cfg.files, files):
+            print(f"  {cfgmod.file_label(cfg.main, f)}: {entry['devices']} device(s), "
+                  f"{entry['tags']} tag rule(s), {entry['actions']} action(s)")
     print(f"OK: {len(cfg.devices)} device(s), {len(cfg.tags)} tag rule(s), "
           f"{len(cfg.actions)} action(s)")
     return 0
 
 
 def cmd_service_uninstall(args):
+    """``udevmon service uninstall``: stop and remove the systemd user unit, if it is ours."""
     from .service import uninstall
     state, unit = uninstall(args.dest)
     if state == "removed":
@@ -673,6 +876,7 @@ def cmd_service_uninstall(args):
 
 
 def cmd_completion_uninstall(args):
+    """``udevmon completion uninstall``: remove the completion script, if it is ours."""
     from .completion import HEADER, default_install_path
     dest = args.dest or default_install_path()
     if not dest.exists():
@@ -688,12 +892,14 @@ def cmd_completion_uninstall(args):
 
 
 def cmd_completion_bash(args):
+    """``udevmon completion bash``: print the bash completion script."""
     from .completion import SCRIPT
     sys.stdout.write(SCRIPT)
     return 0
 
 
 def cmd_completion_install(args):
+    """``udevmon completion install``: write the bash completion script."""
     from .completion import SCRIPT, default_install_path
     dest = args.dest or default_install_path()
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -715,7 +921,27 @@ def _complete_words(args: list[str]) -> int:
     return 0
 
 
+#: What ``udevmon version --json`` lists, so scripts test for a capability instead of
+#: comparing version numbers. A name is added when its capability lands and never reused.
+FEATURES = ("dropins", "order", "lock", "retries", "notify-on-failure", "vars",
+            "from-mountpoint", "trigger", "trigger-wait", "trigger-json", "trigger-exit-codes",
+            "present-json", "list-json", "check-json", "explain-json", "identify",
+            "edit-dry-run", "version-json", "env-script-dir", "env-state-root", "edit")
+
+
+def cmd_version(args):
+    """``udevmon version``: the version and :data:`FEATURES`."""
+    if args.json:
+        _print_json({"version": __version__, "features": list(FEATURES)})
+    else:
+        print(__version__)
+        print("features: " + " ".join(FEATURES))
+    return 0
+
+
 def cmd_reload(args):
+    """``udevmon reload``: tell the running daemon to reread its configuration; 1 when
+    none is running."""
     from .daemon import reload_running
     if reload_running():
         print("Sent reload to the running daemon.")
@@ -724,50 +950,84 @@ def cmd_reload(args):
     return 1
 
 
-def cmd_trigger(args):
+# `udevmon trigger` exit statuses (2 is argparse's usage error).
+TRIGGER_FAILED = 1          #: ``trigger`` status when an action failed, timed out or gave no status
+TRIGGER_NOT_RUNNING = 3     #: ``trigger`` status when no daemon is running
+TRIGGER_UNKNOWN_DEVICE = 4  #: ``trigger`` status when the running daemon has no such device
+TRIGGER_OTHER_CONFIG = 5    #: ``trigger`` status when ``--config`` names another file than the daemon's
+TRIGGER_REFUSED = 6         #: ``trigger`` status when refused (not present, ignored, wrong event, paused)
+TRIGGER_NO_ANSWER = 7       #: ``trigger`` status when there is no usable answer from the daemon
+
+
+def _trigger_reply(args) -> tuple[int, dict]:
+    """Ask the running daemon to trigger; (exit status, reply). A failure before the
+    daemon answers is a reply too, with ``ok`` false and an ``error`` code."""
     from . import control
     from .daemon import _same_file, running_daemon
+
+    def fail(status, error, message):
+        return status, {"ok": False, "error": error, "message": message}
     found = running_daemon()
     if found is None:
-        print("error: udevmon is not running (start it, or run `udevmon run`)", file=sys.stderr)
-        return 1
+        return fail(TRIGGER_NOT_RUNNING, "not-running",
+                    "udevmon is not running (start it, or run `udevmon run`)")
     _, its_config = found
     if args.config_explicit and its_config and not _same_file(args.config, its_config):
-        print(f"error: the running daemon uses {its_config}, not {args.config}",
-              file=sys.stderr)
-        return 1
+        return fail(TRIGGER_OTHER_CONFIG, "other-config",
+                    f"the running daemon uses {its_config}, not {args.config}")
     try:
         reply = control.request({"cmd": "trigger", "device": args.device, "event": args.event,
                                  "wait": args.wait}, timeout=None if args.wait else 30.0)
     except control.NotRunning:
-        print("error: udevmon is not running (no answer on its control socket)",
-              file=sys.stderr)
-        return 1
+        return fail(TRIGGER_NOT_RUNNING, "not-running",
+                    "udevmon is not running (no answer on its control socket)")
     except (OSError, ValueError) as e:
-        print(f"error: no usable answer from the daemon: {e}", file=sys.stderr)
-        return 1
+        return fail(TRIGGER_NO_ANSWER, "no-answer", f"no usable answer from the daemon: {e}")
+    if not isinstance(reply, dict):
+        return fail(TRIGGER_NO_ANSWER, "no-answer", "no usable answer from the daemon")
     if not reply.get("ok"):
-        print(f"error: {reply.get('message', 'the daemon refused')}", file=sys.stderr)
-        return 1
+        error = reply.get("error") or "refused"
+        return (TRIGGER_UNKNOWN_DEVICE if error == "unknown-device" else TRIGGER_REFUSED), \
+            {"ok": False, "error": error, "message": reply.get("message", "the daemon refused")}
+    statuses = [{"action": name, "status": status} for name, status in reply.get("statuses", [])]
+    failed = any(x["status"] != 0 for x in statuses)
+    return (TRIGGER_FAILED if failed else 0), {
+        "ok": True, "error": None, "message": None, "event": reply["event"],
+        "device": reply["device"],
+        "things": [{"thing": t["thing"], "actions": t["actions"],
+                    "skipped": [{"action": n, "reason": r} for n, r in t["skipped"]]}
+                   for t in reply["things"]],
+        "statuses": statuses if args.wait else None}
+
+
+def cmd_trigger(args):
+    """``udevmon trigger DEVICE EVENT``: have the running daemon fire an event for a present
+    device; the exit status is one of the ``TRIGGER_*`` values, 0 or 2 (usage)."""
+    rc, reply = _trigger_reply(args)
+    if args.json:
+        _print_json({"exit_status": rc, **reply})
+        return rc
+    if not reply["ok"]:
+        print(f"error: {reply['message']}", file=sys.stderr)
+        return rc
     for thing in reply["things"]:
         ran = ", ".join(thing["actions"]) or "nothing to run"
         print(f"{reply['event']} for {reply['device']} ({thing['thing']}): {ran}")
-        for name, reason in thing["skipped"]:
-            print(f"  skipped {name}: {reason}")
-    failed = False
-    for name, status in reply.get("statuses", []):
-        if status is None:
-            print(f"  {name}: no exit status (timed out, could not start, or detached; "
-                  "see the log)")
+        for skip in thing["skipped"]:
+            print(f"  skipped {skip['action']}: {skip['reason']}")
+    for x in reply["statuses"] or []:
+        if x["status"] is None:
+            print(f"  {x['action']}: no exit status (timed out, could not start, or "
+                  "detached; see the log)")
         else:
-            print(f"  {name}: exit status {status}")
-        failed |= status != 0
-    if args.wait and not reply.get("statuses"):
+            print(f"  {x['action']}: exit status {x['status']}")
+    if args.wait and not reply["statuses"]:
         print("Nothing ran.")
-    return 1 if failed else 0
+    return rc
 
 
 def cmd_service_install(args):
+    """``udevmon service install``: write the systemd user unit (and start it with ``--now``)."""
     from .service import install
     unit = install(args.dest, args.now, args.config if args.config_explicit else None)
     print(f"Wrote {unit}")
@@ -787,7 +1047,11 @@ def build_parser() -> argparse.ArgumentParser:
     edits = argparse.ArgumentParser(add_help=False)          # shared by the editing commands
     edits.add_argument("--no-reload", action="store_true",
                        help="don't tell the running daemon to reload")
+    edits.add_argument("--dry-run", action="store_true",
+                       help="show the change as a diff and write nothing")
     adds = argparse.ArgumentParser(add_help=False, parents=[edits])     # the `add` commands
+    js = argparse.ArgumentParser(add_help=False)             # the commands with --json
+    js.add_argument("--json", action="store_true", help="print JSON for scripts")
     adds.add_argument("--file", metavar="DROPIN",
                       help="write to this drop-in (config.d/NAME.toml) instead of the main file")
 
@@ -810,6 +1074,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="startup (default), shutdown, connected, mounted or unmounted")
     s.add_argument("--wait", action="store_true",
                    help="wait for the actions to finish and show their exit status")
+    s.add_argument("--json", action="store_true",
+                   help="print the result as JSON (with --wait, each action's exit status)")
     s.set_defaults(fn=cmd_trigger)
 
     s = sub.add_parser("present", help="list USB devices and filesystems that are present now")
@@ -822,8 +1088,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     dev = sub.add_parser("devices", help="manage named devices")
     g = dev.add_subparsers(dest="sub", required=False)
-    x = g.add_parser("list", help="list named devices"); x.set_defaults(fn=cmd_devices_list)
-    x = g.add_parser("show"); x.add_argument("name"); x.set_defaults(fn=cmd_devices_show)
+    x = g.add_parser("list", help="list named devices", parents=[js])
+    x.set_defaults(fn=cmd_devices_list)
+    x = g.add_parser("show", parents=[js]); x.add_argument("name")
+    x.set_defaults(fn=cmd_devices_show)
+    x = g.add_parser("identify", parents=[js],
+                     help="what udevmon knows about the filesystem mounted at a path")
+    x.add_argument("mountpoint", metavar="MOUNTPOINT")
+    x.set_defaults(fn=cmd_devices_identify)
     x = g.add_parser("add", parents=[adds])
     x.add_argument("name")
     grp = x.add_mutually_exclusive_group(required=True)
@@ -875,8 +1147,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     tg = sub.add_parser("tags", help="manage tags and tag rules").add_subparsers(
         dest="sub", required=True)
-    x = tg.add_parser("list"); x.set_defaults(fn=cmd_tags_list)
-    x = tg.add_parser("show"); x.add_argument("name"); x.set_defaults(fn=cmd_tags_show)
+    x = tg.add_parser("list", parents=[js]); x.set_defaults(fn=cmd_tags_list)
+    x = tg.add_parser("show", parents=[js]); x.add_argument("name")
+    x.set_defaults(fn=cmd_tags_show)
     x = tg.add_parser("add", help="declare a tag, optionally with a rule", parents=[adds])
     x.add_argument("name")
     x.add_argument("--match", action="append", metavar="KEY=VALUE",
@@ -897,7 +1170,7 @@ def build_parser() -> argparse.ArgumentParser:
     x = tg.add_parser("remove", parents=[edits]); x.add_argument("name"); x.set_defaults(fn=cmd_tags_remove)
 
     a = sub.add_parser("actions", help="manage actions").add_subparsers(dest="sub", required=True)
-    x = a.add_parser("list"); x.set_defaults(fn=cmd_actions_list)
+    x = a.add_parser("list", parents=[js]); x.set_defaults(fn=cmd_actions_list)
     x = a.add_parser("add", help="actions add (--device N ... | --tag N ...) EVENT[,EVENT] "
                                  "[--name N] [--allow-unnamed|--named-only] -- CMD [ARG...]",
                      parents=[adds])
@@ -987,6 +1260,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="simulate a thing with this property (repeatable)")
     s.add_argument("--all", action="store_true",
                    help="also list system filesystems and things nothing matches")
+    s.add_argument("--json", action="store_true", help="print the result as JSON")
     s.set_defaults(fn=cmd_explain)
 
     s = sub.add_parser("pause", help="stop every action until `resume` (or for a while)")
@@ -996,7 +1270,17 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("resume", help="let actions run again after a pause")
     s.set_defaults(fn=cmd_resume)
 
-    s = sub.add_parser("check", help="validate the config"); s.set_defaults(fn=cmd_check)
+    s = sub.add_parser("edit", help="edit the config in $EDITOR, checked before it is saved")
+    s.add_argument("file", nargs="?", metavar="FILE",
+                   help="a drop-in (NAME, config.d/NAME.toml); default: the main file")
+    s.add_argument("--no-reload", action="store_true",
+                   help="don't tell the running daemon to reload")
+    s.set_defaults(fn=cmd_edit)
+    s = sub.add_parser("check", help="validate the config", parents=[js])
+    s.set_defaults(fn=cmd_check)
+    s = sub.add_parser("version", help="print the version and the features scripts can test",
+                       parents=[js])
+    s.set_defaults(fn=cmd_version)
     s = sub.add_parser("reload", help="tell the running daemon to reload"); s.set_defaults(fn=cmd_reload)
 
     sv = sub.add_parser("service", help="systemd user service").add_subparsers(

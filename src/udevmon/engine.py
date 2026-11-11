@@ -20,23 +20,23 @@ log = logging.getLogger("udevmon.engine")
 
 class Job(NamedTuple):
     """One action to run for an event, with the device, tag and variables its placeholders use."""
-    action: Action
-    device: str | None      # name of the named device that applies (None: unnamed thing)
-    tag: str | None         # for tag actions: the tag that selected it
-    vars: Mapping = {}      # that device's variables, for {var_NAME} (empty when unnamed)
+    action: Action          #: the action to run
+    device: str | None      #: the named device that applies, by name; None for an unnamed thing
+    tag: str | None         #: the tag that selected a tag action, else None
+    vars: Mapping = {}      #: that device's variables, for {var_NAME} (empty when unnamed)
 
 
 class Skip(NamedTuple):
     """An action that applies to the event but will not run, and why."""
-    action: Action
-    reason: str
+    action: Action          #: the action that will not run
+    reason: str             #: why, for people (the log, ``explain``, ``trigger``)
 
 
 class Plan(NamedTuple):
     """What an event would do, worked out without side effects (no debounce, no run)."""
-    resolution: object
-    jobs: list
-    skipped: list
+    resolution: object      #: the :class:`~udevmon.matching.Resolution` of the thing
+    jobs: list              #: the :class:`Job` objects to run, in run order
+    skipped: list           #: the :class:`Skip` objects, for actions that apply but will not run
 
 
 def presence_ends(event: Event) -> str | None:

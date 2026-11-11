@@ -3,8 +3,9 @@ Interfaces and stability
 
 udevmon is preliminary (0.x) and keeps no backwards compatibility yet:
 formats and names change in place, without aliases or migration, and the
-changelog records each change. Pin the version an integration was tested
-with.
+changelog records each change. A change to a provisional interface that can
+break a caller is listed under **Changed (incompatible)**: pin a range such
+as ``udevmon>=0.9,<0.10``, and read that section before raising it.
 
 Provisional (meant for integration, may still change)
 -----------------------------------------------------
@@ -13,7 +14,10 @@ Provisional (meant for integration, may still change)
 * The configuration format and drop-in files (``man 5 udevmon.toml``).
 * What an action receives: placeholders, ``UDEVMON_*`` environment
   variables and the state folder (:doc:`integration`).
-* The JSON printed by ``udevmon present --json``.
+* The JSON printed by ``--json`` (``present``, ``devices list|show|identify``,
+  ``tags list|show``, ``actions list``, ``check``, ``explain``,
+  ``trigger``, ``version``), and the feature names in ``version --json``.
+* The output of ``udevmon --version``: the version alone, on one line.
 
 Internal (no promise at all)
 ----------------------------
@@ -25,5 +29,5 @@ Internal (no promise at all)
   layout of ``$XDG_RUNTIME_DIR``.
 * Log message wording, and the human-readable output of every command.
 
-A program that needs udevmon's data model should call ``present --json``
-or read the configuration with its own TOML parser, not import udevmon.
+A program that needs udevmon's data model should call the ``--json``
+commands, not import udevmon or parse its TOML itself.

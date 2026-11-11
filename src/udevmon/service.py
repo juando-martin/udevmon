@@ -11,6 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+#: The systemd user unit ``service install`` writes (``{exe}`` is filled in).
 UNIT = """\
 [Unit]
 Description=udevmon: run actions on USB / mount events

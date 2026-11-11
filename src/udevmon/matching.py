@@ -10,7 +10,10 @@ from typing import Any, Mapping
 
 from .events import Endpoint
 
-STRONG, MEDIUM, WEAK = "strong", "medium", "weak"
+#: How surely a match tells one thing from another (:func:`strength`).
+STRONG = "strong"
+MEDIUM = "medium"  #: see :data:`STRONG`
+WEAK = "weak"  #: see :data:`STRONG`
 
 _IDENTITY_KEYS = ("serial", "fs_uuid", "part_uuid", "drive_serial")
 _PLACEHOLDER_SERIALS = {
@@ -163,9 +166,9 @@ def build_match(endpoint: Endpoint, keys: list[str]) -> dict[str, str]:
 @dataclass
 class Resolution:
     """What an endpoint is, in terms of the configuration (spec 5.5)."""
-    named: list = field(default_factory=list)   # config Devices matching, in file order
-    tags: list[str] = field(default_factory=list)  # explicit tags, then matching rule tags
-    excluded: list[str] = field(default_factory=list)  # rule tags a matching device opted out of
+    named: list = field(default_factory=list)   #: config Devices matching, in file order
+    tags: list[str] = field(default_factory=list)  #: explicit tags, then matching rule tags
+    excluded: list[str] = field(default_factory=list)  #: rule tags a matching device opted out of
 
     @property
     def is_named(self) -> bool:

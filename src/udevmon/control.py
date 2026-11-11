@@ -23,9 +23,9 @@ from .runtime import socket_path
 
 log = logging.getLogger("udevmon.control")
 
-READ_TIMEOUT = 5.0               # seconds a client has to send its request
-HANDLE_TIMEOUT = 30.0            # seconds the main loop has to answer it
-MAX_REQUEST = 64 * 1024
+READ_TIMEOUT = 5.0               #: seconds a client has to send its request
+HANDLE_TIMEOUT = 30.0            #: seconds the main loop has to answer it
+MAX_REQUEST = 64 * 1024          #: bytes; a longer request line is refused
 
 
 class NotRunning(Exception):

@@ -22,6 +22,11 @@ error, not run with an empty one. The same values are in the environment:
 * ``UDEVMON_VAR_<NAME>``: each device variable.
 * ``UDEVMON_STATE_DIR``: a private folder shared by the actions of one plug
   or one mount, removed when that presence ends.
+* ``UDEVMON_STATE_ROOT``: the folder that holds every state folder, for
+  notes shared by all instances; it lasts as long as the daemon.
+* ``UDEVMON_SCRIPT_DIR``: the folder of the program run, when ``run[0]`` is
+  a path or was found in ``script_dir`` (not for a bare name left to
+  ``PATH``), so a script finds the files next to it.
 
 Commands run as the user, from the home directory, with no standard input,
 and their output is logged line by line. A non-zero exit is a failure
@@ -55,12 +60,28 @@ Calling the CLI
 
 * Pass arguments as separate argv elements. Exit status 0 means success.
   The man page lists the others for each command.
-* ``udevmon present --json`` prints the things present now, with every
-  property and the devices and tags that match them. It is the
-  machine-readable form; the other output is for people.
+* ``--json`` is the machine-readable form; the other output is for people.
+  ``present --json`` prints the things present now; ``devices list``,
+  ``tags list`` and ``actions list --json`` the configuration, each entry
+  with the ``file`` that defines it and its ``dropin`` name (what
+  ``--file`` takes), so a program finds its own entries without reading
+  the TOML; ``check --json`` the problems; ``explain --json`` the
+  expanded commands. ``man 1 udevmon`` lists the fields.
+* ``udevmon devices identify MOUNTPOINT --json`` gives the ``fs_uuid`` and
+  ``drive_serial`` of the drive mounted there, exactly as its actions get
+  them, and the devices that match it. Take a drive's identity from here
+  rather than working it out with ``lsblk`` or sysfs.
+* ``udevmon version --json`` lists feature names; test for one (for
+  example ``identify``) instead of comparing versions. ``udevmon
+  --version`` prints the version alone on one line.
+* Every editing command takes ``--dry-run``: it prints the change as a
+  unified diff and writes nothing.
 * ``udevmon trigger DEVICE [EVENT] --wait`` asks the running daemon to run
-  a device's actions now and returns their exit status. It needs the
-  daemon's ``XDG_RUNTIME_DIR``.
+  a device's actions now and returns their exit status. Its other exit
+  statuses tell the failures apart (3 not running, 4 unknown device, 5
+  another configuration, 6 refused, 7 no usable answer); ``--json`` adds
+  an ``error`` code and each action's status. It needs the daemon's
+  ``XDG_RUNTIME_DIR``.
 * ``udevmon reload``, ``pause [--for DURATION]`` and ``resume`` act on the
   running daemon. The pause is a flag file, so it applies even to a daemon
   started later.
@@ -70,7 +91,9 @@ Calling the CLI
 The control socket (``$XDG_RUNTIME_DIR/udevmon.sock``) and its JSON lines
 are internal: use the commands above, which own the protocol. Integration
 tests must use a private daemon with its own configuration and runtime
-folder (``DEVELOPMENT.md``, "Live testing"), never the user's service.
+folder (``DEVELOPMENT.md``, "Live testing"), never the user's service: set
+``XDG_CONFIG_HOME`` and ``XDG_RUNTIME_DIR`` to private folders for both the
+daemon and the commands that talk to it, and nothing reaches the user's.
 
 Known gaps
 ----------
@@ -79,7 +102,5 @@ The contracts above cover today's integrations (kp-sync, rclone-config).
 Things a new integration might miss, none of them planned (planned work is
 in ``SPECIFICATIONS.md`` §12):
 
-* Machine-readable output from ``explain`` and ``check``; only ``present``
-  has ``--json``.
 * A documented, versioned control-socket protocol for clients other than
   the CLI, such as a GUI (``SPECIFICATIONS.md`` §11).

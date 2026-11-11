@@ -16,7 +16,9 @@ from .matching import (STRONG, build_match, default_match_keys, device_label, la
 from .sources.udev import UdevSource
 from .sources.udisks import UdisksSource
 
+#: Milliseconds without events before ``scan`` offers to name what it saw.
 QUIET_MS = 2000
+#: Properties the one-line summary leaves out (``--all-props`` shows them).
 SKIP_KEYS = ("syspath", "subsystem", "devtype", "instance")
 
 
@@ -36,6 +38,8 @@ def format_all_props(endpoint: Endpoint) -> list[str]:
 
 
 def format_props(endpoint: Endpoint) -> str:
+    """Its properties on one line as ``key=value``, without the raw ``udev_*`` ones and
+    :data:`SKIP_KEYS`."""
     return "  ".join(f"{k}={v}" for k, v in endpoint.props.items()
                      if not k.startswith("udev_") and k not in SKIP_KEYS)
 

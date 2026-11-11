@@ -8,13 +8,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Mapping
 
-CONNECTED = "connected"
-DISCONNECTED = "disconnected"
-MOUNTED = "mounted"
-UNMOUNTED = "unmounted"
-REMOVED = "removed"          # a mounted filesystem vanished without being unmounted
-STARTUP = "startup"          # device already present when the daemon started
-SHUTDOWN = "shutdown"        # device still present when the daemon exits
+CONNECTED = "connected"      #: a USB device was plugged in
+DISCONNECTED = "disconnected"  #: a USB device was unplugged
+MOUNTED = "mounted"          #: a filesystem was mounted
+UNMOUNTED = "unmounted"      #: a filesystem was unmounted
+REMOVED = "removed"          #: a mounted filesystem vanished without being unmounted
+STARTUP = "startup"          #: device already present when the daemon started
+SHUTDOWN = "shutdown"        #: device still present when the daemon exits
 
 # kind -> property keys that are always available to placeholders for it
 _USB_KEYS = frozenset({
@@ -27,6 +27,7 @@ _FS_KEYS = frozenset({
 })
 _COMMON = frozenset({"event"})   # "device"/"tag" depend on the action; see config
 
+#: Event kind -> the property keys always available to placeholders for it.
 KNOWN_KEYS: dict[str, frozenset[str]] = {
     CONNECTED: _USB_KEYS | _COMMON,
     DISCONNECTED: _USB_KEYS | _COMMON,
@@ -37,18 +38,19 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
     STARTUP: _USB_KEYS | _FS_KEYS | {"mountpoint"} | _COMMON,
     SHUTDOWN: _USB_KEYS | _FS_KEYS | {"mountpoint"} | _COMMON,
 }
+#: Every event kind.
 VALID_KINDS = frozenset(KNOWN_KEYS)
-# What `udevmon trigger` can fire for a present thing (the others say it is gone).
+#: What ``udevmon trigger`` can fire for a present thing (the others say it is gone).
 TRIGGER_KINDS = (STARTUP, SHUTDOWN, CONNECTED, MOUNTED, UNMOUNTED)
 
-# Properties that change per plug / per event; useless (and misleading) in match rules.
+#: Properties that change per plug / per event; useless (and misleading) in match rules.
 VOLATILE_KEYS = frozenset({
     "mountpoint", "devnode", "syspath", "event", "device", "tag", "surprise",
     "udev_devname", "udev_devpath", "udev_busnum", "udev_devnum", "udev_seqnum",
     "udev_usec_initialized", "instance",
 })
 
-# Placeholders whose values do not come from the (possibly hostile) hardware itself.
+#: Placeholders whose values do not come from the (possibly hostile) hardware itself.
 TRUSTED_PLACEHOLDERS = frozenset({
     "event", "tag", "device", "devnode", "syspath", "port_path", "subsystem", "devtype",
     "surprise", "instance", "state_dir",
@@ -62,9 +64,9 @@ class Endpoint:
     ``key`` stays the same while it is present (the sysfs path, or the udisks2 object
     path); ``props`` are its normalized properties (spec 4.2).
     """
-    source: str                     # "udev" | "udisks"
-    key: str                        # stable while present (syspath / object path)
-    props: Mapping[str, str]
+    source: str                     #: ``udev`` or ``udisks``
+    key: str                        #: stable while present (syspath / object path)
+    props: Mapping[str, str]        #: its normalized properties (spec 4.2)
 
     @property
     def is_filesystem(self) -> bool:
@@ -75,9 +77,9 @@ class Endpoint:
 @dataclass(frozen=True)
 class Event:
     """Something that happened to an endpoint; ``kind`` is an event kind (``connected``, ...)."""
-    kind: str
-    endpoint: Endpoint
-    time: float = field(default_factory=time.time)
+    kind: str                       #: one of :data:`VALID_KINDS`
+    endpoint: Endpoint              #: the thing it happened to
+    time: float = field(default_factory=time.time)  #: when, in seconds since the epoch
 
     @property
     def props(self) -> dict[str, str]:

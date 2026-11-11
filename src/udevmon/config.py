@@ -13,14 +13,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .events import KNOWN_KEYS, TRUSTED_PLACEHOLDERS, VALID_KINDS, VOLATILE_KEYS, is_raw, is_variable
-from .matching import STRONG, WEAK, has_wildcard, strength
+from .matching import STRONG, WEAK, has_wildcard, matches, strength
 
 try:
     import tomllib
 except ModuleNotFoundError:                 # Python < 3.11: same parser, packaged as tomli
     import tomli as tomllib
 
+#: What a device, tag, action or lock name may contain.
 NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+#: What NAME may be in a device variable (``{var_NAME}``).
 VAR_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 
@@ -43,21 +45,23 @@ def default_config_path() -> Path:
 @dataclass(frozen=True)
 class Device:
     """A named thing (spec 5): a name, how to recognise it, and its explicit tags."""
-    name: str
-    match: dict[str, str]
-    description: str = ""
-    tags: tuple[str, ...] = ()
-    status: str = "active"          # "active" | "disabled" | "ignored" (spec 5.7)
-    exclude_tags: tuple[str, ...] = ()   # rule tags this device opts out of (spec 5.4)
-    vars: Mapping[str, str] = field(default_factory=dict)   # {var_NAME} values (spec 5.8)
+    name: str                       #: its name, the key of ``[devices.NAME]``
+    match: dict[str, str]           #: property -> exact value; all must hold
+    description: str = ""           #: free text for people
+    tags: tuple[str, ...] = ()      #: its explicit tags
+    status: str = "active"          #: ``active``, ``disabled`` or ``ignored`` (spec 5.7)
+    exclude_tags: tuple[str, ...] = ()   #: rule tags this device opts out of (spec 5.4)
+    #: ``{var_NAME}`` values for its actions (spec 5.8)
+    vars: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class Tag:
     """A label for a set of things. ``match`` (a rule) may be empty: explicit-only tag."""
-    name: str
+    name: str                       #: its name, the key of ``[tags.NAME]``
+    #: the rule, property -> accepted values (wildcards allowed); empty for explicit-only
     match: dict[str, tuple[str, ...]] = field(default_factory=dict)
-    description: str = ""
+    description: str = ""           #: free text for people
 
 
 @dataclass(frozen=True)
@@ -66,21 +70,22 @@ class Action:
 
     Exactly one of ``devices`` and ``tags`` is non-empty.
     """
-    name: str
-    devices: tuple[str, ...]        # exactly one of devices / tags is non-empty
-    tags: tuple[str, ...]
-    on: tuple[str, ...]
-    run: tuple[str, ...]
-    timeout: float = 60.0
-    allow_unnamed: bool | None = None   # tag actions only; None = not stated (behaves as False)
-    enabled: bool = True
-    tag_mode: str = "any"           # tag actions: "any" of the tags, or "all" of them
-    detach: bool = False            # start the command and do not wait for it (spec 7.2)
-    lock: str | None = None         # actions sharing a lock name never overlap (spec 7.3)
-    retries: int = 0                # run again after a non-zero exit, up to N more times (7.4)
-    retry_delay: float = 1.0        # seconds between attempts
-    order: int = 50                 # within one event, lower runs first; ties: config order
-    notify_on_failure: bool = False  # a desktop notification when the last attempt fails
+    name: str                       #: its own name, or one made from its target
+    devices: tuple[str, ...]        #: the devices it targets (``device``)
+    tags: tuple[str, ...]           #: the tags it targets (``tag``)
+    on: tuple[str, ...]             #: the event kinds it runs for
+    run: tuple[str, ...]            #: the command, with placeholders not yet filled in
+    timeout: float = 60.0           #: seconds before the command is stopped
+    #: whether an unnamed thing can run this tag action; None if not stated (acts as False)
+    allow_unnamed: bool | None = None
+    enabled: bool = True            #: False after ``actions disable``
+    tag_mode: str = "any"           #: whether a tag action needs ``any`` of the tags, or ``all``
+    detach: bool = False            #: start the command and do not wait for it (spec 7.2)
+    lock: str | None = None         #: actions sharing a lock name never overlap (spec 7.3)
+    retries: int = 0                #: run again after a non-zero exit, up to N more times (7.4)
+    retry_delay: float = 1.0        #: seconds between attempts
+    order: int = 50                 #: lower runs first within one event; on a tie, config order
+    notify_on_failure: bool = False  #: a desktop notification when the last attempt fails
 
     @property
     def targets(self) -> tuple[str, ...]:
@@ -91,10 +96,11 @@ class Action:
 @dataclass(frozen=True)
 class Settings:
     """The ``[daemon]`` table."""
-    debounce: float = 1.0
+    debounce: float = 1.0           #: seconds within which a repeat of an event is dropped
+    #: ``subsystem/devtype`` pairs that udev reports
     udev_filters: tuple[str, ...] = ("usb/usb_device",)
-    max_workers: int = 4
-    script_dir: tuple[str, ...] = ()        # folders searched for a command given by bare name
+    max_workers: int = 4                    #: commands that may run at the same time
+    script_dir: tuple[str, ...] = ()        #: folders searched for a command given by bare name
 
 
 @dataclass
@@ -104,15 +110,15 @@ class Config:
     Built by :func:`load`, which also fills ``warnings`` and ``notes`` (what ``check``
     reports). ``sources`` says which file defines each device, tag and action.
     """
-    settings: Settings = field(default_factory=Settings)
-    devices: dict[str, Device] = field(default_factory=dict)
-    tags: dict[str, Tag] = field(default_factory=dict)
-    actions: list[Action] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-    notes: list[str] = field(default_factory=list)
-    main: Path | None = None            # the main config file (config.toml)
-    files: list[Path] = field(default_factory=list)     # the files read, in order
-    # ("device" | "tag" | "action", name) -> the file that defines it
+    settings: Settings = field(default_factory=Settings)    #: the ``[daemon]`` table
+    devices: dict[str, Device] = field(default_factory=dict)    #: name -> device
+    tags: dict[str, Tag] = field(default_factory=dict)  #: name -> declared tag
+    actions: list[Action] = field(default_factory=list)     #: in the order they were read
+    warnings: list[str] = field(default_factory=list)   #: problems that do not stop loading
+    notes: list[str] = field(default_factory=list)      #: things worth knowing, not problems
+    main: Path | None = None            #: the main config file (config.toml)
+    files: list[Path] = field(default_factory=list)     #: the files read, in order
+    #: ``("device" | "tag" | "action", name)`` -> the file that defines it
     sources: dict[tuple[str, str], Path] = field(default_factory=dict)
 
     def source(self, kind: str, name: str) -> Path | None:
@@ -166,6 +172,7 @@ _TAG = {"description", "match"}
 _ACTION = {"name", "device", "tag", "on", "run", "timeout", "allow_unnamed", "enabled",
            "tag_mode", "detach", "lock", "retries", "retry_delay", "order",
            "notify_on_failure"}
+#: An action's ``order`` when it states none.
 DEFAULT_ORDER = 50
 
 
@@ -455,12 +462,16 @@ def parse(data: dict, origins: dict | None = None) -> Config:
 
     if problems:
         raise ConfigError(problems)
-    _advise(cfg)
+    _advise(cfg, origins)
     return cfg
 
 
-def _advise(cfg: Config) -> None:
-    """Warnings and notes that do not stop the config from loading (spec 6.2)."""
+def _advise(cfg: Config, origins: dict | None = None) -> None:
+    """Warnings and notes that do not stop the config from loading (spec 6.2).
+
+    ``origins`` is :func:`parse`'s: the drop-in label of each entry not in the main file.
+    """
+    origins = origins or {}
     carried = {t for d in cfg.devices.values() for t in d.tags}
     used = {t for a in cfg.actions for t in a.tags}
     for d in cfg.devices.values():
@@ -538,8 +549,70 @@ def _advise(cfg: Config) -> None:
                 cfg.notes.append(f"device {d.name!r} excludes tag {t!r}, which has no rule, so "
                                  "there is nothing to opt out of (explicit tags are not "
                                  "affected)")
+            elif not _rule_can_match(cfg.tags[t].match, d.match):
+                cfg.notes.append(f"device {d.name!r} excludes tag {t!r}, whose rule can never "
+                                 "match it (they need different values), so there is nothing "
+                                 "to opt out of")
+    _overlap_notes(cfg, origins)
+    _lock_notes(cfg)
 
 
+def _rule_can_match(rule: Mapping, match: Mapping[str, str]) -> bool:
+    """False when a tag ``rule`` and a device ``match`` need different values for a key
+    both name, so no thing can satisfy both; True otherwise."""
+    return all(matches({k: rule[k]}, {k: match[k]}, wild=True) for k in rule if k in match)
+
+
+def _overlap_notes(cfg: Config, origins: dict) -> None:
+    """Notes for two devices one of which matches everything the other does (spec 6.2)."""
+    devices = list(cfg.devices.values())
+    for i, a in enumerate(devices):
+        for b in devices[i + 1:]:
+            a_in_b = a.match.items() <= b.match.items()
+            b_in_a = b.match.items() <= a.match.items()
+            if not (a_in_b or b_in_a):
+                continue
+            if a_in_b and b_in_a:
+                what = f"devices {a.name!r} and {b.name!r} have the same match, so they always " \
+                       "match together"
+                ignored = [x.name for x in (a, b) if x.status == "ignored"]
+            else:
+                broad, narrow = (a, b) if a_in_b else (b, a)
+                what = f"device {narrow.name!r} never matches alone: its match contains " \
+                       f"all of {broad.name!r}'s, so whatever it matches, {broad.name!r} does too"
+                ignored = [broad.name] if broad.status == "ignored" else []
+                if narrow.status == "ignored":
+                    continue                     # ignoring some of a broad device's things
+            if ignored:
+                cfg.notes.append(f"{what}; {ignored[0]!r} is ignored, so nothing ever runs for "
+                                 f"{(b if ignored[0] == a.name else a).name!r}")
+                continue
+            note = f"{what}; tag actions get {{device}} = {a.name!r}, the first in file order"
+            files = [origins.get(("device", x.name)) or "the main file" for x in (a, b)]
+            if files[0] != files[1]:
+                note += f" ({files[0]}, then {files[1]}: the drop-in file names decide it)"
+            cfg.notes.append(note)
+
+
+def _lock_notes(cfg: Config) -> None:
+    """A note for a ``lock`` name only one action uses (spec 6.2), with a likely typo."""
+    import difflib
+    users: dict[str, list[str]] = {}
+    for a in cfg.actions:
+        if a.lock:
+            users.setdefault(a.lock, []).append(a.name)
+    for lock, names in users.items():
+        if len(names) != 1:
+            continue
+        note = (f"action {names[0]!r} is the only one with lock {lock!r}, so it only keeps "
+                "that action's own runs from overlapping")
+        close = difflib.get_close_matches(lock, [k for k in users if k != lock], n=1)
+        if close:
+            note += f" (a typo for {close[0]!r}?)"
+        cfg.notes.append(note)
+
+
+#: Folders searched for a command given by bare name, after ``script_dir``.
 SYSTEM_PATHS = ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin")
 
 
@@ -649,6 +722,7 @@ def file_label(main: Path, path: Path) -> str:
     return str(path)
 
 
+#: The names of the files in ``config.d`` that are read (others, such as backups, are not).
 DROPIN_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*\.toml$")
 
 
@@ -665,17 +739,17 @@ def dropin_files(main: Path) -> list[Path]:
                   key=lambda p: p.name)
 
 
-def dropin_path(main: Path, name: str) -> Path:
+def dropin_path(main: Path, name: str, what: str = "--file") -> Path:
     """The file meant by ``--file NAME``: the main file, or a drop-in given as ``NAME``,
     ``NAME.toml``, ``config.d/NAME.toml`` or its full path. ConfigError for anything
-    else (a file that would not be read)."""
+    else (a file that would not be read); its message starts with ``what`` and ``name``."""
     folder = dropin_dir(main)
     given = Path(os.path.expanduser(name))
     if given.is_absolute():
         if given == main:
             return main
         if given.parent != folder:
-            raise ConfigError([f"--file {name}: only {main} or a file in {folder} is read"])
+            raise ConfigError([f"{what} {name}: only {main} or a file in {folder} is read"])
         given = Path(given.name)
     if str(given) in (main.name, str(main)):
         return main
@@ -683,7 +757,7 @@ def dropin_path(main: Path, name: str) -> Path:
         given = Path(given.parts[1])
     file = given.name if given.suffix == ".toml" else given.name + ".toml"
     if len(given.parts) != 1 or not DROPIN_RE.match(file):
-        raise ConfigError([f"--file {name}: give a drop-in as NAME or {folder.name}/NAME.toml "
+        raise ConfigError([f"{what} {name}: give a drop-in as NAME or {folder.name}/NAME.toml "
                            "(letters, digits, _ . -)"])
     return folder / file
 

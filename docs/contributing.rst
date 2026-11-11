@@ -41,9 +41,15 @@ Docstrings are PEP 257, rendered by autodoc. Napoleon reads Google-style
 ``Args:``, ``Returns:`` and ``Raises:`` sections; use them where a
 function's contract is not obvious from one sentence. Say what matters to a
 caller: blocking work, files written, subprocesses, locks, what happens on
-failure. Leave out trivial helpers and the tests. A docstring is
-reStructuredText: double backquotes for code, and a blank line before a
-list.
+failure. A docstring is reStructuredText: double backquotes for code, and
+a blank line before a list.
+
+Autodoc leaves out an undocumented member without a warning, so
+``test_documentation`` requires a docstring on every public function, class
+and method, and a ``#:`` comment on every public module constant and class
+field (on the line above, or after the value). Private helpers (``_name``)
+and the tests need none. Keep ``: `` out of a ``#:`` comment: Napoleon reads
+``words: more words`` as a type and a description.
 
 :doc:`cli` comes from ``cli.build_parser``. A new command or option needs
 no change here, but it does need the other places ``DEVELOPMENT.md``

@@ -1,6 +1,6 @@
 .\" Manual page for the udevmon command. Keep it in step with the CLI:
 .\" tests/test_manpages.py fails when a command or option is missing here.
-.TH UDEVMON 1 "2026-11-10" "udevmon" "User Commands"
+.TH UDEVMON 1 "2026-11-11" "udevmon" "User Commands"
 .SH NAME
 udevmon \- run your own commands when USB devices and filesystems appear or go away
 .SH SYNOPSIS
@@ -12,6 +12,9 @@ udevmon \- run your own commands when USB devices and filesystems appear or go a
 .RI [ ARGUMENTS ]
 .br
 .B udevmon \-\-version
+.br
+.B udevmon version
+.RB [ \-\-json ]
 .SH DESCRIPTION
 .B udevmon
 watches USB devices (through udev) and filesystem mounts (through udisks2 on
@@ -73,7 +76,8 @@ Debug logging.
 The daemon then logs why each event did or did not run an action.
 .TP
 .B \-\-version
-Print the version and exit.
+Print the version and exit: the version alone on one line, nothing else, so
+scripts can read it.
 It is taken from git, in the format used by setuptools\-scm, for example
 .BR 0.2.1.dev3+g1a2b3c4d5 .
 .TP
@@ -116,7 +120,7 @@ actions again; use
 .B udevmon trigger
 for a device configured while plugged in.
 .TP
-.B udevmon trigger \fIDEVICE\fR [\fIEVENT\fR] [\fB\-\-wait\fR]
+.B udevmon trigger \fIDEVICE\fR [\fIEVENT\fR] [\fB\-\-wait\fR] [\fB\-\-json\fR]
 Ask the running daemon to run the actions of the named device, which must be
 present, for
 .I EVENT
@@ -134,12 +138,57 @@ It goes through the same rules, locks, timeouts and placeholders as a real event
 and is logged like one (marked
 .BR "udevmon trigger" ),
 but it is never dropped by the debounce and removes no state folder.
-It prints what it started and why any action was skipped, and exits with status
-1 when the daemon is not running, the device is unknown to the daemon's
-configuration, not present, ignored, or automation is paused.
+It prints what it started and why any action was skipped.
+When it cannot trigger, the exit status says why (see
+.BR "EXIT STATUS" ):
+3 when the daemon is not running, 4 when the device is unknown to the daemon's
+configuration, 5 when
+.B \-\-config
+names another file than the daemon's, 6 when the daemon refuses (the device is
+not present, is ignored, the event does not fit it, or automation is paused)
+and 7 when its answer cannot be read.
 .B \-\-wait
-waits for the actions to finish and prints their exit status; then any status
-other than 0 also gives status 1.
+waits for the actions to finish and prints their exit status; then an action
+that fails, times out or gives no status gives status 1.
+.B \-\-json
+prints one JSON object instead, also when it fails:
+.B exit_status
+(the same as the command's),
+.BR ok ,
+.B error
+(null, or
+.BR not\-running ,
+.BR other\-config ,
+.BR unknown\-device ,
+.BR not\-present ,
+.BR ignored ,
+.BR wrong\-event ,
+.BR paused ,
+.B bad\-request
+or
+.BR no\-answer ),
+.BR message ,
+.BR event ,
+.BR device ,
+.B things
+(each with
+.BR thing ,
+.B actions
+and
+.B skipped
+as
+.B action
+and
+.BR reason )
+and
+.B statuses
+(with
+.BR \-\-wait ,
+each
+.B action
+and its
+.BR status ,
+null when it has none; otherwise null).
 It talks to the daemon over its control socket,
 .IR $XDG_RUNTIME_DIR/udevmon.sock .
 .TP
@@ -285,7 +334,7 @@ and
 .B scan
 would offer).
 .TP
-.B udevmon explain \fR[\fIEVENT\fR] [\fB\-\-device \fINAME\fR] [\fB\-\-prop \fIKEY=VALUE\fR ...] [\fB\-\-all\fR]
+.B udevmon explain \fR[\fIEVENT\fR] [\fB\-\-device \fINAME\fR] [\fB\-\-prop \fIKEY=VALUE\fR ...] [\fB\-\-all\fR] [\fB\-\-json\fR]
 Show what would run, without plugging anything in.
 It applies the same rules as the daemon (named or unnamed, tags,
 .BR allow_unnamed ,
@@ -304,8 +353,49 @@ Only the properties you give are known.
 Things that match no device and no tag are left out (a count says how many);
 .B \-\-all
 lists them and system filesystems too.
+.B \-\-json
+prints an object with
+.BR paused ,
+.BR simulated ,
+.B not_shown
+(the count above) and
+.BR things :
+for each, its
+.BR description ,
+.BR kind ,
+.BR props ,
+.BR devices ,
+.BR tags ,
+.B excluded_tags
+and
+.B ignored
+(device names), and
+.B events
+mapping each event to
+.B runs
+(the
+.BR action ,
+.B via
+.RB ( device ", " tag " or " tags ),
+.BR unnamed ,
+.BR detach ,
+.BR lock ,
+.BR retries ,
+.BR order ,
+.BR file ,
+.BR dropin ,
+and
+.B command
+with its values filled in, or null with the placeholder that is
+.BR missing )
+and
+.B skips
+(each
+.B action
+and
+.BR reason ).
 .TP
-.B udevmon check
+.B udevmon check \fR[\fB\-\-json\fR]
 Validate the configuration file.
 It prints
 .B error:
@@ -320,14 +410,127 @@ action), then
 .B note:
 lines, and ends with
 .BR "OK: N device(s), N tag rule(s), N action(s)" .
+.TP
+.B udevmon edit \fR[\fIFILE\fR] [\fB\-\-no\-reload\fR]
+Edit the configuration file, or the drop\-in
+.I FILE
+(given as for
+.BR \-\-file ;
+a new one is created), in
+.BR $VISUAL ,
+else
+.BR $EDITOR ,
+else
+.B editor
+or
+.BR vi .
+The editor works on a copy.
+When it exits, the whole configuration (every file, with your text in place) is
+checked as
+.B check
+does.
+On errors they are shown and you choose to edit again or to discard the change;
+without a terminal it is discarded (status 1).
+Otherwise the file is replaced (the old one kept as
+.IR NAME.bak ),
+its warnings are shown, and a running daemon reloads.
+Nothing is written when nothing changed, when the editor exits with a non\-zero
+status, or when the file was changed by another program meanwhile; your text is
+then kept as
+.IR NAME.edit ,
+which udevmon never reads.
+.B \-\-json
+prints one object instead:
+.BR ok ,
+.BR errors ,
+.B warnings
+and
+.B notes
+(lists of messages),
+.B files
+(in the order they are read, each with its
+.BR file ,
+.B dropin
+and how many
+.BR devices ,
+.B tags
+and
+.B actions
+it defines) and the totals
+.BR devices ,
+.B tags
+and
+.BR actions .
+The exit status is the same.
 .SS "Devices"
 .TP
-.B udevmon devices list
+.B udevmon devices list \fR[\fB\-\-json\fR]
 List the named devices, with strength, match, tags, status and the number of
 actions that use each.
+.B \-\-json
+prints a JSON list with one object per device:
+.BR name ,
+.BR description ,
+.BR match ,
+.BR strength ,
+.BR status ,
+.B tags
+(explicit),
+.B rule_tags
+(the tag rules its match keys alone satisfy; a present thing can get more from
+its other properties),
+.BR exclude_tags ,
+.BR vars ,
+.B actions
+(those that target it by name or through an explicit tag),
+.B file
+(the file that defines it) and
+.B dropin
+(the name
+.B \-\-file
+takes for that file, or null for the main file).
 .TP
-.B udevmon devices show \fINAME\fR
+.B udevmon devices show \fINAME\fR [\fB\-\-json\fR]
 Show one device: match, strength, status, tags and its actions.
+.B \-\-json
+prints its object as in
+.BR "devices list \-\-json" .
+.TP
+.B udevmon devices identify \fIMOUNTPOINT\fR [\fB\-\-json\fR]
+Show what udevmon knows about the filesystem mounted at
+.IR MOUNTPOINT :
+its
+.B fs_uuid
+and
+.B drive_serial
+exactly as actions get them in
+.B {fs_uuid}
+and
+.BR {drive_serial} ,
+the devices that match it and its tags.
+It exits with status 1 when nothing is mounted there.
+.B \-\-json
+prints an object with
+.BR mountpoint ,
+.BR description ,
+.BR fs_uuid ,
+.B drive_serial
+(null when missing),
+.B match
+(what
+.B devices add \-\-from\-mountpoint
+would write, or null with the reason in
+.BR problem ),
+.B devices
+(each with
+.BR name ,
+.BR status ,
+.B file
+and
+.BR dropin ),
+.B tags
+and
+.BR props .
 .TP
 .B udevmon devices add \fINAME\fR (\fB\-\-match \fIKEY=VALUE\fR ... | \fB\-\-from\-mountpoint \fIPATH\fR) [\fB\-\-tag \fITAG\fR ...] [\fB\-\-exclude\-tag \fITAG\fR ...] [\fB\-\-var \fINAME=VALUE\fR ...] [\fB\-\-description \fITEXT\fR]
 Add a device without scanning.
@@ -416,12 +619,31 @@ A disabled or ignored device still counts as named, so it never falls back into
 the unnamed category.
 .SS "Tags"
 .TP
-.B udevmon tags list
+.B udevmon tags list \fR[\fB\-\-json\fR]
 List the tags: declared rules and tags set on devices, with their members and
 the number of actions that use each.
+.B \-\-json
+prints a JSON list with one object per tag:
+.BR name ,
+.BR description ,
+.B declared
+(false for a tag only set on devices or used by actions),
+.B rule
+(each key with a list of values),
+.BR strength ,
+.B members
+(devices that carry it),
+.BR actions ,
+.B file
+and
+.B dropin
+(null for a tag that is not declared).
 .TP
-.B udevmon tags show \fINAME\fR
+.B udevmon tags show \fINAME\fR [\fB\-\-json\fR]
 Show what a tag contains and which actions use it.
+.B \-\-json
+prints its object as in
+.BR "tags list \-\-json" .
 .TP
 .B udevmon tags add \fINAME\fR [\fB\-\-match \fIKEY=VALUE\fR ...] [\fB\-\-description \fITEXT\fR]
 Declare a tag, optionally with a rule.
@@ -471,11 +693,32 @@ Refused while an action uses it.
 Rename a tag wherever it is used.
 .SS "Actions"
 .TP
-.B udevmon actions list
+.B udevmon actions list \fR[\fB\-\-json\fR]
 List the actions with their targets, events and command, in the order they run
 within an event (by
 .BR order ,
 then file order; an order other than 50 is shown).
+.B \-\-json
+prints a JSON list in file order with every field of each action, defaults
+included:
+.BR name ,
+.BR devices ,
+.BR tags ,
+.BR tag_mode ,
+.BR on ,
+.BR run ,
+.BR timeout ,
+.BR allow_unnamed ,
+.BR enabled ,
+.BR detach ,
+.BR lock ,
+.BR retries ,
+.BR retry_delay ,
+.BR order ,
+.BR notify_on_failure ,
+.B file
+and
+.BR dropin .
 .TP
 .B udevmon actions add (\-\-device \fINAME\fR ... | \-\-tag \fINAME\fR ...) \fIEVENT\fR[,\fIEVENT\fR...] [\fB\-\-name \fINAME\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-all\-tags\fR] [\fB\-\-detach\fR] [\fB\-\-lock \fINAME\fR] [\fB\-\-retries \fIN\fR] [\fB\-\-retry\-delay \fISECONDS\fR] [\fB\-\-order \fIN\fR] [\fB\-\-notify\-on\-failure\fR] [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR] \-\- \fICOMMAND\fR [\fIARG\fR...]
 Add an action.
@@ -651,6 +894,20 @@ for where the pause is kept.
 .TP
 .B udevmon resume
 Let actions run again.
+.SS "Version"
+.TP
+.B udevmon version \fR[\fB\-\-json\fR]
+Print the version, then a line
+.B features:
+with the names of the capabilities scripts can test for, so they need not
+compare version numbers.
+.B \-\-json
+prints
+.B version
+and
+.B features
+(a list) as one object.
+A feature name is added when its capability arrives and never reused.
 .SS "Shell completion"
 .TP
 .B udevmon completion bash
@@ -686,9 +943,10 @@ The commands that change the configuration (the
 and
 .B actions
 sub\-commands other than
-.B list
+.BR list ,
+.B show
 and
-.BR show ,
+.BR identify ,
 and
 .B scan
 when it saves a device) share these behaviours:
@@ -728,6 +986,15 @@ writes to that drop\-in instead, created if needed, given as
 .I NAME.toml
 or
 .IR config.d/NAME.toml .
+.IP \(bu 3
+.B \-\-dry\-run
+makes the same change on a copy of the configuration and prints it as a unified
+diff of each file it would change (from
+.I /dev/null
+for a new drop\-in), followed by the command's usual message and
+.BR "Dry run: nothing was written." .
+No file is written and no daemon is told to reload.
+A change the command refuses gives the same error and status as without it.
 .IP \(bu 3
 They say when automation is paused.
 .IP \(bu 3
@@ -834,6 +1101,12 @@ Base of the completion script directory.
 .TP
 .B XDG_RUNTIME_DIR
 Where the lock and pause files are kept.
+.TP
+.BR VISUAL ", " EDITOR
+The editor of
+.BR "udevmon edit" ;
+either may include options, such as
+.BR "code \-\-wait" .
 .PP
 Commands started by actions receive your environment plus
 .BR UDEVMON_EVENT ,
@@ -844,7 +1117,15 @@ Commands started by actions receive your environment plus
 .BI UDEVMON_VAR_ NAME
 per variable of the device,
 .B UDEVMON_STATE_DIR
-(the private folder of the plug or mount), and one
+(the private folder of the plug or mount),
+.B UDEVMON_STATE_ROOT
+(the folder of all of them),
+.B UDEVMON_SCRIPT_DIR
+(the program's folder, when
+.I run[0]
+is a path or was found in
+.BR script_dir ),
+and one
 .BI UDEVMON_ PROPERTY
 per property, for example
 .B UDEVMON_MOUNTPOINT
@@ -869,6 +1150,33 @@ with no daemon running, and so on.
 The message goes to standard error (for
 .BR check ,
 to standard output).
+For
+.BR "trigger \-\-wait" ,
+an action that failed.
+.TP
+.B 2
+A usage error: an unknown option or a missing argument.
+.PP
+.B udevmon trigger
+also exits with:
+.TP
+.B 3
+The daemon is not running.
+.TP
+.B 4
+The device is not in the running daemon's configuration.
+.TP
+.B 5
+The daemon runs with another configuration file than
+.B \-\-config
+names.
+.TP
+.B 6
+The daemon refused: the device is not present or is ignored, the event does
+not fit it, or automation is paused.
+.TP
+.B 7
+The daemon's answer could not be read.
 .SH EXAMPLES
 Name a stick and react to it being mounted:
 .PP

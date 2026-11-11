@@ -33,13 +33,14 @@ import time
 
 log = logging.getLogger("udevmon.session")
 
-DISPLAY_VARS = ("DISPLAY", "WAYLAND_DISPLAY")
+DISPLAY_VARS = ("DISPLAY", "WAYLAND_DISPLAY")   #: a graphical session has one of these
+#: What actions get from the graphical session, so desktop programs work from them.
 SESSION_VARS = DISPLAY_VARS + (
     "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP",
     "XDG_SESSION_DESKTOP", "DESKTOP_SESSION")
-GRAPHICAL_TYPES = ("x11", "wayland", "mir")
-WAIT = 30.0                    # seconds to wait for a graphical login that has no display yet
-POLL = 0.5
+GRAPHICAL_TYPES = ("x11", "wayland", "mir")    #: logind session types that are graphical
+WAIT = 30.0                    #: seconds to wait for a graphical login that has no display yet
+POLL = 0.5                     #: seconds between looks while waiting
 
 _sleep, _monotonic = time.sleep, time.monotonic       # replaced by the tests
 _last_note: str | None = None                         # what was last logged, to say it once

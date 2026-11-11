@@ -14,12 +14,12 @@ from ..events import MOUNTED, REMOVED, STARTUP, UNMOUNTED, Endpoint, Event
 
 log = logging.getLogger("udevmon.udisks")
 
-BUS_NAME = "org.freedesktop.UDisks2"
-ROOT = "/org/freedesktop/UDisks2"
-I_BLOCK = "org.freedesktop.UDisks2.Block"
-I_FS = "org.freedesktop.UDisks2.Filesystem"
-I_PART = "org.freedesktop.UDisks2.Partition"
-I_DRIVE = "org.freedesktop.UDisks2.Drive"
+BUS_NAME = "org.freedesktop.UDisks2"            #: udisks2's name on the system bus
+ROOT = "/org/freedesktop/UDisks2"               #: its object manager
+I_BLOCK = "org.freedesktop.UDisks2.Block"       #: the interface of a block device
+I_FS = "org.freedesktop.UDisks2.Filesystem"     #: the interface of a filesystem
+I_PART = "org.freedesktop.UDisks2.Partition"    #: the interface of a partition
+I_DRIVE = "org.freedesktop.UDisks2.Drive"       #: the interface of a drive
 
 
 def _bytes(v) -> bytes:
@@ -123,6 +123,8 @@ class UdisksTracker:
 
     def properties_changed(self, path: str, iface: str, changed: dict,
                            invalidated=()) -> list[Event]:
+        """A ``PropertiesChanged`` signal: update the object's cached properties; the
+        events that follow (a mount or an unmount)."""
         if path not in self.objects:
             return []
         props = self.objects[path].setdefault(iface, {})
@@ -184,7 +186,7 @@ class UdisksSource:
     It follows udisks2 starting and stopping. With ``announce_present`` the filesystems
     already there get ``startup`` once, when udisks2 is first seen.
     """
-    name = "udisks"
+    name = "udisks"         #: the ``source`` of its endpoints
 
     def __init__(self, announce_present=False, include_system=True):
         self.announce_present = announce_present

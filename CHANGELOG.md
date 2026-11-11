@@ -10,7 +10,72 @@ change a user would notice (new or changed commands, options, config keys,
 dependencies, behaviour, fixes). When a release is tagged, rename that heading
 to the version and date, and start a new empty **Unreleased** above it.
 
+A change to the interface other programs use (the CLI with its exit statuses
+and `--json` output, the configuration format, what actions receive; see
+README, "Using udevmon from other programs") that can break them goes under
+**Changed (incompatible)**, so callers can read that section before raising
+their pinned version.
+
 ## [Unreleased]
+
+### Added
+
+- **`--json` for scripts** on `devices list`, `devices show`, `tags list`,
+  `tags show`, `actions list`, `check` and `explain`. Every entry says which
+  `file` defines it and, for a drop-in, its `dropin` name (what `--file`
+  takes), so a program can find its own entries without reading the TOML.
+  `actions list --json` gives every field with defaults filled in; `check
+  --json` gives the errors, warnings, notes and files; `explain --json` the
+  expanded command of each action.
+- **`udevmon version [--json]`**: the version and a list of feature names
+  (`identify`, `edit-dry-run`, ...) that scripts can test for instead of
+  comparing versions. `udevmon --version` still prints the version alone on
+  one line, now stated as part of the interface.
+- **`udevmon devices identify MOUNTPOINT [--json]`**: the `fs_uuid` and
+  `drive_serial` of the drive mounted there, exactly as actions get them,
+  the match `--from-mountpoint` would write, and the devices and tags it has.
+- **`--dry-run` on every editing command** (`devices`, `tags`, `actions`):
+  makes the change on a copy, prints it as a unified diff of each file, and
+  writes nothing.
+- **`trigger --json`**: the result as one object, failures included, with an
+  error code and, with `--wait`, each action's exit status.
+- **`$UDEVMON_SCRIPT_DIR` and `$UDEVMON_STATE_ROOT`** for actions: the
+  folder of the program run (when `run[0]` is a path or was found in
+  `script_dir`), and the folder that holds every state folder. Feature
+  names `env-script-dir` and `env-state-root`.
+- **New `check` notes**: two devices one of whose `match` contains all of
+  the other's, so a thing always matches both and a tag action's `{device}`
+  is the one read first (across files, the drop-in file names decide it);
+  a `lock` name only one action uses, with the closest other name in case
+  of a typo; an `exclude_tags` entry whose rule can never match the device.
+- **TAB completion for `pause --for`** offers `15m 30m 1h 2h 1d`.
+- **`udevmon edit [FILE]`**, like `visudo`: edit the main file or a drop-in
+  in `$VISUAL`/`$EDITOR` on a copy; the whole configuration is checked when
+  the editor exits, with the choice to edit again or discard on errors;
+  then the file is replaced (keeping `.bak`) and the daemon reloads. A file
+  changed by another program meanwhile is not overwritten (the edit is kept
+  as `NAME.edit`). Feature name `edit`.
+
+### Changed (incompatible)
+
+- **`udevmon trigger` exit statuses tell the failures apart**: 3 the daemon
+  is not running, 4 the device is not in its configuration, 5 `--config`
+  names another file, 6 another refusal (not present, ignored, the event
+  does not fit, paused), 7 an unreadable answer. 1 now means only that an
+  action failed (with `--wait`). Before, all of these gave 1.
+
+### Documentation
+
+- The interface for other programs is described in full (README, "Using
+  udevmon from other programs"; SPECIFICATIONS §8.7, §11): the compatibility
+  policy above, the `--json` fields, feature names, and how a program's tests
+  run a private udevmon with `XDG_CONFIG_HOME` and `XDG_RUNTIME_DIR`. The
+  control socket protocol is described in §8.6, still internal.
+- The module reference in the HTML manual is complete: the command
+  handlers, module constants (event kinds, `trigger` exit statuses,
+  `FEATURES`, ...) and the fields of the data classes are documented, and
+  `test_documentation` fails when a public object has no docstring or
+  `#:` comment.
 
 ## [0.8.1] - 2026-11-11
 

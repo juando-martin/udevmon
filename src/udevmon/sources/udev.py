@@ -82,7 +82,7 @@ class UdevSource:
     ``announce_present``, :meth:`start` sends ``startup`` for the devices already
     there.
     """
-    name = "udev"
+    name = "udev"           #: the ``source`` of its endpoints
 
     def __init__(self, filters=("usb/usb_device",), announce_present=False):
         self.filters = parse_filters(filters)

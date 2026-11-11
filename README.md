@@ -178,6 +178,9 @@ pipx uninstall udevmon          # or: pip uninstall udevmon
 - `.d20260920`: tracked files had uncommitted changes; the date is the
   build date. Untracked files don't count.
 
+`udevmon --version` prints only the version, on one line. `udevmon version`
+also lists the features scripts can test for (`--json` for both as JSON).
+
 From a source checkout the version is asked from git each time. A copy that
 was installed carries the version of the commit it was built from. Without
 git the version comes from the source tarball's metadata, else it reads
@@ -578,6 +581,9 @@ explicitly (`tags = [...]`) is never affected: listing the same tag in both
 `tags` and `exclude_tags` is an error, and an explicit tag that *another* device
 matching the same thing carries is kept. `udevmon explain` shows
 `excluded from: storage`. `devices add` takes `--exclude-tag TAG` (repeatable).
+`udevmon check` notes an opt-out with nothing to do: a tag without a rule, or a
+rule that can never match the device (it needs another value for a key the
+device's `match` names, such as `fs_type`).
 
 ### Named and unnamed things
 
@@ -719,12 +725,24 @@ udevmon trigger key-daily mounted --wait # wait and show exit statuses
 The event is `startup` (default), `shutdown`, `connected` (a USB device),
 `mounted` (a mounted filesystem) or `unmounted` (a filesystem; it stays
 mounted). The usual rules, locks, timeouts and placeholders apply, and the log
-shows it like a real event, marked `udevmon trigger`. It is refused, with a
-message and status 1, when the daemon is not running, the device is not
-present or is ignored, or automation is paused; a disabled device's own
-actions are skipped, as always. With `--wait` a failed action also gives
-status 1. It talks to the daemon over `$XDG_RUNTIME_DIR/udevmon.sock`, which
-only you can use.
+shows it like a real event, marked `udevmon trigger`. A disabled device's own
+actions are skipped, as always. When it cannot trigger, it says why and the
+exit status tells scripts which case it was:
+
+| Status | Meaning |
+|---|---|
+| 0 | started (with `--wait`: every action exited with 0) |
+| 1 | with `--wait`: an action failed, timed out or gave no status |
+| 3 | the daemon is not running |
+| 4 | the device is not in the running daemon's configuration |
+| 5 | `--config` names another file than the daemon's |
+| 6 | refused: not present, ignored, the event does not fit, or paused |
+| 7 | the daemon's answer could not be read |
+
+`--json` prints the result as one object, failures included, with an
+`error` code and, with `--wait`, each action's exit status (`man udevmon`
+has the fields). It talks to the daemon over
+`$XDG_RUNTIME_DIR/udevmon.sock`, which only you can use.
 
 ## Switching things off
 
@@ -893,7 +911,14 @@ formatting, and save the previous version as `config.toml.bak`.
   a running daemon that uses the same config file picks the change up right
   away, and the command says `Reloaded the running daemon.` A daemon that
   uses a different config file is left alone. Add `--no-reload` to skip it.
-- **After editing by hand,** run `udevmon check`, then `udevmon reload`.
+- **To edit by hand, use `udevmon edit`** (or `udevmon edit 50-kp-sync` for a
+  drop-in). Like `visudo`, it opens a copy in `$VISUAL` or `$EDITOR` and,
+  when you quit the editor, checks the whole configuration with your change.
+  On errors you can edit again or discard. Otherwise it saves the file
+  (keeping a `.bak`) and reloads the daemon. If another program changed the
+  file in the meantime, it saves nothing and keeps your text as `NAME.edit`.
+- **After editing the file directly,** run `udevmon check`, then
+  `udevmon reload`.
 - `udevmon check` also warns when an action's program can't be found or isn't
   executable (say, a mistyped script path). The daemon logs the same warning
   when it starts and on every reload, using *its own* `PATH`, which under
@@ -979,6 +1004,11 @@ file and replaces or deletes it whole, without touching your `config.toml`.
 - **Names are shared.** A device, declared tag or action defined in two files
   is an error that names both files (`udevmon check` says so; a reload that
   meets it keeps the previous configuration).
+- **Two devices for one thing.** When one device's `match` contains all of
+  another's (or both are the same), whatever the first matches, the second
+  does too. `{device}` of a tag action is then the one read first, so with
+  the two in different files the file names decide it. `udevmon check`
+  notes every such pair; with one of them `ignored`, it says nothing runs.
 - **Where things come from.** `udevmon check` lists the files it read;
   `devices list`, `tags list`, `actions list`, `show` and `explain` mark the
   entries of a drop-in with its name.
@@ -1025,6 +1055,10 @@ file and replaces or deletes it whole, without touching your `config.toml`.
 - The same information is available as environment variables:
   `UDEVMON_EVENT`, `UDEVMON_DEVICE` (when the thing is named), `UDEVMON_TAG` (tag actions),
   and `UDEVMON_<PROPERTY>` (for example `UDEVMON_MOUNTPOINT`, `UDEVMON_SERIAL`).
+  `UDEVMON_SCRIPT_DIR` is the folder of the program run, when `run[0]` is a
+  path or was found in `script_dir` (a relative path counts from your home
+  folder), so a script finds the files next to it; it is not set for a bare
+  name left to `PATH`.
 - Graphical programs work under the service too. For every action udevmon
   looks up your desktop session's `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`
   and `DBUS_SESSION_BUS_ADDRESS`: from systemd's environment for your user,
@@ -1094,6 +1128,7 @@ notes in:
 |---|---|---|---|
 | `{instance}` / `$UDEVMON_INSTANCE` | one plug or mount | every event | connected, startup, disconnected, shutdown (USB); mounted, startup, unmounted, removed, shutdown (filesystem) |
 | `{state_dir}` / `$UDEVMON_STATE_DIR` | the same, as a folder | every action | the same events |
+| `$UDEVMON_STATE_ROOT` | every instance: the folder that holds the state folders | every action | while the daemon runs |
 
 The instance is built on udev's `USEC_INITIALIZED` (different for every plug), or on
 a counter when the device has none, and a new mount of a filesystem is a new instance.
@@ -1232,7 +1267,9 @@ run = ["yubikey.sh"]
 Actions that share a name never run at the same time, and they run **in the order
 their events arrived**: a quick unplug cannot overtake its plug, even if a worker is
 free. Actions without a lock, and locks with other names, are not affected, and
-within one event the actions still run by `order`, then file order. The lock is inside
+within one event the actions still run by `order`, then file order. A lock name
+that only one action uses is legal (that action's own runs never overlap), and
+`udevmon check` notes it, with the closest other name in case it is a typo. The lock is inside
 udevmon: there is no lock file, and it does not protect against the same script being
 run by hand (keep a `flock` in the script for that).
 
@@ -1259,6 +1296,7 @@ udevmon scan [--present] [--no-prompt] [--all-props]
 udevmon present [--all] [--all-props] [--json]
                                         list what is plugged in now
 udevmon devices list | show NAME | remove NAME
+udevmon devices identify MOUNTPOINT     what udevmon knows of that drive
 udevmon devices add NAME (--match KEY=VALUE ... | --from-mountpoint PATH)
                     [--tag TAG ...] [--exclude-tag TAG ...]
                     [--var NAME=VALUE ...] [--description TEXT]
@@ -1295,13 +1333,16 @@ udevmon actions set NAME [--allow-unnamed | --named-only
                     [-- COMMAND...]
 udevmon actions disable | enable NAME...
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
-                                        what would run (see above)
+                [--json]                what would run (see above)
 udevmon pause [--for DURATION]          stop every action (see above)
 udevmon resume                          let actions run again
-udevmon check                           validate the config
+udevmon check [--json]                  validate the config
+udevmon edit [FILE] [--no-reload]       edit a file in $EDITOR, checked
+udevmon version [--json]                version and features
 udevmon run [--dry-run]                 run the daemon in the foreground
 udevmon reload                          make the running daemon reload
-udevmon trigger DEVICE [EVENT] [--wait] run its actions now (see above)
+udevmon trigger DEVICE [EVENT] [--wait] [--json]
+                                        run its actions now (see above)
 udevmon service install [--now]         install the systemd user service
 udevmon service uninstall               stop and remove it
 udevmon completion bash | install | uninstall
@@ -1312,7 +1353,10 @@ udevmon completion bash | install | uninstall
 
 Global options, placed before the subcommand: `--config PATH`, `-v` (debug logging).
 The editing commands (`devices`, `tags`, `actions`: add, remove, tag, untag)
-also take `--no-reload`.
+also take `--no-reload`, and `--dry-run`, which shows the change as a diff and
+writes nothing. `devices list`, `devices show`, `tags list`, `tags show`,
+`actions list`, `check`, `explain`, `present`, `trigger` and `version` take
+`--json`.
 
 Manual device creation, without scanning:
 
@@ -1340,6 +1384,13 @@ filesystem has no UUID, the drive has no usable serial number, or a device
 already matches it. `udevmon present --json` prints what is plugged in as JSON
 (every property, the devices and tags each thing is, and the match `scan`
 would suggest).
+
+`udevmon devices identify MOUNTPOINT` shows the `fs_uuid` and
+`drive_serial` of the drive mounted there, exactly as actions get them as
+`{fs_uuid}` and `{drive_serial}`, and which devices match it; with `--json`
+also the match `--from-mountpoint` would write, or why it cannot. A program
+that keeps its own record of a drive can take its identity from here instead
+of working it out again.
 Actions created by hand without a `name` can't be removed through the CLI
 (edit the file instead).
 
@@ -1496,7 +1547,25 @@ change is in the changelog):
   (`config.d/NN-NAME.toml`);
 - what an action receives: placeholders, the `UDEVMON_*` environment
   variables and the state folder;
-- the JSON from `udevmon present --json`.
+- the `--json` output of `present`, `devices list|show|identify`,
+  `tags list|show`, `actions list`, `check`, `explain`, `trigger` and
+  `version`; every entry of the configuration says which `file` defines it
+  and, for a drop-in, its `dropin` name (what `--file` takes);
+- `udevmon --version`: the version alone, on one line.
+
+Rather than compare version numbers, test for a feature:
+`udevmon version --json` lists names such as `identify` or `edit-dry-run`,
+and a name is never reused. To see what an edit would do first, add
+`--dry-run`: it prints a diff and writes nothing.
+
+While udevmon is 0.x, any minor release may change this interface; each such
+change is listed under **Changed (incompatible)** in the changelog, so pin a
+range such as `udevmon>=0.9,<0.10` and read that section before raising it.
+
+A program's own tests can run udevmon apart from the user's: with
+`XDG_CONFIG_HOME` and `XDG_RUNTIME_DIR` pointing at private folders, a
+`udevmon run` uses its own configuration, lock and control socket, and
+`trigger`, `pause` and `reload` given the same variables talk to it alone.
 
 The Python modules, the control socket and the files in
 `$XDG_RUNTIME_DIR` are internal and may change in any release. The

@@ -17,11 +17,14 @@ from . import session
 
 log = logging.getLogger("udevmon.notify")
 
-APP = "udevmon"
-TIMEOUT_MS = 5000
+APP = "udevmon"                  #: the application name notifications carry
+TIMEOUT_MS = 5000                #: how long a notification stays, in milliseconds
 
 
 def session_bus_address(env: dict[str, str] | None = None) -> str | None:
+    """The address of the user's session bus, from ``env`` (default: the process
+    environment, completed from the graphical session): ``DBUS_SESSION_BUS_ADDRESS``, else
+    the ``bus`` socket in ``XDG_RUNTIME_DIR``. None when there is neither."""
     env = dict(os.environ if env is None else env)
     session.update(env)
     address = env.get("DBUS_SESSION_BUS_ADDRESS")

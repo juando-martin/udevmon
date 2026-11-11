@@ -135,6 +135,17 @@ def _edit(path: Path, new_text: str, verify, main: Path | None = None) -> None:
     _commit(main or path, {path: new_text}, verify)
 
 
+def replace_file(main: Path, path: Path, text: str) -> None:
+    """Replace the whole of ``path`` (``main`` or one of its drop-ins) with ``text``, as
+    ``udevmon edit`` does: keeping a .bak, and rolled back if the configuration of
+    ``main`` then fails to load.
+
+    Raises:
+        ConfigError: the configuration with the new text is invalid (nothing changed).
+    """
+    _commit(main, {path: text}, lambda cfg: None)
+
+
 def _file(cfg, kind: str, name: str, main: Path) -> Path:
     """The file that defines the entry (the main file when it is not known)."""
     return cfg.source(kind, name) or main
@@ -760,10 +771,14 @@ def set_tag_fields(path: Path, name: str, *, match=None, clear_rule: bool = Fals
 class RenameReport:
     """What a rename changed, and what it left for the user to look at."""
 
-    updated: list[str] = field(default_factory=list)       # what referred to the old name
-    generated: list[tuple[str, str]] = field(default_factory=list)   # made-up action names that changed
-    mentions: list[tuple[int, str]] = field(default_factory=list)    # lines that still contain it
-    elsewhere: list[tuple[str, int, str]] = field(default_factory=list)  # same, in drop-ins
+    #: the entries that referred to the old name and now refer to the new one
+    updated: list[str] = field(default_factory=list)
+    #: ``(old, new)`` names of actions named after their target, which changed with it
+    generated: list[tuple[str, str]] = field(default_factory=list)
+    #: ``(line number, line)`` of the edited file that still contain the old name
+    mentions: list[tuple[int, str]] = field(default_factory=list)
+    #: the same in the other files, as ``(file label, line number, line)``
+    elsewhere: list[tuple[str, int, str]] = field(default_factory=list)
 
 
 def _swap(container, key: str, old: str, new: str) -> None:

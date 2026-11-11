@@ -4,6 +4,7 @@
 
 import contextlib
 import io
+import json
 import threading
 import unittest
 from concurrent.futures import Future
@@ -86,18 +87,19 @@ class ControlTests(Base):
         self.assertIn("disabled", dict(thing["skipped"])["up"])
 
     def test_refusals(self):
-        cases = [("nope", None, "no device 'nope'"),
-                 ("gone", None, "not present"),
-                 ("quiet", None, "ignored"),
-                 ("key", "disconnected", "cannot trigger"),
-                 ("key", "removed", "cannot trigger"),
-                 ("key", "connected", "needs a USB device"),
-                 ("yubi", "mounted", "needs a filesystem that is mounted")]
-        for device, event, says in cases:
+        cases = [("nope", None, "no device 'nope'", "unknown-device"),
+                 ("gone", None, "not present", "not-present"),
+                 ("quiet", None, "ignored", "ignored"),
+                 ("key", "disconnected", "cannot trigger", "bad-request"),
+                 ("key", "removed", "cannot trigger", "bad-request"),
+                 ("key", "connected", "needs a USB device", "wrong-event"),
+                 ("yubi", "mounted", "needs a filesystem that is mounted", "wrong-event")]
+        for device, event, says, error in cases:
             with self.subTest(device=device, event=event):
                 reply, _ = self.ask(device, event)
                 self.assertFalse(reply["ok"])
                 self.assertIn(says, reply["message"])
+                self.assertEqual(reply["error"], error)
         self.d.runner.submit.assert_not_called()
 
     def test_mounted_needs_a_mount(self):
@@ -114,6 +116,7 @@ class ControlTests(Base):
         pause.pause()
         reply, _ = self.ask("key")
         self.assertIn("paused", reply["message"])
+        self.assertEqual(reply["error"], "paused")
         self.d.runner.submit.assert_not_called()
 
     def test_usb_device(self):
@@ -128,7 +131,7 @@ class ControlTests(Base):
 
     def test_an_unknown_request(self):
         reply, _ = self.d.control({"cmd": "frobnicate"})
-        self.assertFalse(reply["ok"])
+        self.assertEqual((reply["ok"], reply["error"]), (False, "bad-request"))
 
 
 class RunnerTests(unittest.TestCase):
@@ -211,16 +214,22 @@ class CliTests(unittest.TestCase):
 
     def test_not_running(self):
         rc, _, err, request = self.run_cli("trigger", "key", running=None)
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 3)
         self.assertIn("not running", err)
         request.assert_not_called()
         rc, _, err, _ = self.run_cli("trigger", "key", error=control.NotRunning("x"))
+        self.assertEqual(rc, 3)
         self.assertIn("not running", err)
+
+    def test_no_usable_answer(self):
+        rc, _, err, _ = self.run_cli("trigger", "key", error=ValueError("bad JSON"))
+        self.assertEqual(rc, 7)
+        self.assertIn("no usable answer", err)
 
     def test_a_daemon_with_another_config(self):
         rc, _, err, _ = self.run_cli("--config", "/x/other.toml", "trigger", "key",
                                      running=(123, "/x/config.toml"))
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 5)
         self.assertIn("uses /x/config.toml", err)
 
     def test_output(self):
@@ -244,9 +253,42 @@ class CliTests(unittest.TestCase):
 
     def test_an_error_reply(self):
         rc, _, err, _ = self.run_cli("trigger", "key",
-                                     reply={"ok": False, "message": "device 'key' is not present"})
-        self.assertEqual(rc, 1)
+                                     reply={"ok": False, "error": "not-present",
+                                            "message": "device 'key' is not present"})
+        self.assertEqual(rc, 6)
         self.assertIn("not present", err)
+
+    def test_an_unknown_device_has_its_own_status(self):
+        rc, _, err, _ = self.run_cli("trigger", "nope",
+                                     reply={"ok": False, "error": "unknown-device",
+                                            "message": "no device 'nope'"})
+        self.assertEqual(rc, 4)
+
+    def test_json(self):
+        reply = {"ok": True, "event": "mounted", "device": "key",
+                 "things": [{"thing": "t", "actions": ["up", "x"],
+                             "skipped": [["y", "the action is disabled"]]}],
+                 "statuses": [["up", 0], ["x", None]]}
+        rc, out, _, _ = self.run_cli("trigger", "key", "mounted", "--wait", "--json",
+                                     reply=reply)
+        data = json.loads(out)
+        self.assertEqual(rc, 1)                       # no status counts as a failure
+        self.assertEqual(data["exit_status"], 1)
+        self.assertEqual(data["statuses"], [{"action": "up", "status": 0},
+                                            {"action": "x", "status": None}])
+        self.assertEqual(data["things"][0]["skipped"],
+                         [{"action": "y", "reason": "the action is disabled"}])
+        rc, out, _, _ = self.run_cli("trigger", "key", "--json", reply={**reply, "statuses": []})
+        self.assertEqual((rc, json.loads(out)["statuses"]), (0, None))
+
+    def test_json_errors(self):
+        rc, out, err, _ = self.run_cli("trigger", "key", "--json", running=None)
+        self.assertEqual((rc, err), (3, ""))
+        self.assertEqual({k: v for k, v in json.loads(out).items() if k != "message"},
+                         {"exit_status": 3, "ok": False, "error": "not-running"})
+        rc, out, _, _ = self.run_cli("trigger", "key", "--json",
+                                     reply={"ok": False, "error": "paused", "message": "m"})
+        self.assertEqual((rc, json.loads(out)["error"]), (6, "paused"))
 
     def test_only_events_that_make_sense(self):
         self.assertEqual(self.run_cli("trigger", "key", "removed")[0], 2)

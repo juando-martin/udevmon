@@ -311,6 +311,29 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(env, str(state.root() / "usb-9"))
         runner.shutdown(wait=True)
 
+    def test_a_script_gets_its_folder_and_the_state_root(self):
+        out = self.dir / "out"
+        script = self.script("r.sh", f'echo "$UDEVMON_SCRIPT_DIR|$UDEVMON_STATE_ROOT" > "{out}"\n')
+        runner = A.ActionRunner(1)
+        with self.assertLogs("udevmon.actions", "INFO"):
+            runner.submit(self.event(CONNECTED), [self.job("r", script)]).result(10)
+        self.assertEqual(out.read_text().strip().split("|"),
+                         [str(Path(script).parent), str(state.root())])
+        runner.shutdown(wait=True)
+
+    def test_the_script_folder_follows_the_command(self):
+        ev = self.event(CONNECTED)
+        home = os.path.expanduser("~")
+        self.assertEqual(A.build_env(ev, "d", program="/opt/x/run.sh")["UDEVMON_SCRIPT_DIR"],
+                         "/opt/x")
+        self.assertEqual(A.build_env(ev, "d", program="bin/run")["UDEVMON_SCRIPT_DIR"],
+                         os.path.join(home, "bin"))                 # actions run in ~
+        self.assertEqual(A.build_env(ev, "d", program="~/s/a.sh")["UDEVMON_SCRIPT_DIR"],
+                         os.path.join(home, "s"))
+        env = A.build_env(ev, "d", program="rsync")                 # left to PATH
+        self.assertNotIn("UDEVMON_SCRIPT_DIR", env)
+        self.assertNotIn("UDEVMON_STATE_ROOT", env)                 # no state folder given
+
     def test_the_folder_is_removed_even_when_there_is_nothing_to_run(self):
         state.ensure("usb-9")
         runner = A.ActionRunner(1)

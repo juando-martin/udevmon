@@ -409,7 +409,10 @@ Rules:
   tag actions.
 - Actions run with environment `UDEVMON_EVENT`, `UDEVMON_DEVICE` (when named),
   `UDEVMON_TAG` (tag actions), and `UDEVMON_<KEY>` for every property,
-  cwd = `$HOME`, stdin = `/dev/null`.
+  cwd = `$HOME`, stdin = `/dev/null`. `UDEVMON_SCRIPT_DIR` is the folder of
+  the expanded `run[0]` when it contains a `/` (after `script_dir` resolution;
+  `~` expanded, relative to `$HOME`), the folder as given, symlinks not
+  resolved; unset for a bare name left to `PATH`.
 - The graphical session's variables (`DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`,
   `DBUS_SESSION_BUS_ADDRESS`, `XDG_SESSION_TYPE`, `XDG_CURRENT_DESKTOP`,
   `XDG_SESSION_DESKTOP`, `DESKTOP_SESSION`) are looked up for every action
@@ -559,7 +562,20 @@ printed by `check` only. Neither changes the exit status.
 - note: a device `match` or a tag rule that uses `port_path` (it only matches in that
   USB port, and any device of the same model in it matches);
 - note: `tag_mode = "all"` on an action with a single tag; a tag listed in a device's
-  `exclude_tags` that has no rule (nothing to opt out of);
+  `exclude_tags` that has no rule, or whose rule can never match the device
+  (for a key both name, no pattern of the rule matches the device's value):
+  nothing to opt out of;
+- note: two devices one of whose `match` contains all of the other's (or the
+  same match), so a thing matching the larger one always matches both:
+  `{device}` of a tag action is the one read first, and when they are in
+  different files the note says the drop-in file names decide it. With the
+  smaller one `ignored`, the note says nothing ever runs for the other; a
+  larger one that is `ignored` (ignoring some of a broad device's things)
+  gives no note. Only containment is detected: matches on different keys
+  that could meet on one thing are not;
+- note: a `lock` name used by one action only (it then only orders that
+  action's own runs), naming the closest other lock name when there is one
+  (`difflib`), in case of a typo;
 - note: a disabled or ignored device, a disabled action, and an action that only
   targets disabled or ignored devices (so never runs).
 
@@ -715,7 +731,9 @@ by `startup`, `mounted`, `unmounted`, `removed` and `shutdown` of it.
 `state.py` keeps one folder per instance, `$XDG_RUNTIME_DIR/udevmon/state/<instance>`
 (mode 0700; the instance is reduced to `A-Za-z0-9._-` so it cannot leave the folder).
 `ActionRunner` creates it before the first action of an event that has an instance
-(never for a dry run) and passes it as `{state_dir}` and `$UDEVMON_STATE_DIR`.
+(never for a dry run) and passes it as `{state_dir}` and `$UDEVMON_STATE_DIR`, with
+its parent, `…/udevmon/state`, as `$UDEVMON_STATE_ROOT` (for state shared by
+instances; it lives as long as the daemon).
 `Engine.handle` passes the instance a presence *ends* with: `disconnected`, `removed`,
 and `unmounted` unless `surprise` is `1` (`presence_ends()`). `ActionRunner` removes that
 folder when the jobs of the event have finished, even if there are none and even when the
@@ -732,7 +750,9 @@ udevmon scan [--no-prompt] [--present] [--all-props]
 udevmon present [--all] [--all-props] [--json]
                                         list what is present now, with
                                         strength, device name and tags
-udevmon devices list|show               (bare `devices` = `devices list`)
+udevmon devices list|show [--json]      (bare `devices` = `devices list`)
+udevmon devices identify MOUNTPOINT [--json]
+                                        the drive mounted there (§8.7)
 udevmon devices add NAME (--match KEY=VALUE ... | --from-mountpoint PATH)
                     [--tag TAG ...] [--exclude-tag TAG ...]
                     [--var NAME=VALUE ...] [--description TEXT]
@@ -745,13 +765,13 @@ udevmon devices set NAME [--match KEY=VALUE ...] [--description TEXT]
 udevmon devices exclude|include NAME TAG...    (§5.4)
 udevmon devices|tags|actions rename OLD NEW
 udevmon devices untag NAME TAG [TAG ...]
-udevmon tags list|show
+udevmon tags list|show [--json]
 udevmon tags add NAME [--match KEY=VALUE ...] [--description TEXT]
                      [--file DROPIN]
 udevmon tags set NAME [--match KEY=VALUE ... | --no-rule]
                      [--description TEXT]
 udevmon tags remove NAME
-udevmon actions list
+udevmon actions list [--json]
 udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT ...]
                     [--name NAME] [--timeout SECONDS] [--all-tags]
                     [--detach] [--lock NAME] [--retries N] [--retry-delay S]
@@ -771,12 +791,15 @@ udevmon actions set NAME [--allow-unnamed | --named-only
                     [--notify-on-failure | --no-notify-on-failure]
                     [-- COMMAND ...]
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
-                                        what would run (§8.4)
+                [--json]                what would run (§8.4)
 udevmon pause [--for DURATION]          stop every action (§8.5)
 udevmon resume                          let actions run again
-udevmon check                           validate: errors, warnings, notes
+udevmon check [--json]                  validate: errors, warnings, notes
+udevmon edit [FILE] [--no-reload]       edit a file, checked (§8.8)
+udevmon version [--json]                version and feature names (§8.7)
 udevmon reload                          SIGHUP the running daemon
-udevmon trigger DEVICE [EVENT] [--wait] run a present device's actions now
+udevmon trigger DEVICE [EVENT] [--wait] [--json]
+                                        run a present device's actions now
                                         (§8.6)
 udevmon service install [--now] [--dest DIR]
                                         write the systemd user unit
@@ -792,8 +815,9 @@ udevmon completion uninstall [--dest FILE]
 
 Global: `--config PATH`, `-v`.
 
-The editing commands (`devices add|remove|tag|untag`, `tags add|remove`,
-`actions add|remove`) also take `--no-reload` (§7).
+The editing commands (every `devices`, `tags` and `actions` sub-command but
+`list`, `show` and `identify`) also take `--no-reload` (§7) and `--dry-run`
+(§8.7).
 
 - `--match KEY=VALUE` may be repeated. On `tags add`, repeating a key builds a
   list (`--match fs_type=ext4 --match fs_type=exfat` → `["ext4", "exfat"]`); on
@@ -893,6 +917,8 @@ What it completes:
   `[tags.X]` only), `actions remove`, `actions add --device|--tag`;
 - event kinds as a comma-separated list, without repeating one already typed;
 - `--match` keys with a trailing `=` (rules omit the volatile keys of §4.2);
+- `pause --for`: the examples `15m 30m 1h 2h 1d` (`completion.PAUSE_DURATIONS`),
+  which show the format; any other duration can be typed;
 - paths for `--config` and `--dest`; after `--` in `actions add`, files.
 
 Bash splits `a=b` into `a`, `=`, `b`; the helper rejoins them. Nothing is
@@ -988,9 +1014,97 @@ with the reason.
 - The reply lists, per thing, the actions submitted and those skipped with the
   reason. With `wait`, it is sent once they finish, with each action's exit
   status (`null`: timed out, not started, skipped or detached).
-- CLI: exit 1 when no daemon runs (lock file or socket), when an explicit
-  `--config` is not the daemon's, on a refusal, and with `--wait` when a status
-  is not 0.
+- A refusal is `{"ok": false, "error": CODE, "message": TEXT}`; `CODE` is
+  `bad-request` (unknown `cmd`, an event that cannot be triggered),
+  `unknown-device`, `ignored`, `paused`, `not-present` or `wrong-event`.
+- CLI exit statuses: 3 no daemon runs (lock file or socket), 4
+  `unknown-device`, 5 an explicit `--config` is not the daemon's, 6 any other
+  refusal, 7 a reply that cannot be read, 1 with `--wait` when a status is not
+  0 (or is `null`), else 0. `--json` prints `{exit_status, ok, error, message,
+  event, device, things: [{thing, actions, skipped: [{action, reason}]}],
+  statuses}` for every outcome, the CLI's own failures having the codes
+  `not-running`, `other-config` and `no-answer`; `statuses` is
+  `[{action, status}]` with `--wait`, else `null`.
+- The protocol is internal (§11): this section describes it so the daemon and
+  the CLI stay in step, not for other programs. It has no version field; one
+  comes with a public protocol (§12).
+
+### 8.7 Output for scripts
+
+The interface of §11 in detail.
+
+- `--version` prints the version alone on one line (setuptools-scm format,
+  §13.1). `version` prints it, then `features: NAME ...`; `version --json`
+  prints `{"version", "features"}`. `FEATURES` in `cli.py` lists capability
+  names; a name is added with its capability and never reused, so a caller
+  tests for one instead of comparing versions.
+- `--json` output is UTF-8 JSON, indented, on standard output. An entry of the
+  configuration carries `file` (absolute path of the file that defines it) and
+  `dropin` (its drop-in name without `.toml`, as `--file` takes it; `null`
+  for the main file).
+  - `devices list` (and `show`, one object): `name`, `description`, `match`,
+    `strength`, `status`, `tags` (explicit), `rule_tags` (rules the match keys
+    alone satisfy, minus `tags` and `exclude_tags`), `exclude_tags`, `vars`,
+    `actions` (by name or explicit tag), `file`, `dropin`.
+  - `tags list` (and `show`): `name`, `description`, `declared`, `rule`
+    (key → list), `strength` (`null` without a rule), `members`, `actions`,
+    `file`, `dropin` (`null` when not declared).
+  - `actions list`, in file order: every field of §6 with defaults filled in
+    (`devices`, `tags`, `tag_mode`, `on`, `run`, `timeout`, `allow_unnamed`,
+    `enabled`, `detach`, `lock`, `retries`, `retry_delay`, `order`,
+    `notify_on_failure`), `name`, `file`, `dropin`.
+  - `check`: `ok`, `errors`, `warnings`, `notes`, `files` (read order; each
+    `file`, `dropin` and its `devices`, `tags`, `actions` counts) and the
+    totals; exit 1 when `ok` is false.
+  - `explain`: `paused`, `simulated`, `not_shown`, `things`; each thing has
+    `description`, `kind`, `props`, `devices`, `tags`, `excluded_tags`,
+    `ignored` and `events` (kind → `runs`, `skips`). A run has `action`, `via`
+    (`{device}`, `{tag}` or `{tags}`), `unnamed`, `detach`, `lock`, `retries`,
+    `order`, `file`, `dropin`, and `command` (expanded as in §8.4) or `null`
+    with the `missing` placeholder. The text output is rendered from the same
+    data (`explain.explain_data`).
+- `devices identify MOUNTPOINT` asks udisks2 for the filesystem mounted there
+  (as `--from-mountpoint`) and shows its `fs_uuid` and `drive_serial`: the
+  `IdUUID` of its block device and the `Serial` of its `Drive`, unchanged
+  (§4.2), so they equal `{fs_uuid}` and `{drive_serial}` in its actions. JSON:
+  `mountpoint`, `description`, `fs_uuid`, `drive_serial` (`null` if missing),
+  `match` (the `--from-mountpoint` match, or `null` with the reason in
+  `problem`), `devices` (`name`, `status`, `file`, `dropin`), `tags`, `props`.
+  Exit 1 when nothing is mounted there.
+- `--dry-run` on an editing command copies the main file and the drop-ins
+  read (§6.0) to a private temporary folder, runs the command on the copy (the
+  same checks and roll-back), and prints a unified diff per changed file
+  labelled with the real path (`/dev/null` for a new drop-in), then the
+  command's own message and `Dry run: nothing was written.` No real file is
+  written and no daemon is reloaded; a refusal keeps its message and status,
+  with the copy's folder shown as the real one.
+
+### 8.8 Edit
+
+`udevmon edit [FILE]` (`edit.py`) changes one file the way `visudo` does: the
+main file, or the drop-in `FILE` names (as `--file` does, `config.dropin_path`;
+a new drop-in starts empty). The editor is `$VISUAL`, else `$EDITOR` (split
+with `shlex`), else `editor` when on `PATH`, else `vi`.
+
+1. The file is copied to a private temporary folder under its own name (so the
+   editor sees `.toml`), and the editor opens the copy.
+2. A non-zero exit of the editor ends it: nothing saved, status 1. Text equal to
+   the original (empty for a new file) prints `No changes.`, status 0, no reload.
+3. The main file and every drop-in are copied to a second temporary folder with
+   the edited text in place and loaded as `check` does. Messages name the real
+   files. On errors they are printed; with a terminal the user answers `e`
+   (edit the same copy again, the default) or `d`; Ctrl-D, or no terminal,
+   discards: status 1.
+4. If the real file changed since it was copied (another program, such as a
+   tool rewriting its drop-in), nothing is saved: the edited text goes to
+   `NAME.edit` beside it (mode 0600; never read, `DROPIN_RE`), status 1.
+5. Otherwise `configedit.replace_file` writes it (atomic, keeping `NAME.bak`,
+   rolled back if the configuration then fails to load), the warnings of step 3
+   (including `command_problems`) are printed, then `Saved PATH`, and a running
+   daemon is told to reload unless `--no-reload`.
+
+It edits any key, which the per-option commands do not. It has no
+`--dry-run`: the check of step 3 is its preview.
 
 ## 9. Resource expectations
 
@@ -1026,57 +1140,86 @@ No disk I/O apart from reading the config.
 **Interface for other programs.** Other programs use udevmon through the CLI
 (commands, options, exit statuses), the configuration format with drop-in
 files (§6.0), what an action receives (placeholders, `UDEVMON_*` variables,
-the state folder; §7.2, §7.5) and `present --json`. These are provisional
-while udevmon is 0.x. The Python modules, the control socket protocol and the
+the state folder; §7.2, §7.5), the `--json` output and `--version` (§8.7).
+These are provisional while udevmon is 0.x: a minor release may change them,
+and every such change is listed under **Changed (incompatible)** in the
+changelog. The Python modules, the control socket protocol (§8.6) and the
 files in the runtime folder are internal: there is no public Python API
 (`docs/api.rst` keeps the list).
 
+A program's tests isolate udevmon with `XDG_CONFIG_HOME` (configuration) and
+`XDG_RUNTIME_DIR` (lock, socket, pause flag): every command honours both, so
+no `--config-dir` or `--socket` option is needed.
+
 ## 12. Optional later work
 
-Nothing here is started. Ordered roughly from small to large.
+Nothing here is started. Ordered roughly from small to large; two items are
+decided designs, waiting to be built.
+
+**Order.** Some items depend on others: retry back-off waits for the thread
+per event (Medium); `pause`, `resume`, `reload` and a live `scan` come with
+the JSON-RPC protocol, and a GUI and socket activation build on it; the link
+from a USB device to its filesystems (surprise disconnect) comes before the
+cross-key `check` note, which reuses it; a declared source protocol comes
+before the `changed` event and other sources; the root udev rule comes last,
+as it changes how the daemon starts.
 
 **Small**
 
-- Completion for `pause --for` durations (`15m 30m 1h 2h 1d`), so TAB shows
-  the format. Needs a new option kind in `completion.py`.
-- `check` notes:
-  - a device whose match is a subset of another's, so the two can never be
-    told apart;
-  - a `lock` name used by one action only (it then orders only that action's
-    own runs: intended, or a typo);
-  - an `exclude_tags` entry whose rule can never match the device;
-  - two configured devices matching the same thing from different files, where
-    `{device}` then depends on file names (§7 step 2).
-- `$UDEVMON_SCRIPT_DIR` and `$UDEVMON_STATE_ROOT` in the action environment
-  (today a script computes its own path, and `dirname "$UDEVMON_STATE_DIR"`).
-- Retry back-off (`retry_delay` growing each attempt); retrying `shutdown`
-  actions, which stopping currently ends.
+- A `check` note for two devices whose matches use different keys but could
+  meet on one thing (`fs_uuid` and `drive_serial`); only containment is noted
+  today (§6.2). Needs to know which keys a USB device and a filesystem have,
+  or it would note nearly every pair.
+- Retry back-off, after the thread per event: an action key `retry_backoff`
+  (a number, at least 1, default 1) multiplies the wait before each further
+  attempt (`retry_delay`, then `retry_delay × retry_backoff`, ...); an error
+  with `detach`, like `retries`. Retries of `shutdown` actions go on during the
+  daemon's exit pass (bounded by the service's `TimeoutStopSec`); stopping
+  still ends the others.
 - zsh and fish completion: only a small wrapper per shell around
   `udevmon _complete`.
 
 **Medium**
 
-- `udevmon edit [FILE]`, like `visudo`: open the main file or a drop-in in
-  `$EDITOR` on a copy, check it on save as `check` does (across all files),
-  offer to edit again or discard on errors, else replace the file (keeping the
-  `.bak`) and reload. Covers every key without per-option UI; this replaced the
-  interactive menu idea.
+- Thread per event (decided 2026-11-11). Each event's jobs run in a thread of
+  their own, and `max_workers` becomes the number of commands that may run at
+  once: a slot is taken only around each attempt's command, never while
+  waiting for a lock (§7.3) or between retries (§7.4). So a job waiting for
+  its lock no longer holds up other events. `FifoLock`, the tickets and the
+  per-event run order are unchanged, and nothing waits for a lock while
+  holding a slot, so no deadlock. Accepted: a burst of events makes as many
+  (mostly idle) threads. Rejected: a queue per lock continued from the main
+  loop, and no threads at all (child watches): both rewrite the runner.
+- Control socket as JSON-RPC 2.0 (decided 2026-11-11), replacing the
+  one-request `cmd` protocol of §8.6. One compact JSON object per line;
+  a connection stays open for several requests, answered in order; batches and
+  client notifications as in JSON-RPC. Methods: `hello` (protocol version,
+  udevmon version, feature names of §8.7), `status`, `present`, `trigger`,
+  `pause`, `resume`, `reload`, `subscribe` (events as `event` notifications;
+  a slow client loses events, told by a `lost` notification with the count,
+  never blocking the daemon). A refusal is error code 1 with today's string
+  codes in `error.data` (`unknown-device`, ..., new `bad-config`,
+  `other-config`), so `--json` and the exit statuses keep them. The pause
+  stays in the flag file (it works with no daemon, survives a restart and
+  suits socket activation); through the socket the daemon writes it, logs it
+  and answers. `reload` answers with the configuration's errors, so
+  `udevmon reload` (and `systemctl --user reload`) fails visibly; `SIGHUP`
+  stays. `scan` uses `present` and `subscribe` when a daemon runs, so that
+  only one process watches. Rejected: extending the `cmd` protocol (it would
+  grow ids and an envelope of its own), D-Bus (the session bus can be missing,
+  §7.4.1; a D-Bus front end forwarding to the socket remains possible),
+  Varlink (little used).
 - Tag-level default variables that devices override (needs a rule for devices
   in several tags).
 - Per-action environment and working directory.
-- `pause`, `resume` and `reload` through the control socket instead of a flag
-  file and `SIGHUP`; `scan` showing live events through the running daemon, so
-  that only one process watches.
 
 **Needs a design decision**
 
-- The lock and the worker pool: a job waiting for its lock occupies a worker
-  (accepted, documented). A queue per lock would free it, at the cost of the
-  per-event run order (§7) unless the event's worker waits anyway.
 - Marking a USB device's `disconnected` as a surprise when one of its
   filesystems was still mounted. Needs a link from the USB device to its
   filesystems: `drive_serial == serial` when both exist, or walking the block
-  device's sysfs path up to its USB device (exact, more work).
+  device's sysfs path up to its USB device (exact, more work, and it also
+  works for other subsystems).
 
 **Large**
 
@@ -1087,16 +1230,16 @@ Nothing here is started. Ordered roughly from small to large.
   (NetworkManager); each a `sources/` module plus new event kinds (§11).
 - A `changed` event (udev `change`, `bind`, `unbind`) and watching every
   subsystem; non-USB defaults in `scan`.
-- A public API (§11 says there is none). Most reusable: the event layer
+- A public API (§11 says there is none). First the JSON-RPC control protocol
+  (Medium): it goes under the compatibility policy (§11) once a real client
+  has used it. Most reusable in Python: the event layer
   (`events`, `sources/`), USB and mount events without root, which needs a
   blocking `watch()` helper (today `start(emit)` assumes the caller's GLib
   main loop), a declared source protocol and public names; it could become
   its own package. Then reading the configuration (`config.load`,
   `matching.resolve`) and editing it (`configedit`), which kp-sync now
-  reimplements or calls as commands. Until then, `--json` for `check`,
-  `explain`, `trigger --wait` and `--version` covers what integrations
-  parse from text today, and a documented, versioned control-socket
-  protocol would serve a GUI.
+  reimplements or calls as commands. The `--json` output (§8.7) covers what
+  integrations parse today.
 
 **Deliberately not planned**
 

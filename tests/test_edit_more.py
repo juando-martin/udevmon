@@ -254,7 +254,8 @@ class CompletionTests(Base):
         self.assertIn("fs_type=", keys)
         self.assertNotIn("mountpoint=", keys)               # a rule cannot use it
         self.assertEqual(set(self.words("udevmon tags set storage --")),
-                         {"--match", "--no-rule", "--description", "--no-reload", "--help"})
+                         {"--match", "--no-rule", "--description", "--no-reload", "--dry-run",
+                      "--help"})
 
     def test_after_the_dashes_the_shell_completes_the_command(self):
         self.assertEqual(completion.complete(cli.build_parser(),

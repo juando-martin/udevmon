@@ -24,9 +24,9 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-FALLBACK = "0.0.0+unknown"
+FALLBACK = "0.0.0+unknown"       #: the version when neither git nor PKG-INFO gives one
 _DESCRIBE = re.compile(r"^(?P<tag>.+)-(?P<distance>\d+)-g(?P<node>[0-9a-f]+)(?P<dirty>-dirty)?$")
-NODE_LENGTH = 10                 # "g" + 9 hex digits: what setuptools-scm keeps of the hash
+NODE_LENGTH = 10                 #: how much of the hash setuptools-scm keeps ("g" + 9 hex digits)
 _TAG = re.compile(r"^(?:[\w-]+-)?[vV]?(?P<version>\d+(?:\.\d+)*[^+]*)")
 
 
