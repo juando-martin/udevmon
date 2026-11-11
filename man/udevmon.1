@@ -742,7 +742,7 @@ exactly one, as in
 .BR "\-\-match fs_label=BACKUP*" ;
 such a rule is rated weak.
 .TP
-.B udevmon tags set \fINAME\fR [\fB\-\-match \fIKEY=VALUE\fR ... | \fB\-\-no\-rule\fR] [\fB\-\-description \fITEXT\fR]
+.B udevmon tags set \fINAME\fR [\fB\-\-match \fIKEY=VALUE\fR ... | \fB\-\-no\-rule\fR] [\fB\-\-description \fITEXT\fR] [\fB\-\-var \fINAME=VALUE\fR ...] [\fB\-\-unset\-var \fINAME\fR ...]
 Change a declared tag (one with a
 .B [tags.NAME]
 table).
@@ -754,6 +754,11 @@ and
 removes it, leaving a tag that only the devices that carry it belong to.
 .B \-\-description
 changes the description (an empty text removes it).
+.B \-\-var
+sets a default variable for the things the tag selects and
+.B \-\-unset\-var
+removes one, as for
+.BR "devices set" .
 A comment after the old
 .B match
 is kept, and a rule that uses a property that changes from plug to plug is
@@ -814,7 +819,7 @@ for the last two only the daemon can tell, so
 .B program
 is null).
 .TP
-.B udevmon actions add (\-\-device \fINAME\fR ... | \-\-tag \fINAME\fR ...) \fIEVENT\fR[,\fIEVENT\fR...] [\fB\-\-name \fINAME\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-all\-tags\fR] [\fB\-\-detach\fR] [\fB\-\-lock \fINAME\fR] [\fB\-\-retries \fIN\fR] [\fB\-\-retry\-delay \fISECONDS\fR] [\fB\-\-retry\-backoff \fIFACTOR\fR] [\fB\-\-order \fIN\fR] [\fB\-\-notify\-on\-failure\fR] [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR] \-\- \fICOMMAND\fR [\fIARG\fR...]
+.B udevmon actions add (\-\-device \fINAME\fR ... | \-\-tag \fINAME\fR ...) \fIEVENT\fR[,\fIEVENT\fR...] [\fB\-\-name \fINAME\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-all\-tags\fR] [\fB\-\-detach\fR] [\fB\-\-lock \fINAME\fR] [\fB\-\-retries \fIN\fR] [\fB\-\-retry\-delay \fISECONDS\fR] [\fB\-\-retry\-backoff \fIFACTOR\fR] [\fB\-\-env \fINAME=VALUE\fR ...] [\fB\-\-cwd \fIDIR\fR] [\fB\-\-order \fIN\fR] [\fB\-\-notify\-on\-failure\fR] [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR] \-\- \fICOMMAND\fR [\fIARG\fR...]
 Add an action.
 Options go before the
 .BR \-\- ;
@@ -857,6 +862,12 @@ seconds (default 1) before the first retry, and
 times longer before each one after it (default 1: always the same); never after a
 timeout (see
 .BR udevmon.toml (5)).
+.B \-\-env
+.I NAME=VALUE
+(repeatable) sets an environment variable for the command, and
+.B \-\-cwd
+.I DIR
+the folder it starts in (both may use placeholders).
 .B \-\-order
 sets the action's
 .BR order :
@@ -882,7 +893,7 @@ An action created by hand without a
 .B name
 line cannot be removed this way; edit the file.
 .TP
-.B udevmon actions set \fINAME\fR [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR | \fB\-\-default\-unnamed\fR] [\fB\-\-on \fIEVENTS\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-add\-device \fINAME\fR ...] [\fB\-\-remove\-device \fINAME\fR ...] [\fB\-\-add\-tag \fINAME\fR ...] [\fB\-\-remove\-tag \fINAME\fR ...] [\fB\-\-all\-tags\fR | \fB\-\-any\-tags\fR] [\fB\-\-detach\fR | \fB\-\-no\-detach\fR] [\fB\-\-lock \fINAME\fR | \fB\-\-no\-lock\fR] [\fB\-\-retries \fIN\fR] [\fB\-\-retry\-delay \fISECONDS\fR] [\fB\-\-retry\-backoff \fIFACTOR\fR] [\fB\-\-order \fIN\fR] [\fB\-\-notify\-on\-failure\fR | \fB\-\-no\-notify\-on\-failure\fR] [\fB\-\- \fICOMMAND\fR ...]
+.B udevmon actions set \fINAME\fR [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR | \fB\-\-default\-unnamed\fR] [\fB\-\-on \fIEVENTS\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-add\-device \fINAME\fR ...] [\fB\-\-remove\-device \fINAME\fR ...] [\fB\-\-add\-tag \fINAME\fR ...] [\fB\-\-remove\-tag \fINAME\fR ...] [\fB\-\-all\-tags\fR | \fB\-\-any\-tags\fR] [\fB\-\-detach\fR | \fB\-\-no\-detach\fR] [\fB\-\-lock \fINAME\fR | \fB\-\-no\-lock\fR] [\fB\-\-retries \fIN\fR] [\fB\-\-retry\-delay \fISECONDS\fR] [\fB\-\-retry\-backoff \fIFACTOR\fR] [\fB\-\-env \fINAME=VALUE\fR ...] [\fB\-\-unset\-env \fINAME\fR ...] [\fB\-\-cwd \fIDIR\fR | \fB\-\-no\-cwd\fR] [\fB\-\-order \fIN\fR] [\fB\-\-notify\-on\-failure\fR | \fB\-\-no\-notify\-on\-failure\fR] [\fB\-\- \fICOMMAND\fR ...]
 Change an action without removing and adding it again.
 .B \-\-on
 replaces the events (comma\-separated).
@@ -939,6 +950,14 @@ and
 .B \-\-retry\-backoff
 change the retries (\fB\-\-retries 0\fR removes them, and
 \fB\-\-retry\-backoff 1\fR the back-off).
+.B \-\-env
+sets or changes an environment variable and
+.B \-\-unset\-env
+removes one;
+.B \-\-cwd
+sets the starting folder and
+.B \-\-no\-cwd
+goes back to the home folder.
 .B \-\-order
 changes the order
 .RB ( "\-\-order 50" ,
@@ -1011,23 +1030,43 @@ and
 A feature name is added when its capability arrives and never reused.
 .SS "Shell completion"
 .TP
-.B udevmon completion bash
-Print the bash completion script.
-For a one\-off use:
-.BR "source <(udevmon completion bash)" .
+.B udevmon completion bash \fR|\fB zsh \fR|\fB fish
+Print that shell's completion script.
+For a one\-off use in bash or zsh:
+.B "source <(udevmon completion bash)"
+or
+.BR "source <(udevmon completion zsh)" ;
+in fish,
+.BR "udevmon completion fish | source" .
 .TP
-.B udevmon completion install \fR[\fB\-\-dest \fIFILE\fR]
-Write the script to
+.B udevmon completion install \fR[\fB\-\-shell \fISHELL\fR] [\fB\-\-dest \fIFILE\fR]
+Write the script for
+.I SHELL
+.RB ( bash ,
+the default,
+.B zsh
+or
+.BR fish )
+where it loads it: for bash
 .I ~/.local/share/bash\-completion/completions/udevmon
 (or under
-.BR $XDG_DATA_HOME ).
-Open a new terminal to use it.
-The location is loaded automatically when the
+.BR $XDG_DATA_HOME ),
+loaded automatically when the
 .B bash\-completion
-package is installed.
+package is installed; for zsh
+.IR ~/.local/share/zsh/site\-functions/_udevmon ,
+which zsh finds when that folder is in its
+.B fpath
+(the command prints the line to add to
+.IR ~/.zshrc );
+for fish
+.I ~/.config/fish/completions/udevmon.fish
+(or under
+.BR $XDG_CONFIG_HOME ).
+Open a new terminal to use it.
 .TP
-.B udevmon completion uninstall \fR[\fB\-\-dest \fIFILE\fR]
-Remove the installed script, if it is udevmon's own.
+.B udevmon completion uninstall \fR[\fB\-\-shell \fISHELL\fR] [\fB\-\-dest \fIFILE\fR]
+Remove that shell's installed script, if it is udevmon's own.
 .PP
 Completion knows the commands, options and (from your configuration) device,
 tag and action names, event lists and
@@ -1197,7 +1236,11 @@ The unit written by
 .TP
 .I ~/.local/share/bash\-completion/completions/udevmon
 The completion script written by
-.BR "completion install" .
+.BR "completion install"
+(for zsh
+.IR ~/.local/share/zsh/site\-functions/_udevmon ,
+for fish
+.IR ~/.config/fish/completions/udevmon.fish ).
 .SH ENVIRONMENT
 .TP
 .B XDG_CONFIG_HOME

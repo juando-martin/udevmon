@@ -112,7 +112,16 @@ filesystem that disappears while mounted fires `unmounted` (as before, so action
 written for it keep working) and then `removed`, both with `surprise = "1"` and the
 properties the filesystem had (including `mountpoint`). Nothing fires for a
 filesystem that was not mounted, nor a second time. The USB device's own
-`disconnected` comes separately from udev, in either order.
+`disconnected` comes separately from udev, in either order, and says whether
+it was a surprise too: when a filesystem is mounted, the udisks tracker finds
+the USB device its block device sits on by walking the block device's sysfs
+ancestors up to the `usb`/`usb_device` one (`udisks.usb_parent`, recorded then,
+since sysfs is gone after a pull). The daemon gives `disconnected` `surprise =
+"1"` when a filesystem on that USB device is still mounted, or vanished while
+mounted within `SURPRISE_WINDOW` (5 s) before (udisks reported first), else
+`"0"` (`UdisksTracker.surprise_for`). A device with no USB parent (an internal
+disk) is never linked; serials are not compared, so a device without one
+works too.
 
 ### 4.2 Normalized properties
 
@@ -125,6 +134,8 @@ USB devices (udev, `usb/usb_device`):
 - `vendor`, `model` — `ID_VENDOR_FROM_DATABASE`/`ID_VENDOR`, `ID_MODEL_FROM_DATABASE`/`ID_MODEL`
 - `port_path` — sysfs device name, e.g. `2-1.3` (physical port)
 - `devnode`, `syspath`, `subsystem`, `devtype` — as reported
+- `surprise` — on `disconnected` only: `"1"` when a filesystem on it was still
+  mounted (or vanished while mounted just before), `"0"` otherwise (§4.1)
 - `udev_<prop>` — every raw udev property, lowercased (e.g. `udev_id_input_keyboard`) — an escape hatch for device classes with no normalized keys. As a placeholder
 `{udev_<prop>}` is accepted for every event (whether the thing has it is known only at
 run time: a missing one skips the action, like any unavailable placeholder); it is
@@ -137,7 +148,8 @@ Filesystems (udisks):
 - `devnode` — `Block.Device`
 - `mountpoint` — first entry of `Filesystem.MountPoints` (mount/unmount/removed events)
 - `surprise` — `"1"` when the filesystem vanished while mounted, `"0"` after a clean
-  unmount; only on `unmounted` and `removed` events
+  unmount; only on `unmounted` and `removed` events (and, for the USB device, on
+  `disconnected`)
 - `drive_vendor`, `drive_model`, `drive_serial` — `Drive` of the block device
 - `instance` — one value per mount (`fs-<start>-<n>`, new for each mount, kept from
   `mounted` or `startup` to `unmounted`/`removed`/`shutdown`)
@@ -325,12 +337,21 @@ A device may have `vars`, a table of `name = "value"` (names: lowercase letters,
 digits and `_`, not starting with a digit; integer values become text). A command
 may use `{var_NAME}`, and the environment gets `UDEVMON_VAR_NAME`, with the values of
 the device the job runs for: the listed device that applies for a `device` action,
-the first matching named device for a `tag` action. A thing that matches no device
-has none, so `{var_NAME}` is unavailable and the action is skipped (logged like any
-missing placeholder). Loading the configuration fails when a command uses
-`{var_NAME}` and no device defines `NAME`; `check` warns for each device the action
-can reach (its own devices, or the devices that carry its tags explicitly) that does
-not, and for an `allow_unnamed` action that uses a variable. Variables are written
+the first matching named device for a `tag` action.
+
+A declared tag may have `vars` too, defaults that a device's own override
+(`config.variables_for`): a `tag` action gets the defaults of the tag it runs
+through (`Job.tag`), a `device` action those of the device's explicit `tags` in
+the order listed (the first that sets a name wins; rule tags give none), and then
+the device's `vars` replace any of them. A thing that matches no device has only
+its tag's defaults, so another `{var_NAME}` is unavailable and the action is
+skipped (logged like any missing placeholder). Loading the configuration fails
+when a command uses `{var_NAME}` and no device or tag defines `NAME`; `check`
+warns for each device the action can reach (its own devices, or the devices that
+carry its tags explicitly) that lacks it after the defaults, for an
+`allow_unnamed` action that uses a variable one of its tags does not set, and
+notes a device two of whose tags set one variable differently (when the device
+does not set it itself). Variables are written
 by the user, so they are counted as trusted placeholders for that warning (§6.2).
 
 ## 6. Configuration
@@ -408,11 +429,17 @@ Rules:
   unnamed things, so such an action run for one is skipped. `{tag}` exists only for
   tag actions.
 - Actions run with environment `UDEVMON_EVENT`, `UDEVMON_DEVICE` (when named),
-  `UDEVMON_TAG` (tag actions), and `UDEVMON_<KEY>` for every property,
-  cwd = `$HOME`, stdin = `/dev/null`. `UDEVMON_SCRIPT_DIR` is the folder of
-  the expanded `run[0]` when it contains a `/` (after `script_dir` resolution;
-  `~` expanded, relative to `$HOME`), the folder as given, symlinks not
-  resolved; unset for a bare name left to `PATH`.
+  `UDEVMON_TAG` (tag actions), and `UDEVMON_<KEY>` for every property, then
+  the action's own `env` (a table of `NAME = "value"`; names
+  `[A-Za-z_][A-Za-z0-9_]*`, `UDEVMON_*` refused; values with placeholders
+  filled in), cwd = the action's `cwd` (placeholders and `~` expanded,
+  relative to `$HOME`) or `$HOME`, stdin = `/dev/null`. Placeholders in
+  `env` and `cwd` are checked like the command's (`Action.templates`); one
+  unavailable at run time skips the action, and a `cwd` that does not exist
+  is a failure to start. `UDEVMON_SCRIPT_DIR` is the folder of the expanded
+  `run[0]` when it contains a `/` (after `script_dir` resolution; `~`
+  expanded, relative to the starting folder), the folder as given, symlinks
+  not resolved; unset for a bare name left to `PATH`.
 - The graphical session's variables (`DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`,
   `DBUS_SESSION_BUS_ADDRESS`, `XDG_SESSION_TYPE`, `XDG_CURRENT_DESKTOP`,
   `XDG_SESSION_DESKTOP`, `DESKTOP_SESSION`) are looked up for every action
@@ -573,8 +600,15 @@ printed by `check` only. Neither changes the exit status.
   different files the note says the drop-in file names decide it. With the
   smaller one `ignored`, the note says nothing ever runs for the other; a
   larger one that is `ignored` (ignoring some of a broad device's things)
-  gives no note. Only containment is detected: matches on different keys
-  that could meet on one thing are not;
+  gives no note;
+- note: two devices whose matches use different keys but could select one
+  thing (`config.could_meet`): both name only keys of one kind of thing
+  (`thing_kind`: USB-only keys or raw `udev_*` ones, or filesystem-only keys;
+  from `KNOWN_KEYS`), and each key they share has a value in common. Keys of
+  different kinds can never meet (a USB device and a filesystem are separate
+  things), so such pairs, and pairs that differ on a shared key, give no note.
+  It says which keys each has, and as above which device a tag action gets, or
+  that nothing runs when one is `ignored`;
 - note: a `lock` name used by one action only (it then only orders that
   action's own runs), naming the closest other lock name when there is one
   (`difflib`), in case of a typo;
@@ -604,7 +638,7 @@ bare name without editing `config.toml`, and cannot change what a bare name mean
 in another file's actions (a virtual environment's `python3`, say). `check` warns
 about such a folder that is not a folder, naming its file.
 `config.program_lookup` says how and where an action's program is found, for
-`actions list --json`: `path` (a `/` in `run[0]`; relative to the home folder,
+`actions list --json`: `path` (a `/` in `run[0]`; relative to `cwd` or the home folder,
 where commands start), `script_dir`, `PATH` (a bare name without any `script_dir`:
 only the daemon's environment decides) or `placeholder`; with the file for the
 first two, None when it is missing.
@@ -798,7 +832,8 @@ udevmon tags list|show [--json]
 udevmon tags add NAME [--match KEY=VALUE ...] [--description TEXT]
                      [--file DROPIN]
 udevmon tags set NAME [--match KEY=VALUE ... | --no-rule]
-                     [--description TEXT]
+                     [--description TEXT] [--var N=V ...]
+                     [--unset-var N ...]
 udevmon tags remove NAME
 udevmon actions list [--json]
 udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT ...]
@@ -838,10 +873,10 @@ udevmon service install [--now] [--dest DIR]
                                         (and optionally enable it)
 udevmon service uninstall [--dest DIR]
                                         stop, disable, remove the unit
-udevmon completion bash                 print the bash completion script
-udevmon completion install [--dest FILE]
+udevmon completion bash|zsh|fish        print that shell's script
+udevmon completion install [--shell SHELL] [--dest FILE]
                                         install it for the user (§8.2)
-udevmon completion uninstall [--dest FILE]
+udevmon completion uninstall [--shell SHELL] [--dest FILE]
                                         remove the installed script
 ```
 
@@ -929,21 +964,29 @@ Scan and the daemon are independent listeners and can run at the same time.
 
 ### 8.2 Shell completion
 
-`udevmon completion bash` prints a bash script; `udevmon completion install
-[--dest FILE]` writes it to `$XDG_DATA_HOME/bash-completion/completions/udevmon`
-(default `~/.local/share/...`), which bash-completion loads on demand.
+`udevmon completion bash|zsh|fish` prints that shell's script; `udevmon
+completion install [--shell SHELL] [--dest FILE]` (default `bash`) writes it
+where the shell finds it (`completion.default_install_path`): bash-completion's
+`$XDG_DATA_HOME/bash-completion/completions/udevmon` (default
+`~/.local/share/...`), loaded on demand; zsh's
+`$XDG_DATA_HOME/zsh/site-functions/_udevmon`, a `#compdef` file that folder
+must be in `fpath` for (the command prints the line to add; the script also
+works when sourced); fish's `$XDG_CONFIG_HOME/fish/completions/udevmon.fish`,
+loaded on demand.
 
-The script is a few lines that call a hidden helper, `udevmon _complete CWORD
-WORD...` (not listed in `--help`), with bash's `COMP_WORDS`. The helper
+Each script is a few lines that call a hidden helper, `udevmon _complete CWORD
+WORD...` (not listed in `--help`), with the words of the command line (bash's
+`COMP_WORDS`; zsh's `words` with `CURRENT - 1`; fish's `commandline -opc`
+plus the current token). The helper
 (`completion.py`) reads the real argparse parser, so completion follows the
 CLI automatically, and prints a mode line followed by candidates:
 
 - `words`: offer the candidates; `nospace`: the same, without a trailing space
-  (`key=`); `files` / `dirs`: let bash complete paths.
+  (`key=`); `files` / `dirs`: let the shell complete paths.
 
-`udevmon completion uninstall [--dest FILE]` removes that file. It refuses a file
-that does not start with the script's header line, and does nothing (exit 0) when
-the file is absent.
+`udevmon completion uninstall [--shell SHELL] [--dest FILE]` removes that file.
+It refuses a file whose first two lines lack the script's mark
+(`completion.MARKS`), and does nothing (exit 0) when the file is absent.
 
 What it completes:
 
@@ -1331,33 +1374,9 @@ no `--config-dir` or `--socket` option is needed.
 Nothing here is started. Ordered roughly from small to large.
 
 **Order.** Some items depend on others: a GUI and socket activation build on
-the control socket (§8.9); the link from a USB device to its filesystems
-(surprise disconnect) comes before the cross-key `check` note, which reuses
-it; a declared source protocol comes before the `changed` event and other
-sources; the root udev rule comes last, as it changes how the daemon starts.
-
-**Small**
-
-- A `check` note for two devices whose matches use different keys but could
-  meet on one thing (`fs_uuid` and `drive_serial`); only containment is noted
-  today (§6.2). Needs to know which keys a USB device and a filesystem have,
-  or it would note nearly every pair.
-- zsh and fish completion: only a small wrapper per shell around
-  `udevmon _complete`.
-
-**Medium**
-
-- Tag-level default variables that devices override (needs a rule for devices
-  in several tags).
-- Per-action environment and working directory.
-
-**Needs a design decision**
-
-- Marking a USB device's `disconnected` as a surprise when one of its
-  filesystems was still mounted. Needs a link from the USB device to its
-  filesystems: `drive_serial == serial` when both exist, or walking the block
-  device's sysfs path up to its USB device (exact, more work, and it also
-  works for other subsystems).
+the control socket (§8.9); a declared source protocol comes before the
+`changed` event and other sources; the root udev rule comes last, as it
+changes how the daemon starts.
 
 **Large**
 

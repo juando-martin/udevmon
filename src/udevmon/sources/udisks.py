@@ -44,12 +44,41 @@ def _with_surprise(endpoint: Endpoint, surprise: bool) -> Endpoint:
                     {**endpoint.props, "surprise": "1" if surprise else "0"})
 
 
-class UdisksTracker:
-    """Mirrors the udisks object tree and turns changes into mount events."""
+#: Seconds after a filesystem vanished while mounted during which its USB device's
+#: ``disconnected`` still counts as a surprise (udev and udisks report in either order).
+SURPRISE_WINDOW = 5.0
 
-    def __init__(self):
+
+def usb_parent(devnode: str) -> str | None:
+    """The sysfs path of the USB device a block device (``/dev/sdb1``) sits on, walking up
+    its sysfs ancestors; None when it is not on USB or cannot be looked up."""
+    try:
+        import pyudev
+        dev = pyudev.Devices.from_device_file(pyudev.Context(), devnode)
+        for parent in dev.ancestors:
+            if parent.subsystem == "usb" and parent.properties.get("DEVTYPE") == "usb_device":
+                return parent.sys_path
+    except Exception:                                # gone already, or not a device file
+        return None
+    return None
+
+
+class UdisksTracker:
+    """Mirrors the udisks object tree and turns changes into mount events.
+
+    With ``find_usb`` (devnode -> the USB device's sysfs path, like :func:`usb_parent`) it
+    also remembers which USB device each mounted filesystem is on, for
+    :meth:`surprise_for`.
+    """
+
+    def __init__(self, find_usb: Callable[[str], str | None] | None = None,
+                 clock: Callable[[], float] = time.monotonic):
         self.objects: dict[str, dict[str, dict]] = {}
         self._mounted: dict[str, Endpoint] = {}
+        self._find_usb = find_usb
+        self._clock = clock
+        self._usb_of: dict[str, str] = {}         # mounted object path -> its USB device
+        self._vanished: dict[str, float] = {}     # USB device -> when a mount on it vanished
         # One `instance` per mount: the same in mounted, startup, unmounted, removed and
         # shutdown of that mount, and new for the next one. Unique while the daemon runs.
         self._instances: dict[str, str] = {}
@@ -87,6 +116,22 @@ class UdisksTracker:
         props["instance"] = self._instance(path)
         return Endpoint("udisks", path, props)
 
+    def _note_usb(self, path: str, endpoint: Endpoint) -> None:
+        devnode = endpoint.props.get("devnode")
+        if self._find_usb is not None and devnode:
+            usb = self._find_usb(devnode)
+            if usb:
+                self._usb_of[path] = usb
+
+    def surprise_for(self, usb_syspath: str) -> bool:
+        """Whether a ``disconnected`` of the USB device at ``usb_syspath`` is a surprise: a
+        filesystem on it is still mounted, or vanished while mounted within
+        :data:`SURPRISE_WINDOW` seconds."""
+        if any(usb == usb_syspath for path, usb in self._usb_of.items() if path in self._mounted):
+            return True
+        when = self._vanished.get(usb_syspath)
+        return when is not None and self._clock() - when <= SURPRISE_WINDOW
+
     def _mount_points(self, path: str) -> list[str]:
         return _mountpoints(self.objects.get(path, {}).get(I_FS, {}).get("MountPoints"))
 
@@ -101,6 +146,7 @@ class UdisksTracker:
             if mps:
                 self._new_instance(path)
                 self._mounted[path] = self._endpoint(path, mps[0])
+                self._note_usb(path, self._mounted[path])
 
     def _reconcile(self, path: str) -> list[Event]:
         mps = self._mount_points(path)
@@ -109,9 +155,11 @@ class UdisksTracker:
             self._new_instance(path)                     # a new mount, a new instance
             endpoint = self._endpoint(path, mps[0])
             self._mounted[path] = endpoint
+            self._note_usb(path, endpoint)
             return [Event(MOUNTED, endpoint)]
         if not mps and was is not None:                 # a clean unmount
             del self._mounted[path]
+            self._usb_of.pop(path, None)
             self._instances.pop(path, None)
             return [Event(UNMOUNTED, _with_surprise(was, False))]
         return []
@@ -144,6 +192,12 @@ class UdisksTracker:
             # `unmounted` still fires, as before, then `removed`; both say surprise = "1"
             gone = _with_surprise(self._mounted.pop(path), True)
             self._instances.pop(path, None)
+            usb = self._usb_of.pop(path, None)
+            if usb:
+                now = self._clock()
+                self._vanished = {k: t for k, t in self._vanished.items()
+                                  if now - t <= SURPRISE_WINDOW}
+                self._vanished[usb] = now
             events.append(Event(UNMOUNTED, gone))
             events.append(Event(REMOVED, gone))
         for name in iface_names:
@@ -192,7 +246,7 @@ class UdisksSource:
         self.announce_present = announce_present
         self.include_system = include_system
         self._announced = False
-        self.tracker = UdisksTracker()
+        self.tracker = UdisksTracker(find_usb=usb_parent)
         self._emit: Callable[[Event], None] | None = None
         self._conn = None
         self._subs: list[int] = []
@@ -285,7 +339,7 @@ class UdisksSource:
     def _vanished(self, conn, name) -> None:
         log.info("udisks2 not available; filesystem events paused until it appears")
         self._unsubscribe()
-        self.tracker = UdisksTracker()
+        self.tracker = UdisksTracker(find_usb=usb_parent)
 
     def _signal(self, conn, sender, path, iface, signal, params, _data=None) -> None:
         try:

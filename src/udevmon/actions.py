@@ -42,15 +42,15 @@ class Result(NamedTuple):
 
 def build_env(event: Event, device: str | None, tag: str | None = None,
               variables=None, state_dir: str | None = None,
-              program: str | None = None) -> dict[str, str]:
+              program: str | None = None, cwd: str | None = None) -> dict[str, str]:
     """The environment for an action: the daemon's own plus ``UDEVMON_EVENT``,
     ``UDEVMON_DEVICE``, ``UDEVMON_TAG``, ``UDEVMON_<PROPERTY>``, ``UDEVMON_VAR_<NAME>``,
     ``UDEVMON_STATE_DIR`` and ``UDEVMON_STATE_ROOT`` (its parent, shared by every
     instance), and ``UDEVMON_SCRIPT_DIR``, each when it applies.
 
     ``UDEVMON_SCRIPT_DIR`` is the folder of ``program`` (the command's ``argv[0]``) when
-    that is a path; a relative one counts from the home folder, where actions run. A bare
-    name left to ``PATH`` gives none.
+    that is a path; a relative one counts from ``cwd`` (default the home folder), where
+    the command starts. A bare name left to ``PATH`` gives none.
     """
     env = dict(os.environ)
     env["UDEVMON_EVENT"] = event.kind
@@ -66,7 +66,7 @@ def build_env(event: Event, device: str | None, tag: str | None = None,
         env["UDEVMON_STATE_DIR"] = state_dir
         env["UDEVMON_STATE_ROOT"] = os.path.dirname(state_dir.rstrip("/"))
     if program and "/" in program:
-        path = os.path.join(os.path.expanduser("~"), os.path.expanduser(program))
+        path = os.path.join(cwd or os.path.expanduser("~"), os.path.expanduser(program))
         env["UDEVMON_SCRIPT_DIR"] = os.path.dirname(os.path.abspath(path))
     return env
 
@@ -92,6 +92,8 @@ def run_action(action: Action, event: Event, device: str | None, tag: str | None
         props["tag"] = tag
     try:
         argv = expand(action.run, props)
+        own_env = dict(zip(action.env, expand(action.env.values(), props)))
+        cwd = expand([action.cwd], props)[0] if action.cwd else None
     except KeyError as e:
         log.error("action %r skipped: placeholder(s) %s unavailable for event %r",
                   action.name, e.args[0], event.kind)
@@ -100,13 +102,16 @@ def run_action(action: Action, event: Event, device: str | None, tag: str | None
     if dry_run:
         log.info("[dry-run] action %r would run: %s", action.name, argv)
         return None
-    log.info("action %r: %s %s", action.name, "starting (detached)" if action.detach
-             else "running", argv)
-    env = build_env(event, device, tag, variables, state_dir, program=argv[0])
+    log.info("action %r: %s %s%s", action.name, "starting (detached)" if action.detach
+             else "running", argv, f" in {cwd}" if cwd else "")
+    home = os.path.expanduser("~")
+    workdir = os.path.join(home, cwd) if cwd else home     # a relative cwd counts from home
+    env = build_env(event, device, tag, variables, state_dir, program=argv[0], cwd=workdir)
+    env.update(own_env)
     session.update(env)                  # DISPLAY etc., which a service may not have had at start
     try:
         proc = subprocess.Popen(
-            argv, cwd=os.path.expanduser("~"), env=env,
+            argv, cwd=workdir, env=env,
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, errors="replace", start_new_session=True)
     except OSError as e:

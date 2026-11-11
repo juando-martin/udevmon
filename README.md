@@ -109,6 +109,12 @@ instead:
 source <(udevmon completion bash)
 ```
 
+For **zsh** or **fish**, add `--shell zsh` or `--shell fish`. Fish loads
+`~/.config/fish/completions/udevmon.fish` by itself. Zsh gets
+`~/.local/share/zsh/site-functions/_udevmon`, and that folder must be in your
+`fpath` (the command says how), or put `source <(udevmon completion zsh)`
+in `~/.zshrc` after `compinit`.
+
 It completes commands, sub-commands and options, and it reads your config
 for the names that belong in each place:
 
@@ -406,6 +412,8 @@ USB devices:
 - `vendor`, `model` — e.g. `SanDisk`, `Cruzer Blade`; human-readable.
 - `port_path` — e.g. `3-1.2`; the physical port/hub position.
 - `devnode`, `syspath` — e.g. `/dev/bus/usb/003/007`.
+- `surprise` — on `disconnected` only: `1` if a filesystem on the device was
+  still mounted when it was pulled, `0` otherwise.
 - `udev_<name>` — e.g. `udev_id_input_keyboard`; every raw udev property, lowercased.
   In a command, `{udev_id_model}` is filled in from the event; whether a thing has
   the property is only known when it arrives, so the action is skipped, with an
@@ -418,7 +426,7 @@ Filesystems:
 - `fs_label`, `fs_type` — e.g. `BACKUP`, `ext4`; labels are not unique.
 - `devnode` — e.g. `/dev/sdb1`.
 - `mountpoint` — e.g. `/media/me/BACKUP`; only on mounted/unmounted/removed (and mounted startup/shutdown) events.
-- `surprise` — `1` if the filesystem vanished while mounted, `0` after a clean unmount; only on `unmounted` and `removed`. It can be used in commands but not in tag rules.
+- `surprise` — `1` if the filesystem vanished while mounted, `0` after a clean unmount; only on `unmounted` and `removed` (and on the USB device's `disconnected`, see above). It can be used in commands but not in tag rules.
 - `drive_vendor`, `drive_model`, `drive_serial` — of the physical drive holding it.
 
 On both kinds, added by udevmon itself:
@@ -677,9 +685,21 @@ udevmon devices set music --var keep=14 --unset-var old
 `--var NAME=VALUE` sets (or changes) a variable and keeps the others; use it
 more than once for several. Names are lowercase letters, digits and `_`.
 
-- **Only named devices have variables.** A thing matched only by a tag rule has
-  none, so an action that uses one is skipped for it, and `check` warns when an
-  `allow_unnamed` action uses a variable.
+- **A tag can set defaults** that its devices override:
+
+  ```toml
+  [tags.backup]
+  vars = { keep = "7" }
+  ```
+
+  An action with `tag` gets the defaults of the tag it runs through; an
+  action with `device` gets those of the device's tags in the order its
+  `tags` lists them (the first wins; `check` notes two tags that disagree).
+  `udevmon tags set backup --var keep=7` sets one.
+- **Unnamed things have only their tag's defaults.** A thing matched only by a
+  tag rule has no device, so an action that uses another variable is skipped
+  for it, and `check` warns when an `allow_unnamed` action uses a variable
+  none of its tags sets.
 - **A device that lacks the value** is skipped with an error (as for any missing
   placeholder), never run with an empty value. `check` warns about every device an
   action can reach that does not define a variable it uses, and rejects one that
@@ -1038,6 +1058,9 @@ file and replaces or deletes it whole, without touching your `config.toml`.
   does too. `{device}` of a tag action is then the one read first, so with
   the two in different files the file names decide it. `udevmon check`
   notes every such pair; with one of them `ignored`, it says nothing runs.
+  It also notes two devices that match on different keys that one thing
+  could have together (one on `fs_uuid`, the other on `drive_serial`), since
+  only the drive itself shows whether they meet.
 - **Its own `script_dir`.** A drop-in's `[daemon] script_dir` says where its
   own actions' programs live, so a program that installs a drop-in can use bare
   names without asking you to edit `config.toml`. Those folders are searched
@@ -1206,7 +1229,8 @@ The folder is only kept for events that carry an instance (everything udevmon se
 does). A detached action must not rely on it after the last event's actions have
 finished, and an action of the connect event that is still running when the
 disconnect's actions end may find it gone; give both the same `lock` to keep them apart.
-There is no link between a USB device and its filesystems: each has its own instance.
+A USB device and its filesystems each have their own instance; the only link
+between them is `surprise` on `disconnected`.
 
 ### Trying again (`retries`)
 
@@ -1256,6 +1280,26 @@ attempts. `retries`, `retry_delay` and `retry_backoff` cannot be combined with
 `detach`. `udevmon actions set NAME --retries N --retry-delay S
 --retry-backoff F` changes them (`--retries 0` removes the retries,
 `--retry-backoff 1` the back-off).
+
+### Environment and starting folder (`env`, `cwd`)
+
+An action can set environment variables of its own and the folder its command
+starts in (your home folder by default). Both may use placeholders:
+
+```toml
+[[actions]]
+device = "backup-disk"
+on = ["mounted"]
+cwd = "{mountpoint}"
+env = { LANG = "C", RESTIC_REPOSITORY = "{mountpoint}/restic" }
+run = ["restic", "backup", "/home"]
+```
+
+`actions add --env NAME=VALUE --cwd DIR` sets them, and `actions set` has
+also `--unset-env NAME` and `--no-cwd`. The `UDEVMON_*` names are udevmon's
+own and cannot be set. A relative program path (`./run.sh`) counts from `cwd`,
+and a folder that does not exist makes the action fail to start (the
+failure output and `notify_on_failure` say so). `explain` shows both.
 
 ### Being told when an action fails (`notify_on_failure`)
 
@@ -1367,7 +1411,7 @@ udevmon devices include NAME TAG...     stop opting it out
 udevmon tags list | show NAME | remove NAME
 udevmon tags add NAME [--match KEY=VALUE ...] [--description TEXT]
                       [--file DROPIN]
-udevmon tags set NAME [--match KEY=VALUE ... | --no-rule]
+udevmon tags set NAME [--match KEY=VALUE ... | --no-rule] [--var N=V ...]
                       [--description TEXT]
 udevmon actions list | remove NAME
 udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT...]
@@ -1402,8 +1446,8 @@ udevmon trigger DEVICE [EVENT] [--wait] [--json]
                                         run its actions now (see above)
 udevmon service install [--now]         install the systemd user service
 udevmon service uninstall               stop and remove it
-udevmon completion bash | install | uninstall
-                                         bash tab completion
+udevmon completion bash | zsh | fish | install | uninstall
+                    [--shell SHELL]     tab completion
 ```
 
 `man udevmon` describes each command and option in full.

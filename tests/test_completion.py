@@ -41,6 +41,7 @@ name = "note"
 device = "disk"
 on = ["mounted"]
 run = ["true"]
+env = { LANG = "C" }
 """
 
 
@@ -91,7 +92,10 @@ class EngineTests(unittest.TestCase):
                          ["add", "disable", "enable", "list", "remove", "rename", "set"])
         self.assertEqual(self.words("udevmon tags "), ["add", "list", "remove", "rename", "set", "show"])
         self.assertEqual(self.words("udevmon service "), ["install", "uninstall"])
-        self.assertEqual(self.words("udevmon completion "), ["bash", "install", "uninstall"])
+        self.assertEqual(self.words("udevmon completion "),
+                         ["bash", "fish", "install", "uninstall", "zsh"])
+        self.assertEqual(self.words("udevmon completion install --shell "),
+                         ["bash", "fish", "zsh"])
         self.assertEqual(self.words("udevmon devices sh"), ["show"])
         self.assertEqual(self.words("udevmon devices s"), ["set", "show"])
 
@@ -183,7 +187,8 @@ class EngineTests(unittest.TestCase):
                           "--timeout", "--no-reload", "--help", "--add-device",
                           "--remove-device", "--add-tag", "--remove-tag", "--all-tags", "--any-tags",
                           "--detach", "--no-detach", "--lock", "--no-lock", "--retries",
-                          "--retry-delay", "--retry-backoff", "--order", "--notify-on-failure",
+                          "--retry-delay", "--retry-backoff", "--env", "--unset-env", "--cwd", "--no-cwd",
+                          "--order", "--notify-on-failure",
                           "--no-notify-on-failure", "--dry-run"})
         self.assertEqual(self.words("udevmon actions set log --timeout "), [])   # free text
         self.assertIn("--no-reload", self.words("udevmon devices ignore --"))
@@ -399,6 +404,42 @@ class InstallTests(unittest.TestCase):
             self.assertIn(str(target), out)
             rc, out = self.run_cli("completion", "install", "--dest", str(Path(d) / "x" / "y"))
             self.assertEqual((Path(d) / "x" / "y").read_text(), completion.SCRIPT)
+
+    def test_zsh_and_fish(self):
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.dict(os.environ, {"XDG_DATA_HOME": f"{d}/data",
+                                             "XDG_CONFIG_HOME": f"{d}/conf"}):
+            for shell, target, script in (
+                    ("zsh", Path(d, "data", "zsh", "site-functions", "_udevmon"),
+                     completion.ZSH_SCRIPT),
+                    ("fish", Path(d, "conf", "fish", "completions", "udevmon.fish"),
+                     completion.FISH_SCRIPT)):
+                with self.subTest(shell):
+                    self.assertEqual(self.run_cli("completion", shell), (0, script))
+                    rc, out = self.run_cli("completion", "install", "--shell", shell)
+                    self.assertEqual((rc, target.read_text()), (0, script))
+                    if shell == "zsh":
+                        self.assertIn(f"fpath=({target.parent} $fpath)", out)
+                    rc, out = self.run_cli("completion", "uninstall", "--shell", shell)
+                    self.assertEqual(rc, 0)
+                    self.assertFalse(target.exists())
+
+    def test_uninstall_leaves_a_stranger_alone(self):
+        with tempfile.TemporaryDirectory() as d:
+            other = Path(d) / "udevmon.fish"
+            other.write_text("# someone's own completion\n")
+            with contextlib.redirect_stderr(io.StringIO()):
+                rc, _ = self.run_cli("completion", "uninstall", "--shell", "fish",
+                                     "--dest", str(other))
+            self.assertEqual(rc, 1)
+            self.assertTrue(other.exists())
+
+    def test_the_scripts_call_the_helper(self):
+        for script in (completion.ZSH_SCRIPT, completion.FISH_SCRIPT):
+            self.assertIn("_complete", script)
+        self.assertTrue(completion.ZSH_SCRIPT.startswith("#compdef udevmon\n"))
+        self.assertIn("$((CURRENT - 1))", completion.ZSH_SCRIPT)
+        self.assertIn("complete -c udevmon -f -a '(__udevmon_complete)'", completion.FISH_SCRIPT)
 
 
 @unittest.skipUnless(shutil.which("bash"), "bash is not installed")

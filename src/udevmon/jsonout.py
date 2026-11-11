@@ -54,6 +54,7 @@ def tag_entry(cfg: cfgmod.Config, name: str) -> dict:
     return {"name": name, "description": tag.description if tag else "",
             "declared": tag is not None, "rule": rule,
             "strength": strength(tag.match, wild=True) if tag and tag.match else None,
+            "vars": dict(tag.vars) if tag else {},
             "members": [d.name for d in cfg.devices.values() if name in d.tags],
             "actions": [x.name for x in cfg.actions if name in x.tags],
             **(where(cfg, "tag", name) if tag else {"file": None, "dropin": None})}
@@ -71,6 +72,7 @@ def action_entry(cfg: cfgmod.Config, action: cfgmod.Action) -> dict:
             "retries": action.retries, "retry_delay": action.retry_delay,
             "retry_backoff": action.retry_backoff,
             "order": action.order, "notify_on_failure": action.notify_on_failure,
+            "env": dict(action.env), "cwd": action.cwd,
             "script_dir": list(action.script_dir), "program": program,
             "program_lookup": lookup, **where(cfg, "action", action.name)}
 

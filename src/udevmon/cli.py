@@ -332,6 +332,20 @@ def _actions_for(cfg, device) -> list:
             if device.name in x.devices or set(x.tags) & set(device.tags)]
 
 
+def _parse_env(pairs) -> dict:
+    """``NAME=VALUE`` pairs (``--env``) as a dict; any NAME a command may have."""
+    out = {}
+    for pair in pairs or []:
+        name, sep, value = pair.partition("=")
+        if not sep or not cfgmod.ENV_NAME_RE.fullmatch(name):
+            raise cfgmod.ConfigError([f"--env {pair!r}: use NAME=VALUE (NAME: letters, "
+                                      "digits and _)"])
+        if name.upper().startswith("UDEVMON_"):
+            raise cfgmod.ConfigError([f"--env {name}: UDEVMON_* names are udevmon's own"])
+        out[name] = value
+    return out
+
+
 def _parse_vars(pairs) -> dict:
     """NAME=VALUE pairs -> dict (the last one wins; the value may be empty)."""
     out: dict = {}
@@ -695,6 +709,8 @@ def cmd_actions_set(args):
                      tag_mode=args.tag_mode, detach=args.detach, lock=args.lock,
                      retries=args.retries, retry_delay=args.retry_delay,
                      retry_backoff=args.retry_backoff, order=args.order,
+                     set_env=_guard(_parse_env, args.env), unset_env=args.unset_env,
+                     cwd="" if args.no_cwd else args.cwd,
                      notify_on_failure=args.notify,
                      add_devices=args.add_device, remove_devices=args.remove_device,
                      add_tags=args.add_tag, remove_tags=args.remove_tag)
@@ -702,7 +718,8 @@ def cmd_actions_set(args):
     if (retargeted and targets is None and not args.cmd
             and (args.unnamed, args.on, args.timeout, args.tag_mode, args.detach, args.lock,
                  args.retries, args.retry_delay, args.retry_backoff, args.order,
-                 args.notify) == (None,) * 11):
+                 args.notify, args.env, args.cwd) == (None,) * 13
+            and not args.unset_env and not args.no_cwd):
         print(f"Action {args.name!r} already targets that; nothing changed.")
         return 0
     print(f"Updated action {args.name!r}.")
@@ -837,6 +854,8 @@ def cmd_tags_show(args):
     print(f"  rule: {_rule_text(tag.match) if tag else '(none; explicit members only)'}"
           + (f"  ({strength(tag.match, wild=True)})" if tag and tag.match else ""))
     print(f"  explicit members: {', '.join(d.name for d in cfg.devices.values() if args.name in d.tags) or '-'}")
+    for key, value in (tag.vars if tag else {}).items():
+        print(f"  var {key} = {value!r}")
     for x in cfg.actions:
         if args.name in x.tags:
             allow = {True: "allow_unnamed", False: "named only", None: "named only (not stated)"}
@@ -856,10 +875,11 @@ def cmd_tags_add(args):
 
 @_reloads
 def cmd_tags_set(args):
-    """``udevmon tags set NAME``: change a declared tag's rule or description."""
+    """``udevmon tags set NAME``: change a declared tag's rule, description or variables."""
     rule = _guard(_parse_matches, args.match, allow_lists=True) if args.match else None
     _guard(configedit.set_tag_fields, args.config, args.name, match=rule,
-           clear_rule=args.no_rule, description=args.description)
+           clear_rule=args.no_rule, description=args.description,
+           set_vars=_guard(_parse_vars, args.var), unset_vars=args.unset_var)
     print(f"Updated tag {args.name!r}"
           + (f" (rule {strength(rule, wild=True)})." if rule else ".")
           + (" It has no rule now: only devices that carry it belong to it." if args.no_rule
@@ -891,6 +911,8 @@ def cmd_actions_list(args):
         flag += f" [lock: {x.lock}]" if x.lock else ""
         flag += f" [retries: {x.retries}]" if x.retries else ""
         flag += f" [backoff: {x.retry_backoff:g}]" if x.retries and x.retry_backoff != 1 else ""
+        flag += f" [cwd: {x.cwd}]" if x.cwd else ""
+        flag += f" [env: {', '.join(x.env)}]" if x.env else ""
         flag += f" [order: {x.order}]" if x.order != cfgmod.DEFAULT_ORDER else ""
         flag += " [notify on failure]" if x.notify_on_failure else ""
         off = " [disabled]" if not x.enabled else ""
@@ -959,7 +981,8 @@ def cmd_actions_add(args):
                   args.tag or (), on, args.cmd, args.timeout, args.allow_unnamed, args.tag_mode,
                   args.detach, args.lock, args.retries or 0, args.retry_delay,
                   file=args.file, order=args.order, notify_on_failure=args.notify_on_failure,
-                  retry_backoff=args.retry_backoff)
+                  retry_backoff=args.retry_backoff, env=_guard(_parse_env, args.env),
+                  cwd=args.cwd)
     print(f"Added action {name!r}.")
     return 0
 
@@ -1036,12 +1059,12 @@ def cmd_service_uninstall(args):
 
 def cmd_completion_uninstall(args):
     """``udevmon completion uninstall``: remove the completion script, if it is ours."""
-    from .completion import HEADER, default_install_path
-    dest = args.dest or default_install_path()
+    from .completion import default_install_path, is_ours
+    dest = args.dest or default_install_path(args.shell)
     if not dest.exists():
         print(f"Nothing to remove: {dest} does not exist.")
         return 0
-    if not dest.read_text(errors="replace").startswith(HEADER):
+    if not is_ours(dest.read_text(errors="replace"), args.shell):
         print(f"error: {dest} is not a udevmon completion script; not removing it.",
               file=sys.stderr)
         return 1
@@ -1050,22 +1073,30 @@ def cmd_completion_uninstall(args):
     return 0
 
 
-def cmd_completion_bash(args):
-    """``udevmon completion bash``: print the bash completion script."""
-    from .completion import SCRIPT
-    sys.stdout.write(SCRIPT)
+def cmd_completion_print(args):
+    """``udevmon completion bash|zsh|fish``: print that shell's completion script."""
+    from .completion import SCRIPTS
+    sys.stdout.write(SCRIPTS[args.sub])
     return 0
 
 
 def cmd_completion_install(args):
-    """``udevmon completion install``: write the bash completion script."""
-    from .completion import SCRIPT, default_install_path
-    dest = args.dest or default_install_path()
+    """``udevmon completion install [--shell SHELL]``: write the completion script where the
+    shell finds it."""
+    from .completion import SCRIPTS, default_install_path
+    dest = args.dest or default_install_path(args.shell)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(SCRIPT)
+    dest.write_text(SCRIPTS[args.shell])
     print(f"Wrote {dest}")
     if args.dest is None:
-        print("Open a new terminal (or run: source " + str(dest) + ") to use it.")
+        if args.shell == "zsh":
+            print(f"zsh loads it when {dest.parent} is in fpath: add\n"
+                  f"  fpath=({dest.parent} $fpath)\n"
+                  "to ~/.zshrc before compinit if it is not, then open a new terminal.")
+        elif args.shell == "fish":
+            print("Open a new terminal to use it.")
+        else:
+            print("Open a new terminal (or run: source " + str(dest) + ") to use it.")
     return 0
 
 
@@ -1088,7 +1119,8 @@ FEATURES = ("dropins", "order", "lock", "retries", "notify-on-failure", "vars",
             "edit-dry-run", "version-json", "env-script-dir", "env-state-root", "edit",
             "retry-backoff", "reload-result", "max-workers-commands", "shutdown-retries",
             "trigger-output", "dropin-script-dir", "action-program",
-            "apply", "status")
+            "apply", "status",
+            "action-env-cwd", "disconnect-surprise")
 
 
 def cmd_version(args):
@@ -1401,7 +1433,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="rule pair; repeat a key to allow several values")
     x.add_argument("--description")
     x.set_defaults(fn=cmd_tags_add)
-    x = tg.add_parser("set", help="change a tag's rule or description", parents=[edits])
+    x = tg.add_parser("set", help="change a tag's rule, description or variables",
+                      parents=[edits])
     x.add_argument("name")
     grp = x.add_mutually_exclusive_group()
     grp.add_argument("--match", action="append", metavar="KEY=VALUE",
@@ -1409,6 +1442,10 @@ def build_parser() -> argparse.ArgumentParser:
     grp.add_argument("--no-rule", action="store_true",
                      help="remove the rule (only devices that carry the tag belong to it)")
     x.add_argument("--description", metavar="TEXT", help="new description (empty removes it)")
+    x.add_argument("--var", action="append", metavar="NAME=VALUE",
+                   help="set a default variable for the things it tags (repeatable)")
+    x.add_argument("--unset-var", action="append", default=[], metavar="NAME",
+                   help="remove a variable (repeatable)")
     x.set_defaults(fn=cmd_tags_set)
     x = tg.add_parser("rename", help="rename a tag wherever it is used", parents=[edits])
     x.add_argument("old"); x.add_argument("new"); x.set_defaults(fn=cmd_tags_rename)
@@ -1441,6 +1478,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="seconds between attempts (default 1)")
     x.add_argument("--retry-backoff", type=float, metavar="FACTOR",
                    help="multiply the delay by FACTOR after each attempt (default 1)")
+    x.add_argument("--env", action="append", metavar="NAME=VALUE",
+                   help="set an environment variable for the command (repeatable)")
+    x.add_argument("--cwd", metavar="DIR", help="the folder the command starts in "
+                   "(default: your home folder)")
     grp = x.add_mutually_exclusive_group()
     grp.add_argument("--allow-unnamed", dest="allow_unnamed", action="store_const", const=True,
                      default=None, help="also run for unnamed things matching the tag")
@@ -1472,6 +1513,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="seconds between attempts")
     x.add_argument("--retry-backoff", type=float, metavar="FACTOR",
                    help="multiply the delay by FACTOR after each attempt (1 removes it)")
+    x.add_argument("--env", action="append", metavar="NAME=VALUE",
+                   help="set an environment variable for the command (repeatable)")
+    x.add_argument("--unset-env", action="append", default=[], metavar="NAME",
+                   help="remove one (repeatable)")
+    cw = x.add_mutually_exclusive_group()
+    cw.add_argument("--cwd", metavar="DIR", help="the folder the command starts in")
+    cw.add_argument("--no-cwd", action="store_true", help="start it in your home folder again")
     x.add_argument("--order", type=int, metavar="N",
                    help="within one event, lower runs first (50, the default, removes it)")
     nt = x.add_mutually_exclusive_group()
@@ -1551,14 +1599,18 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("--dest", type=Path, help="remove the unit from here instead (no systemctl)")
     x.set_defaults(fn=cmd_service_uninstall)
 
-    co = sub.add_parser("completion", help="bash tab completion").add_subparsers(
-        dest="sub", required=True)
-    x = co.add_parser("bash", help="print the bash completion script")
-    x.set_defaults(fn=cmd_completion_bash)
-    x = co.add_parser("install", help="install it for your user (no root)")
+    co = sub.add_parser("completion", help="tab completion for bash, zsh and fish") \
+        .add_subparsers(dest="sub", required=True)
+    for shell in ("bash", "zsh", "fish"):
+        x = co.add_parser(shell, help=f"print the {shell} completion script")
+        x.set_defaults(fn=cmd_completion_print)
+    shells = argparse.ArgumentParser(add_help=False)
+    shells.add_argument("--shell", choices=("bash", "zsh", "fish"), default="bash",
+                        help="the shell (default: bash)")
+    x = co.add_parser("install", help="install it for your user (no root)", parents=[shells])
     x.add_argument("--dest", type=Path, help="write the script here instead")
     x.set_defaults(fn=cmd_completion_install)
-    x = co.add_parser("uninstall", help="remove the installed script")
+    x = co.add_parser("uninstall", help="remove the installed script", parents=[shells])
     x.add_argument("--dest", type=Path, help="remove this file instead")
     x.set_defaults(fn=cmd_completion_uninstall)
     return p

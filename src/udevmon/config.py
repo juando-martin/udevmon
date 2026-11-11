@@ -62,6 +62,8 @@ class Tag:
     #: the rule, property -> accepted values (wildcards allowed); empty for explicit-only
     match: dict[str, tuple[str, ...]] = field(default_factory=dict)
     description: str = ""           #: free text for people
+    #: default ``{var_NAME}`` values for the things it tags; a device's own override them
+    vars: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,15 @@ class Action:
     retry_backoff: float = 1.0      #: each wait between attempts is this times the one before
     #: folders its drop-in's ``[daemon] script_dir`` adds, searched first for it alone
     script_dir: tuple[str, ...] = ()
+    #: environment variables set for the command (placeholders filled in)
+    env: Mapping[str, str] = field(default_factory=dict)
+    cwd: str | None = None          #: the folder the command starts in; None for home
+
+    @property
+    def templates(self) -> tuple[str, ...]:
+        """Every text that may hold placeholders (the command's words, ``env`` values and
+        ``cwd``)."""
+        return (*self.run, *self.env.values(), *((self.cwd,) if self.cwd else ()))
 
     @property
     def targets(self) -> tuple[str, ...]:
@@ -171,12 +182,50 @@ def expand(argv, props) -> list[str]:
 _TOP = {"daemon", "devices", "tags", "actions"}
 _DAEMON = {"debounce", "udev_filters", "max_workers", "script_dir"}
 _DEVICE = {"description", "match", "tags", "status", "exclude_tags", "vars"}
-_TAG = {"description", "match"}
+_TAG = {"description", "match", "vars"}
 _ACTION = {"name", "device", "tag", "on", "run", "timeout", "allow_unnamed", "enabled",
            "tag_mode", "detach", "lock", "retries", "retry_delay", "retry_backoff", "order",
-           "notify_on_failure"}
+           "notify_on_failure", "env", "cwd"}
+#: A name ``env`` may set (``UDEVMON_*`` is udevmon's own).
+ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 #: An action's ``order`` when it states none.
 DEFAULT_ORDER = 50
+
+
+def _variables(table: dict, where: str, problems: list[str]) -> dict[str, str] | None:
+    """The ``vars`` of a device or tag table ({} without one); None (a problem added)
+    when invalid."""
+    if "vars" not in table:
+        return {}
+    raw = table["vars"]
+    if not isinstance(raw, dict):
+        problems.append(f"{where}: 'vars' must be a table of NAME = \"value\"")
+        return None
+    bad = [k for k in raw if not VAR_RE.match(str(k))]
+    if bad:
+        problems.append(f"{where}: variable name(s) {bad} must be lowercase letters, "
+                        "digits and _, not starting with a digit")
+        return None
+    variables = {str(k): _scalar_str(v) for k, v in raw.items()}
+    if any(v is None for v in variables.values()):
+        problems.append(f"{where}: variable values must be strings")
+        return None
+    return variables
+
+
+def variables_for(cfg: "Config", device: str | None, tag: str | None) -> dict[str, str]:
+    """The ``{var_NAME}`` values of a job (spec 6.3): for a tag action, ``tag``'s defaults;
+    for a device action, those of the device's tags in the order it lists them (the
+    first that sets a name wins); then the device's own, which override them all."""
+    d = cfg.devices.get(device) if device else None
+    tags = [tag] if tag else (list(d.tags) if d else [])
+    out: dict[str, str] = {}
+    for t in reversed(tags):                     # the first listed tag wins
+        if t in cfg.tags:
+            out.update(cfg.tags[t].vars)
+    if d is not None:
+        out.update(d.vars)
+    return out
 
 
 def _names(value, where: str, problems: list[str]) -> tuple[str, ...] | None:
@@ -253,21 +302,9 @@ def parse(data: dict, origins: dict | None = None) -> Config:
         tags: tuple[str, ...] = ()
         if "tags" in a:
             tags = _names(a["tags"], f"{where}: 'tags'", problems) or ()
-        variables: dict[str, str] = {}
-        if "vars" in a:
-            raw = a["vars"]
-            if not isinstance(raw, dict):
-                problems.append(f"{where}: 'vars' must be a table of NAME = \"value\"")
-                continue
-            bad = [k for k in raw if not VAR_RE.match(str(k))]
-            if bad:
-                problems.append(f"{where}: variable name(s) {bad} must be lowercase letters, "
-                                "digits and _, not starting with a digit")
-                continue
-            variables = {str(k): _scalar_str(v) for k, v in raw.items()}
-            if any(v is None for v in variables.values()):
-                problems.append(f"{where}: variable values must be strings")
-                continue
+        variables = _variables(a, where, problems)
+        if variables is None:
+            continue
         exclude: tuple[str, ...] = ()
         if "exclude_tags" in a:
             exclude = _names(a["exclude_tags"], f"{where}: 'exclude_tags'", problems) or ()
@@ -326,8 +363,9 @@ def parse(data: dict, origins: dict | None = None) -> Config:
                 ok = False
             else:
                 rule[str(key)] = tuple(strs)
-        if ok:
-            cfg.tags[name] = Tag(name, rule, str(t.get("description", "")))
+        variables = _variables(t, where, problems)
+        if ok and variables is not None:
+            cfg.tags[name] = Tag(name, rule, str(t.get("description", "")), variables)
 
     # ---- actions
     seen: set[str] = set()
@@ -439,19 +477,35 @@ def parse(data: dict, origins: dict | None = None) -> Config:
                 run = shlex.split(run)
             if not (isinstance(run, list) and run and all(isinstance(x, str) for x in run)):
                 raise ValueError("'run' must be a non-empty argv list or string")
-            names = {n for arg in run for n in placeholders(arg)}
+            env = a.get("env", {})
+            if not isinstance(env, dict) or not all(isinstance(v, str) for v in env.values()):
+                raise ValueError("'env' must be a table of NAME = \"value\"")
+            bad = [k for k in env if not ENV_NAME_RE.fullmatch(k)]
+            if bad:
+                raise ValueError(f"'env': {bad[0]!r} is not a variable name (letters, digits "
+                                 "and _, not starting with a digit)")
+            own = [k for k in env if k.upper().startswith("UDEVMON_")]
+            if own:
+                raise ValueError(f"'env': {own[0]!r} is udevmon's own (UDEVMON_* names are "
+                                 "set by udevmon)")
+            cwd = a.get("cwd")
+            if cwd is not None and not (isinstance(cwd, str) and cwd):
+                raise ValueError("'cwd' must be a folder")
+            names = {n for arg in (*run, *env.values(), *((cwd,) if cwd else ()))
+                     for n in placeholders(arg)}
         except ValueError as e:
             problems.append(f"{where}: {e}")
             continue
         if "tag" in names and not tags:
             problems.append(f"{where}: placeholder '{{tag}}' is only available for actions that "
                             "use 'tag'")
-        defined = {k for d in cfg.devices.values() for k in d.vars}
+        defined = {k for d in cfg.devices.values() for k in d.vars} \
+            | {k for t in cfg.tags.values() for k in t.vars}
         unknown_vars = sorted(n for n in names if is_variable(n) and n[4:] not in defined)
         if unknown_vars:
-            problems.append(f"{where}: {{{unknown_vars[0]}}} is not defined: no device has a "
-                            f"variable {unknown_vars[0][4:]!r} (set one with `devices set NAME "
-                            f"--var {unknown_vars[0][4:]}=VALUE`)")
+            problems.append(f"{where}: {{{unknown_vars[0]}}} is not defined: no device or tag "
+                            f"has a variable {unknown_vars[0][4:]!r} (set one with `devices "
+                            f"set NAME --var {unknown_vars[0][4:]}=VALUE`, or `tags set`)")
         for kind in on:
             missing = ({n for n in names if not is_variable(n) and not is_raw(n)}
                        - KNOWN_KEYS[kind] - {"device", "tag", "state_dir"})
@@ -467,7 +521,7 @@ def parse(data: dict, origins: dict | None = None) -> Config:
             continue
         cfg.actions.append(Action(name, devices, tags, on, tuple(run), timeout, allow, enabled,
                                   tag_mode, detach, lock, retries, float(retry_delay), order,
-                                  notify, float(retry_backoff)))
+                                  notify, float(retry_backoff), env=dict(env), cwd=cwd))
 
     if problems:
         raise ConfigError(problems)
@@ -507,15 +561,18 @@ def _advise(cfg: Config, origins: dict | None = None) -> None:
                 cfg.warnings.append(f"action {a.name!r}: tag {t!r} is carried by no device and "
                                     "has no rule, so the action never runs")
         rule_tags = [t for t in a.tags if t in cfg.tags and cfg.tags[t].match]
-        names = {n for arg in a.run for n in placeholders(arg)}
+        names = {n for arg in a.templates for n in placeholders(arg)}
         if a.allow_unnamed is None and rule_tags:
             cfg.notes.append(f"action {a.name!r}: tag {', '.join(rule_tags)} has a rule, so "
                              "things you have not named can match it; this action runs only "
                              "for named devices. Set allow_unnamed = true or false to choose.")
         used_vars = sorted(n[4:] for n in names if is_variable(n))
-        if used_vars and a.allow_unnamed:
-            cfg.warnings.append(f"action {a.name!r}: uses variable(s) {used_vars}, which unnamed "
-                                "things do not have; it is skipped for them")
+        unnamed_lack = sorted({v for t in a.tags for v in used_vars
+                               if v not in (cfg.tags[t].vars if t in cfg.tags else {})})
+        if unnamed_lack and a.allow_unnamed:
+            cfg.warnings.append(f"action {a.name!r}: uses variable(s) {unnamed_lack}, which "
+                                "unnamed things do not have (no tag of the action sets them); "
+                                "it is skipped for them")
         if a.allow_unnamed:
             if "device" in names:
                 cfg.warnings.append(f"action {a.name!r}: uses {{device}}, which does not exist "
@@ -531,16 +588,33 @@ def _advise(cfg: Config, origins: dict | None = None) -> None:
                                      "strong; any hardware presenting these properties can "
                                      "trigger this action")
     for a in cfg.actions:
-        used_vars = sorted({n[4:] for arg in a.run for n in placeholders(arg) if is_variable(n)})
+        used_vars = sorted({n[4:] for arg in a.templates for n in placeholders(arg)
+                            if is_variable(n)})
         if not used_vars:
             continue
         targets = ([cfg.devices[n] for n in a.devices] if a.devices else
                    [d for d in cfg.devices.values() if set(d.tags) & set(a.tags)])
         for d in targets:
-            lacking = [v for v in used_vars if v not in d.vars]
+            tag = None if a.devices else next(t for t in a.tags if t in d.tags)
+            have = variables_for(cfg, d.name, tag)
+            lacking = [v for v in used_vars if v not in have]
             if lacking:
                 cfg.warnings.append(f"action {a.name!r} uses variable(s) {lacking} that device "
-                                    f"{d.name!r} does not define; it is skipped for that device")
+                                    f"{d.name!r} does not define (nor its tag"
+                                    + (f" {tag!r}" if tag else "s") + "); it is skipped for "
+                                    "that device")
+    for d in cfg.devices.values():                # two of its tags disagree on a default
+        seen: dict[str, tuple[str, str]] = {}
+        for t in d.tags:
+            for k, v in (cfg.tags[t].vars if t in cfg.tags else {}).items():
+                if k in d.vars:
+                    continue
+                if k in seen and seen[k][1] != v:
+                    cfg.notes.append(f"device {d.name!r}: tags {seen[k][0]!r} and {t!r} both "
+                                     f"set variable {k!r}; its device actions get "
+                                     f"{seen[k][0]!r}'s value (listed first), its tag actions "
+                                     "the value of the tag they run through")
+                seen.setdefault(k, (t, v))
     for t in sorted(carried - used):
         cfg.notes.append(f"tag {t!r} is set on devices but no action uses it")
     for d in cfg.devices.values():
@@ -572,14 +646,64 @@ def _rule_can_match(rule: Mapping, match: Mapping[str, str]) -> bool:
     return all(matches({k: rule[k]}, {k: match[k]}, wild=True) for k in rule if k in match)
 
 
+_USB_ONLY = KNOWN_KEYS["connected"] - KNOWN_KEYS["mounted"]     # keys only a USB device has
+_FS_ONLY = KNOWN_KEYS["mounted"] - KNOWN_KEYS["connected"]      # keys only a filesystem has
+
+
+def thing_kind(match) -> str | None:
+    """What a device's ``match`` can select: ``"USB device"``, ``"filesystem"``, or None
+    (keys of both, which nothing has, or only keys both have)."""
+    usb = any(k in _USB_ONLY or is_raw(k) for k in match)
+    fs = any(k in _FS_ONLY for k in match)
+    if usb == fs:
+        return None
+    return "USB device" if usb else "filesystem"
+
+
+def _values(value) -> set:
+    return {v.casefold() for v in ([value] if isinstance(value, str) else value)}
+
+
+def could_meet(a, b) -> str | None:
+    """The kind of thing (as :func:`thing_kind`) that the matches ``a`` and ``b`` could
+    both select, or None: both select the same kind, and each key they share has a value
+    in common (case-insensitive). Containment is one way to meet; keys only one of them
+    has are another, which only a present thing settles."""
+    kind = thing_kind(a)
+    if kind is None or kind != thing_kind(b):
+        return None
+    if any(not _values(a[k]) & _values(b[k]) for k in set(a) & set(b)):
+        return None
+    return kind
+
+
 def _overlap_notes(cfg: Config, origins: dict) -> None:
-    """Notes for two devices one of which matches everything the other does (spec 6.2)."""
+    """Notes for two devices one of which matches everything the other does, and for two
+    whose matches use different keys but could select one thing (spec 6.2)."""
     devices = list(cfg.devices.values())
     for i, a in enumerate(devices):
         for b in devices[i + 1:]:
             a_in_b = a.match.items() <= b.match.items()
             b_in_a = b.match.items() <= a.match.items()
             if not (a_in_b or b_in_a):
+                kind = could_meet(a.match, b.match)
+                if kind is None:
+                    continue
+                only_a = ", ".join(sorted(set(a.match) - set(b.match)))
+                only_b = ", ".join(sorted(set(b.match) - set(a.match)))
+                what = (f"devices {a.name!r} and {b.name!r} match on different keys "
+                        f"({only_a}; {only_b}), so one {kind} could match both")
+                ignored = [x.name for x in (a, b) if x.status == "ignored"]
+                if ignored:
+                    cfg.notes.append(f"{what}; {ignored[0]!r} is ignored, so then nothing "
+                                     f"would run for {(b if ignored[0] == a.name else a).name!r}")
+                    continue
+                note = f"{what}; tag actions would get {{device}} = {a.name!r}, the first in " \
+                       "file order"
+                files = [origins.get(("device", x.name)) or "the main file" for x in (a, b)]
+                if files[0] != files[1]:
+                    note += f" ({files[0]}, then {files[1]})"
+                cfg.notes.append(note)
                 continue
             if a_in_b and b_in_a:
                 what = f"devices {a.name!r} and {b.name!r} have the same match, so they always " \
@@ -656,15 +780,17 @@ def program_lookup(settings: Settings, action: Action) -> tuple[str, str | None]
     path (relative to the home folder, where commands start), ``("script_dir", PATH)``
     for a bare name with a ``script_dir``, ``("PATH", None)`` for a bare name left to the
     daemon's PATH (only the daemon knows it), ``("placeholder", None)`` when it is filled
-    in at run time. ``PATH`` is None when no executable file is there."""
+    in at run time (or is relative to a ``cwd`` that is). ``PATH`` is None when no executable file is there."""
     prog = action.run[0]
     if "{" in prog:
         return "placeholder", None
     if uses_script_dir(settings, prog, action.script_dir):
         return "script_dir", resolve_program(settings, prog, action.script_dir)
     if "/" in prog:
-        full = os.path.join(os.path.expanduser("~"), os.path.expanduser(prog))
-        full = os.path.normpath(full)
+        if action.cwd and "{" in action.cwd and not os.path.isabs(os.path.expanduser(prog)):
+            return "placeholder", None              # relative to a folder known at run time
+        base = os.path.join(os.path.expanduser("~"), os.path.expanduser(action.cwd or ""))
+        full = os.path.normpath(os.path.join(base, os.path.expanduser(prog)))
         ok = os.path.isfile(full) and os.access(full, os.X_OK)
         return "path", full if ok else None
     return "PATH", None

@@ -65,6 +65,25 @@ their pinned version.
   `failure` (timed out, could not start, ...) and `output`, the last 10
   lines of what it printed (each cut to 300 characters); the text output
   shows them under a failed action. Feature name `trigger-output`.
+- **`disconnected` says whether the pull was a surprise**: `surprise` is
+  `1` when a filesystem on that USB device was still mounted (or vanished
+  while mounted within 5 s before), else `0`. udevmon links each mounted
+  filesystem to its USB device through sysfs, so a device without a serial
+  number works too. Feature name `disconnect-surprise`.
+- **An action's own `env` and `cwd`**: environment variables for the
+  command and the folder it starts in (default: home), both with
+  placeholders; `actions add|set --env NAME=VALUE --cwd DIR`, and on `set`
+  `--unset-env NAME` and `--no-cwd`. Feature name `action-env-cwd`.
+- **Default variables on a tag**: `[tags.NAME] vars = {...}` (and `tags set
+  NAME --var N=V --unset-var N`), which a device's own override. A tag
+  action gets the defaults of its tag, a device action those of the
+  device's tags in the order listed; `check` notes two tags that disagree.
+- **zsh and fish completion**: `udevmon completion zsh|fish` prints the
+  script, and `completion install|uninstall --shell zsh|fish` puts it where
+  the shell loads it (zsh needs that folder in `fpath`; the command says so).
+- **A `check` note for devices that match on different keys** but could
+  select one thing (one on `fs_uuid`, another on `drive_serial`). Keys of a
+  USB device and of a filesystem never meet, so those pairs stay quiet.
 - **`udevmon status [--json]`**: whether the daemon is running, its version,
   configuration and pause, and each action's last result since it started
   (time, event, device, exit status or why there is none, the last output

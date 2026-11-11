@@ -30,7 +30,7 @@ _COMMON = frozenset({"event"})   # "device"/"tag" depend on the action; see conf
 #: Event kind -> the property keys always available to placeholders for it.
 KNOWN_KEYS: dict[str, frozenset[str]] = {
     CONNECTED: _USB_KEYS | _COMMON,
-    DISCONNECTED: _USB_KEYS | _COMMON,
+    DISCONNECTED: _USB_KEYS | {"surprise"} | _COMMON,
     MOUNTED: _FS_KEYS | {"mountpoint"} | _COMMON,
     UNMOUNTED: _FS_KEYS | {"mountpoint", "surprise"} | _COMMON,
     REMOVED: _FS_KEYS | {"mountpoint", "surprise"} | _COMMON,

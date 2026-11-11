@@ -18,8 +18,8 @@ from . import state
 from .actions import ActionRunner
 from .control import BadParams, Refused
 from .engine import Engine, Handled
-from .events import (CONNECTED, MOUNTED, SHUTDOWN, STARTUP, TRIGGER_KINDS, UNMOUNTED,
-                     VALID_KINDS, Endpoint, Event, describe)
+from .events import (CONNECTED, DISCONNECTED, MOUNTED, SHUTDOWN, STARTUP, TRIGGER_KINDS,
+                     UNMOUNTED, VALID_KINDS, Endpoint, Event, describe)
 from .runtime import lock_path  # noqa: F401  (also used as daemon.lock_path)
 from .sources.udev import UdevSource
 from .sources.udisks import UdisksSource
@@ -199,7 +199,20 @@ class Daemon:
         self._seq += 1
         return replace(event, seq=self._seq)
 
+    def _surprise(self, event: Event) -> Event:
+        """A ``disconnected`` with ``surprise``: "1" when a filesystem on that USB device
+        was still mounted, or vanished while mounted just before (the udisks source
+        knows), else "0"."""
+        udisks = next((s for s in self.sources if isinstance(s, UdisksSource)), None)
+        surprise = bool(udisks is not None and udisks.tracker.surprise_for(event.endpoint.key))
+        endpoint = event.endpoint
+        return replace(event, endpoint=Endpoint(endpoint.source, endpoint.key,
+                                                {**endpoint.props,
+                                                 "surprise": "1" if surprise else "0"}))
+
     def _emit(self, event: Event) -> None:
+        if event.kind == DISCONNECTED:
+            event = self._surprise(event)
         event = self._number(event)
         try:
             self._route(event)

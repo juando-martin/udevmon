@@ -49,8 +49,9 @@ def simulated(cfg: cfgmod.Config, device: str | None, props: dict[str, str],
     return Endpoint(source, "(simulated)", merged)
 
 
-def _command(job, event) -> tuple[list[str] | None, str | None]:
-    """(argv with the placeholders filled in, None), or (None, the missing placeholder)."""
+def _command(job, event) -> tuple[tuple | None, str | None]:
+    """((argv, env, cwd) with the placeholders filled in, None), or (None, the missing
+    placeholder); ``env`` is the action's own, ``cwd`` None for the home folder."""
     props = dict(event.props)
     props.update({f"var_{k}": v for k, v in job.vars.items()})
     props.setdefault("instance", "<instance>")            # only real events have them
@@ -59,8 +60,12 @@ def _command(job, event) -> tuple[list[str] | None, str | None]:
         props["device"] = job.device
     if job.tag:
         props["tag"] = job.tag
+    a = job.action
     try:
-        return list(cfgmod.expand(job.action.run, props)), None
+        argv = list(cfgmod.expand(a.run, props))
+        env = dict(zip(a.env, cfgmod.expand(a.env.values(), props)))
+        cwd = cfgmod.expand([a.cwd], props)[0] if a.cwd else None
+        return (argv, env, cwd), None
     except KeyError as missing:
         return None, missing.args[0]
 
@@ -93,12 +98,13 @@ def explain_data(cfg: cfgmod.Config, endpoint: Endpoint, kinds=None) -> dict:
                 via = {"tags": list(job.action.tags)}
             else:
                 via = {"tag": job.tag}
-            command, missing = _command(job, event)
+            filled, missing = _command(job, event)
+            command, env, cwd = filled if filled else (None, None, None)
             runs.append({"action": job.action.name, "via": via, "unnamed": not job.device,
                          "detach": job.action.detach, "lock": job.action.lock,
                          "retries": job.action.retries, "order": job.action.order,
                          **where(cfg, "action", job.action.name),
-                         "command": command, "missing": missing})
+                         "command": command, "env": env, "cwd": cwd, "missing": missing})
         out["events"][kind] = {"runs": runs,
                                "skips": [{"action": s.action.name, "reason": s.reason}
                                          for s in plan.skipped]}
@@ -139,6 +145,12 @@ def explain_endpoint(cfg: cfgmod.Config, endpoint: Endpoint, kinds=None,
                        else f"(cannot run here: {{{run['missing']}}} is not available)")
             lines.append(f"  {kind:<13} runs {run['action']!r} ({via}{extra})")
             lines.append(f"                  {command}")
+            if run["cwd"] or run["env"]:
+                where_ = [f"in {run['cwd']}"] if run["cwd"] else []
+                if run["env"]:
+                    where_.append("with " + " ".join(f"{k}={shlex.quote(v)}"
+                                                      for k, v in run["env"].items()))
+                lines.append(f"                  ({', '.join(where_)})")
         for skip in what["skips"]:
             lines.append(f"  {kind:<13} skips {skip['action']!r}: {skip['reason']}")
     if quiet:

@@ -356,6 +356,13 @@ and
 .TP
 .B description
 Optional text.
+.TP
+.B vars
+Optional table of default variables for the things it tags (see
+.BR VARIABLES );
+a device's own
+.B vars
+override them.
 .PP
 A tag without a
 .B match
@@ -455,6 +462,26 @@ Number, at least 1, default 1: each later wait is this many times the one before
 .RB ( 2
 waits 1, 2, 4, 8 ... seconds with the default
 .BR retry_delay ).
+.TP
+.B env
+Optional table of environment variables for the command,
+.BR "env = { LANG = \"C\", TARGET = \"{mountpoint}/backup\" }" .
+Values may use placeholders, like the command's words.
+Names are letters, digits and
+.B _
+(not starting with a digit), and the
+.B UDEVMON_
+names are udevmon's own, so they cannot be set here.
+.TP
+.B cwd
+Optional folder the command starts in (placeholders and
+.B ~
+allowed; a relative one counts from your home folder).
+Default: your home folder.
+A relative program path in
+.B run
+then counts from it.
+A folder that does not exist makes the action fail to start.
 .TP
 .B notify_on_failure
 Boolean, default false.
@@ -668,6 +695,14 @@ Present on
 .B unmounted
 and
 .BR removed .
+On a USB device's
+.B disconnected
+it is
+.B 1
+when a filesystem on that device was still mounted when it was pulled
+(udevmon follows each mounted filesystem to its USB device through the kernel's
+device tree, so a device without a serial number works too), else
+.BR 0 .
 It can be used in commands but not in tag rules.
 .TP
 .BR drive_vendor ", " drive_model ", " drive_serial
@@ -757,7 +792,11 @@ finished, and an action of the connect event that is still running when the
 disconnect's actions end may find it gone: give both the same
 .B lock
 to keep them apart.
-There is no link between a USB device and its filesystems; each has its own instance.
+A USB device and its filesystems each have their own instance; the only link
+between them is
+.B surprise
+on
+.BR disconnected .
 .SH VARIABLES
 A device's
 .B vars
@@ -790,21 +829,36 @@ Which device that is: the listed device that applies, for an action with
 .BR device ;
 the first matching named device, for an action with
 .BR tag .
+.PP
+A tag can set defaults the same way,
+.BR "[tags.backup] vars = { keep = \"7\" }" ,
+which a device's own
+.B vars
+override.
+An action with
+.B tag
+gets the defaults of the tag it runs through; an action with
+.B device
+gets those of the device's tags in the order its
+.B tags
+list them (the first that sets a name wins;
+.B check
+notes two tags of a device that disagree).
 .IP \(bu 3
-A thing that matches no device (only a tag rule) has no variables, so an action
-that uses one is skipped for it, and
+A thing that matches no device (only a tag rule) has only its tag's defaults, so
+an action that uses another variable is skipped for it, and
 .B check
 warns about an
 .B allow_unnamed
-action that uses one.
+action that uses a variable none of its tags sets.
 .IP \(bu 3
 A device that lacks a variable an action uses gets the action skipped, with an
 error, never run with an empty value.
 .B check
 warns about every device an action can reach that does not define it.
 .IP \(bu 3
-A variable that no device defines is an error when the file is loaded, which
-catches typos.
+A variable that no device or tag defines is an error when the file is loaded,
+which catches typos.
 .IP \(bu 3
 The values are yours, not the hardware's, so they count as safe in the
 .B allow_unnamed
@@ -1206,7 +1260,12 @@ the device), two devices one of whose
 .B match
 contains all of the other's (a tag action's
 .B {device}
-is then the one read first; across files, the file names decide it), a
+is then the one read first; across files, the file names decide it), two
+devices that match on different keys of the same kind of thing (say
+.B fs_uuid
+and
+.BR drive_serial ,
+which one filesystem could both have), a
 .B lock
 only one action uses, disabled things, and choices about
 .BR allow_unnamed .

@@ -64,7 +64,8 @@ def render_tag(name, match, description="") -> str:
 
 def render_action(name, devices, tags, on, run, timeout=None, allow_unnamed=None,
                   tag_mode=None, detach=False, lock=None, retries=0, retry_delay=None,
-                  order=None, notify_on_failure=False, retry_backoff=None) -> str:
+                  order=None, notify_on_failure=False, retry_backoff=None, env=None,
+                  cwd=None) -> str:
     """The ``[[actions]]`` block for an action, as ``actions add`` writes it."""
     lines = ["[[actions]]", f"name = {_s(name)}"]
     lines.append(f"device = {_name_or_list(devices)}" if devices
@@ -88,6 +89,11 @@ def render_action(name, devices, tags, on, run, timeout=None, allow_unnamed=None
         lines.append(f"order = {order}")
     if notify_on_failure:
         lines.append("notify_on_failure = true")
+    if cwd:
+        lines.append(f"cwd = {_s(cwd)}")
+    if env:
+        lines.append("env = { " + ", ".join(f"{_key(k)} = {_s(v)}" for k, v in env.items())
+                     + " }")
     if allow_unnamed is not None:
         lines.append(f"allow_unnamed = {'true' if allow_unnamed else 'false'}")
     return "\n".join(lines) + "\n"
@@ -224,7 +230,7 @@ def add_tag(path: Path, name, match, description="", *, file=None) -> None:
 def add_action(path: Path, name, devices, tags, on, run, timeout=None, allow_unnamed=None,
                tag_mode=None, detach=False, lock=None, retries=0, retry_delay=None, *,
                file=None, order: int | None = None, notify_on_failure: bool = False,
-               retry_backoff: float | None = None) -> str:
+               retry_backoff: float | None = None, env=None, cwd: str | None = None) -> str:
     """Add an action at the end of the main file ``path`` (or of the drop-in ``file``)."""
     target = _target(path, file)
     existing = cfgmod.load(path)
@@ -239,7 +245,7 @@ def add_action(path: Path, name, devices, tags, on, run, timeout=None, allow_unn
                                   + _in(existing, "action", name)])
     block = render_action(name, devices, tags, on, run, timeout, allow_unnamed, tag_mode,
                           detach, lock, retries, retry_delay, order, notify_on_failure,
-                          retry_backoff)
+                          retry_backoff, env, cwd)
     _edit(target, _append(target, block),
           lambda c: [a for a in c.actions if a.name == name][0], main=path)
     return name
@@ -493,13 +499,16 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
                        on=None, timeout: float | None = None, run=None, tag_mode=None,
                        detach: bool | None = None, lock: str | None = None,
                        retries: int | None = None, retry_delay: float | None = None,
-                       retry_backoff: float | None = None, order: int | None = None, notify_on_failure: bool | None = None,
+                       retry_backoff: float | None = None, order: int | None = None,
+                       notify_on_failure: bool | None = None, set_env=None, unset_env=(),
+                       cwd: str | None = None,
                        add_devices=(), remove_devices=(), add_tags=(), remove_tags=()):
     """Change an action's ``allow_unnamed``, events, timeout, command, lock or targets.
 
     ``lock`` is a lock name, or "" to remove the action's lock. ``retries`` is a count
     (0 removes the setting); ``retry_delay`` is in seconds; ``retry_backoff`` a factor
-    (1 removes the setting).
+    (1 removes the setting). ``set_env`` (name -> value) adds or changes ``env`` entries
+    and ``unset_env`` removes some; ``cwd`` is a folder, or "" to remove it.
 
     ``unnamed`` is "allow", "named-only" or "default" (back to not stated). An action
     targets devices or tags, never both, and keeps at least one. Returns the new list of
@@ -517,15 +526,29 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
     if tag_mode is not None and action.devices:
         raise cfgmod.ConfigError([f"action {name!r} targets devices; --all-tags/--any-tags only "
                                   "apply to actions that use tags"])
+    set_env, unset_env = dict(set_env or {}), list(dict.fromkeys(unset_env))
+    env_edit = bool(set_env or unset_env)
+    if env_edit:
+        both = [k for k in unset_env if k in set_env]
+        if both:
+            raise cfgmod.ConfigError([f"{both} is in both --env and --unset-env"])
+        missing = [k for k in unset_env if k not in action.env]
+        if missing:
+            raise cfgmod.ConfigError([f"action {name!r} sets no environment variable(s) "
+                                      f"{missing}"])
+    new_env = {k: v for k, v in action.env.items() if k not in unset_env}
+    new_env.update(set_env)
     if (unnamed is None and on is None and timeout is None and run is None and tag_mode is None
             and detach is None and lock is None and retries is None and retry_delay is None
             and retry_backoff is None and order is None and notify_on_failure is None
+            and not env_edit and cwd is None
             and not (device_edit or tag_edit)):
         raise cfgmod.ConfigError(["nothing to change: give --allow-unnamed, --named-only, "
                                   "--default-unnamed, --on, --timeout, --add-device, "
                                   "--remove-device, --add-tag, --remove-tag, --all-tags, "
                                   "--any-tags, --detach, --no-detach, --lock, --no-lock, "
-                                  "--retries, --retry-delay, --retry-backoff, --order, --notify-on-failure, "
+                                  "--retries, --retry-delay, --retry-backoff, --env, --unset-env, "
+                                  "--cwd, --no-cwd, --order, --notify-on-failure, "
                                   "--no-notify-on-failure or a new command after --"])
     key = None
     targets = None
@@ -554,7 +577,7 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
             if (unnamed is None and on is None and timeout is None and run is None
                     and tag_mode is None and detach is None and lock is None
                     and retries is None and retry_delay is None and retry_backoff is None
-                    and order is None
+                    and not env_edit and cwd is None and order is None
                     and notify_on_failure is None):
                 return None
 
@@ -587,6 +610,21 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
             else:
                 item["retry_backoff"] = int(retry_backoff) \
                     if float(retry_backoff).is_integer() else float(retry_backoff)
+        if cwd == "":
+            item.pop("cwd", None)
+        elif cwd is not None:
+            item["cwd"] = cwd
+        if env_edit:
+            if not new_env:
+                item.pop("env", None)
+            elif item.get("env") is None:
+                inner = ", ".join(f"{_key(k)} = {_s(v)}" for k, v in new_env.items())
+                item["env"] = _tomlkit().parse(f"env = {{ {inner} }}\n")["env"]
+            else:                                       # edit in place, keeping its layout
+                for k in unset_env:
+                    del item["env"][k]
+                for k, v in set_env.items():
+                    item["env"][k] = v
         if notify_on_failure is True:
             item["notify_on_failure"] = True
         elif notify_on_failure is False:
@@ -642,6 +680,8 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
                 or (retries is not None and a.retries != retries)
                 or (retry_delay is not None and a.retry_delay != float(retry_delay))
                 or (retry_backoff is not None and a.retry_backoff != float(retry_backoff))
+                or (env_edit and dict(a.env) != new_env)
+                or (cwd is not None and a.cwd != (cwd or None))
                 or (order is not None and a.order != order)
                 or (notify_on_failure is not None and a.notify_on_failure != notify_on_failure)
                 or (key is not None and list(a.targets) != targets)):
@@ -649,6 +689,52 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
     f = _file(cfg, "action", name, path)
     _edit(f, _edited(f, change), verify, main=path)
     return targets
+
+
+def _new_vars(cfg, kind: str, name: str, current, set_vars, unset_vars) -> dict:
+    """The variables of the device or tag ``name`` after an edit; refuses bad names, a name
+    in both lists, removing one it lacks, and removing one an action uses that nothing
+    else (no other device or tag) defines."""
+    for k in set_vars:
+        _check_variable(k)
+    both = [k for k in unset_vars if k in set_vars]
+    if both:
+        raise cfgmod.ConfigError([f"{both} is in both --var and --unset-var"])
+    missing = [k for k in unset_vars if k not in current]
+    if missing:
+        raise cfgmod.ConfigError([f"{kind} {name!r} has no variable(s) {missing}"
+                                  + (f" (it has: {', '.join(current)})" if current else "")])
+    new_vars = {k: v for k, v in current.items() if k not in unset_vars}
+    new_vars.update(set_vars)
+    if unset_vars:                                       # a variable an action uses stays needed
+        still_used = {n[4:] for a in cfg.actions for arg in a.templates
+                      for n in cfgmod.placeholders(arg) if n.startswith("var_")}
+        elsewhere = {k for n, d in cfg.devices.items() if (kind, n) != ("device", name)
+                     for k in d.vars} | {k for n, t in cfg.tags.items()
+                                         if (kind, n) != ("tag", name) for k in t.vars}
+        gone = [k for k in unset_vars if k in still_used and k not in elsewhere
+                and k not in new_vars]
+        if gone:
+            raise cfgmod.ConfigError([f"variable(s) {gone} are used by an action and no other "
+                                      "device or tag defines them; edit the action first"])
+    return new_vars
+
+
+def _write_vars(table, new_vars: dict, set_vars: dict, unset_vars) -> None:
+    """Put ``new_vars`` in the TOML ``table`` (a device's or tag's), editing a ``vars``
+    table in place when there is one."""
+    if not new_vars:
+        table.pop("vars", None)
+        return
+    current = table.get("vars")
+    if current is None:
+        inner = ", ".join(f"{_key(k)} = {_s(v)}" for k, v in new_vars.items())
+        table["vars"] = _tomlkit().parse(f"vars = {{ {inner} }}\n")["vars"]
+    else:                                       # inline table or sub-table: edit in place
+        for key in unset_vars:
+            del current[key]
+        for key, value in set_vars.items():
+            current[key] = value
 
 
 def set_device_fields(path: Path, name: str, *, match=None, description=None,
@@ -669,27 +755,7 @@ def set_device_fields(path: Path, name: str, *, match=None, description=None,
                                   "--unset-var"])
     if match is not None and not match:
         raise cfgmod.ConfigError(["a device needs at least one --match KEY=VALUE"])
-    for k in set_vars:
-        _check_variable(k)
-    both = [k for k in unset_vars if k in set_vars]
-    if both:
-        raise cfgmod.ConfigError([f"{both} is in both --var and --unset-var"])
-    missing = [k for k in unset_vars if k not in device.vars]
-    if missing:
-        raise cfgmod.ConfigError([f"device {name!r} has no variable(s) {missing}"
-                                  + (f" (it has: {', '.join(device.vars)})" if device.vars
-                                     else "")])
-    new_vars = {k: v for k, v in device.vars.items() if k not in unset_vars}
-    new_vars.update(set_vars)
-    if unset_vars:                                       # a variable an action uses stays needed
-        still_used = {n[4:] for a in cfg.actions for arg in a.run
-                      for n in cfgmod.placeholders(arg) if n.startswith("var_")}
-        gone = [k for k in unset_vars if k in still_used
-                and not any(k in d.vars for n, d in cfg.devices.items() if n != name)
-                and k not in new_vars]
-        if gone:
-            raise cfgmod.ConfigError([f"variable(s) {gone} are used by an action and no other "
-                                      "device defines them; edit the action first"])
+    new_vars = _new_vars(cfg, "device", name, device.vars, set_vars, unset_vars)
 
     def change(doc):
         from tomlkit.items import InlineTable
@@ -714,18 +780,7 @@ def set_device_fields(path: Path, name: str, *, match=None, description=None,
             else:
                 table["description"] = description
         if set_vars or unset_vars:
-            if not new_vars:
-                table.pop("vars", None)
-                return
-            current = table.get("vars")
-            if current is None:
-                inner = ", ".join(f"{_key(k)} = {_s(v)}" for k, v in new_vars.items())
-                table["vars"] = _tomlkit().parse(f"vars = {{ {inner} }}\n")["vars"]
-            else:                                       # inline table or sub-table: edit in place
-                for key in unset_vars:
-                    del current[key]
-                for key, value in set_vars.items():
-                    current[key] = value
+            _write_vars(table, new_vars, set_vars, unset_vars)
 
     def verify(c):
         d = c.devices[name]
@@ -738,9 +793,10 @@ def set_device_fields(path: Path, name: str, *, match=None, description=None,
 
 
 def set_tag_fields(path: Path, name: str, *, match=None, clear_rule: bool = False,
-                   description=None) -> None:
+                   description=None, set_vars=None, unset_vars=()) -> None:
     """Replace a declared tag's rule (``match``: key -> str | list[str]), remove its rule,
-    and/or change its description (an empty one removes the line)."""
+    change its description (an empty one removes the line), and/or its default variables
+    (``set_vars`` adds or changes, ``unset_vars`` removes; the others stay)."""
     cfg = cfgmod.load(path, must_exist=True)
     if name not in cfg.tags:
         raise cfgmod.ConfigError([
@@ -748,8 +804,12 @@ def set_tag_fields(path: Path, name: str, *, match=None, clear_rule: bool = Fals
             "declaration; declare one with `tags add`"])
     if match is not None and clear_rule:
         raise cfgmod.ConfigError(["give --match or --no-rule, not both"])
-    if match is None and not clear_rule and description is None:
-        raise cfgmod.ConfigError(["nothing to change: give --match, --no-rule or --description"])
+    set_vars, unset_vars = dict(set_vars or {}), list(dict.fromkeys(unset_vars))
+    if match is None and not clear_rule and description is None and not set_vars \
+            and not unset_vars:
+        raise cfgmod.ConfigError(["nothing to change: give --match, --no-rule, --description, "
+                                  "--var or --unset-var"])
+    new_vars = _new_vars(cfg, "tag", name, cfg.tags[name].vars, set_vars, unset_vars)
     if match is not None and not match:
         raise cfgmod.ConfigError(["a rule needs at least one --match KEY=VALUE "
                                   "(--no-rule removes it)"])
@@ -777,9 +837,13 @@ def set_tag_fields(path: Path, name: str, *, match=None, clear_rule: bool = Fals
                 table.pop("description", None)
             else:
                 table["description"] = description
+        if set_vars or unset_vars:
+            _write_vars(table, new_vars, set_vars, unset_vars)
 
     def verify(c):
         t = c.tags[name]
+        if (set_vars or unset_vars) and dict(t.vars) != new_vars:
+            raise cfgmod.ConfigError([f"the change to tag {name!r} did not take effect"])
         want = None if match is None else {k: (v,) if isinstance(v, str) else tuple(v)
                                            for k, v in match.items()}
         if (clear_rule and t.match) or (want is not None and dict(t.match) != want) or \

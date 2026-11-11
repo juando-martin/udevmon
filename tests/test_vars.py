@@ -91,7 +91,7 @@ class ConfigTests(unittest.TestCase):
     def test_a_variable_no_device_defines_is_an_error(self):
         with self.assertRaises(C.ConfigError) as cm:
             C.parse(self.action(["echo", "{var_typo}"], device="d"))
-        self.assertIn("no device has a variable 'typo'", str(cm.exception))
+        self.assertIn("no device or tag has a variable 'typo'", str(cm.exception))
         self.assertIn("devices set NAME --var typo=VALUE", str(cm.exception))
 
     def test_a_defined_variable_is_fine_for_every_event(self):

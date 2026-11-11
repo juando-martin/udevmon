@@ -11,7 +11,7 @@ from dataclasses import replace
 from typing import NamedTuple
 
 from . import pause as pause_flag
-from .config import Action, Config, resolve_program, uses_script_dir
+from .config import Action, Config, resolve_program, uses_script_dir, variables_for
 from .events import DISCONNECTED, REMOVED, UNMOUNTED, Event
 from .matching import resolve
 
@@ -142,7 +142,7 @@ class Engine:
                     continue
                 resolved = found(action)
                 if resolved is not None:
-                    jobs.append(Job(resolved, device, None, self._vars(device)))
+                    jobs.append(Job(resolved, device, None, self._vars(device, None)))
                 continue
             if action.tag_mode == "all":                  # every listed tag is needed
                 tag = action.tags[0] if all(t in res.tags for t in action.tags) else None
@@ -160,15 +160,14 @@ class Engine:
             device = res.named[0].name if named else None
             resolved = found(action)
             if resolved is not None:
-                jobs.append(Job(resolved, device, tag, self._vars(device)))
+                jobs.append(Job(resolved, device, tag, self._vars(device, tag)))
         jobs.sort(key=lambda job: job.action.order)          # stable: ties keep config order
         if skipped is not None:
             skipped.sort(key=lambda s: s.action.order)
         return jobs
 
-    def _vars(self, device: str | None) -> Mapping:
-        d = self.config.devices.get(device) if device else None
-        return dict(d.vars) if d else {}
+    def _vars(self, device: str | None, tag: str | None) -> Mapping:
+        return variables_for(self.config, device, tag)
 
     def trigger(self, event: Event) -> tuple[list[Job], list[Skip]]:
         """The jobs for an event asked for with ``udevmon trigger``, logged like a real one.
