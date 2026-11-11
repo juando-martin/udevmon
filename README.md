@@ -304,6 +304,9 @@ above already includes it. `d` still registers it as an ordinary device if you
 really mean this one physical thing (say, a key you keep in one USB port).
 
 To also offer devices that are *already* plugged in, use `udevmon scan --present`.
+When the daemon is running with the same configuration, `scan` shows the
+events it receives (its banner says `through the running daemon`), so only one
+process watches; otherwise `scan` watches by itself.
 To see every property of what you plug in, the raw `udev_*` ones included (the
 names you can use in a rule or as `{udev_NAME}` in a command), add `--all-props`;
 `udevmon present --all-props` does the same for what is plugged in now. Properties
@@ -349,6 +352,13 @@ journalctl --user -u udevmon -f        # follow the log and action output
 udevmon reload                         # re-read the config after editing it
 systemctl --user restart udevmon
 ```
+
+`udevmon status` says whether the daemon is running, with which
+configuration, and how each action last ended (exit status, or why there is
+none, and the last lines of a failure's output); it remembers only since the
+daemon started. `udevmon reload` prints what the daemon loaded. If the configuration has
+errors it prints them and fails (status 1, and `systemctl --user reload
+udevmon` fails too); the daemon keeps running with the previous one.
 
 To only write the unit without enabling it, leave out `--now`.
 
@@ -740,9 +750,13 @@ exit status tells scripts which case it was:
 | 7 | the daemon's answer could not be read |
 
 `--json` prints the result as one object, failures included, with an
-`error` code and, with `--wait`, each action's exit status (`man udevmon`
-has the fields). It talks to the daemon over
-`$XDG_RUNTIME_DIR/udevmon.sock`, which only you can use.
+`error` code and, with `--wait`, each action's exit status, why it has none
+(timed out, could not start ...) and the last 10 lines of its output, so a
+script can show why an action failed (`man udevmon` has the fields). The
+text output shows those lines under a failed action. It talks to the daemon over
+`$XDG_RUNTIME_DIR/udevmon.sock`, which only you can use. After an upgrade,
+restart the daemon: an older one still running answers in its old protocol,
+and `trigger` exits with 7 and says so.
 
 ## Switching things off
 
@@ -891,7 +905,8 @@ udevmon resume
   (`$XDG_RUNTIME_DIR/udevmon.paused`), so it survives a daemon restart but not a
   logout or reboot: a forgotten pause can't outlive your session. A pause with
   `--for` ends by itself.
-- You can pause when no daemon is running; it applies once one starts.
+- A running daemon is told at once and logs the pause. You can also pause
+  when no daemon is running; it applies once one starts.
 - `udevmon explain` and the editing commands say `Note: automation is paused`
   so a paused daemon doesn't look broken, and the daemon's start-up log line
   shows `[PAUSED]`.
@@ -911,6 +926,19 @@ formatting, and save the previous version as `config.toml.bak`.
   a running daemon that uses the same config file picks the change up right
   away, and the command says `Reloaded the running daemon.` A daemon that
   uses a different config file is left alone. Add `--no-reload` to skip it.
+- **Several edits as one change: `udevmon apply`.** Give it a JSON array of
+  editing commands (from a file or standard input); they run in order on a
+  copy, and only if all of them succeed are the files written, with one
+  reload. `--dry-run` shows the whole change as one diff. A program that sets
+  up a device together with its actions can use it so that a failure halfway
+  leaves nothing behind:
+
+  ```
+  udevmon apply --dry-run <<'EOF'
+  [["devices", "add", "key", "--match", "fs_uuid=3F2A-91BC"],
+   ["actions", "add", "--device", "key", "mounted", "--", "backup.sh"]]
+  EOF
+  ```
 - **To edit by hand, use `udevmon edit`** (or `udevmon edit 50-kp-sync` for a
   drop-in). Like `visudo`, it opens a copy in `$VISUAL` or `$EDITOR` and,
   when you quit the editor, checks the whole configuration with your change.
@@ -927,7 +955,7 @@ formatting, and save the previous version as `config.toml.bak`.
 ```toml
 [daemon]                       # every setting here is optional
 debounce = 1.0                 # ignore repeats within N seconds
-max_workers = 4                # max events handled in parallel
+max_workers = 4                # max commands running at the same time
 udev_filters = ["usb/usb_device"]
 script_dir = ["~/.local/udev/scripts"]   # where bare command names live
 
@@ -983,9 +1011,10 @@ use letters, digits, `_`, `.` and `-`.
 ### Drop-in files (`config.d`)
 
 Next to `config.toml`, every `config.d/*.toml` file is read too, after it and
-in the order of the file names. A drop-in has the same tables as the main file
-except `[daemon]`. Its devices, tags and actions join the others: an action in
-one file can use a device or a tag of another.
+in the order of the file names. A drop-in has the same tables as the main file;
+its `[daemon]` may only have `script_dir` (see below). Its devices, tags and
+actions join the others: an action in one file can use a device or a tag of
+another.
 
 This is for programs that install their own devices and actions: each owns a
 file and replaces or deletes it whole, without touching your `config.toml`.
@@ -1009,6 +1038,17 @@ file and replaces or deletes it whole, without touching your `config.toml`.
   does too. `{device}` of a tag action is then the one read first, so with
   the two in different files the file names decide it. `udevmon check`
   notes every such pair; with one of them `ignored`, it says nothing runs.
+- **Its own `script_dir`.** A drop-in's `[daemon] script_dir` says where its
+  own actions' programs live, so a program that installs a drop-in can use bare
+  names without asking you to edit `config.toml`. Those folders are searched
+  first, and only for the actions of that drop-in: they never change what a
+  bare name means in your own actions or another drop-in's.
+
+  ```toml
+  # config.d/50-kp-sync.toml
+  [daemon]
+  script_dir = ["~/.venvs/tools/bin"]
+  ```
 - **Where things come from.** `udevmon check` lists the files it read;
   `devices list`, `tags list`, `actions list`, `show` and `explain` mark the
   entries of a drop-in with its name.
@@ -1036,7 +1076,11 @@ file and replaces or deletes it whole, without touching your `config.toml`.
   at every event, so a script you add later is found without a reload, and
   `udevmon explain` shows the full path it will run. Without `script_dir` nothing
   changes: bare names use the `PATH`. A command with a `/` in it is used as
-  written. `udevmon check` warns about a command found in none of them, and about
+  written. A drop-in can have a `script_dir` of its own for its own actions
+  (see [Drop-in files](#drop-in-files-configd)). `actions list --json` gives
+  each action's `program`, the file the daemon will start (with
+  `program_lookup`: `path`, `script_dir`, `PATH` or `placeholder`; for the
+  last two only the daemon can tell, so `program` is null). `udevmon check` warns about a command found in none of them, and about
   a folder that does not exist, unless another folder of the list does: then a
   missing one is only a note (an optional folder this machine does not have).
 - `{var_NAME}` is a variable of the device (see
@@ -1179,7 +1223,7 @@ udevmon actions add --device linuxsys mounted \
 device = "linuxsys"
 on = ["mounted"]
 retries = 10         # up to 10 more attempts (default 0: none)
-retry_delay = 1      # seconds between attempts (default 1)
+retry_delay = 1      # seconds before the first retry (default 1)
 run = ["udisksctl", "unmount", "-b", "{devnode}"]
 ```
 
@@ -1198,11 +1242,20 @@ up to `retries` more times, and each failed attempt is logged
 (`attempt 2 of 11 failed with status 1; retrying in 1 s`). It is **never retried after
 a timeout**, when the program cannot start, or when the action was skipped: repeating
 those rarely helps. Each attempt has its own `timeout`, so the worst case is
-`(retries + 1) x timeout` plus the delays. Retrying stops at once when automation is
-paused or the daemon is stopping, and a `lock` is held across all the attempts.
-`retries` and `retry_delay` cannot be combined with `detach`.
-`udevmon actions set NAME --retries N --retry-delay S` changes them (`--retries 0`
-removes the retries).
+`(retries + 1) x timeout` plus the delays.
+
+With `retry_backoff` (a number, 1 or more; default 1) the waits grow: each is
+that many times the one before, which suits a service that needs a while to
+come back. `retries = 5`, `retry_delay = 2` and `retry_backoff = 2` wait 2, 4,
+8 and 16 seconds.
+
+Retrying stops at once when automation is paused or the daemon is stopping,
+except for the `shutdown` event, whose retries go on while the daemon exits (the
+service gets 120 seconds in all to stop). A `lock` is held across all the
+attempts. `retries`, `retry_delay` and `retry_backoff` cannot be combined with
+`detach`. `udevmon actions set NAME --retries N --retry-delay S
+--retry-backoff F` changes them (`--retries 0` removes the retries,
+`--retry-backoff 1` the back-off).
 
 ### Being told when an action fails (`notify_on_failure`)
 
@@ -1247,8 +1300,8 @@ order they run, and `explain` shows a non-default order.
 ### Running actions one at a time (`lock`)
 
 The actions of one event run one after another, but different events run at the same
-time (up to `max_workers`). So the actions for a plug and for the unplug that follows
-can overlap. Give the actions that must not overlap the same **lock name**:
+time (up to `max_workers` commands at once). So the actions for a plug and for the
+unplug that follows can overlap. Give the actions that must not overlap the same **lock name**:
 
 ```
 udevmon actions add --tag yubikey connected,disconnected --lock yubikey -- \
@@ -1274,9 +1327,10 @@ udevmon: there is no lock file, and it does not protect against the same script 
 run by hand (keep a `flock` in the script for that).
 
 The lock is held while the command runs and is released as soon as the command has
-**exited** (or, for `detach`, has **started**). A waiting action occupies one of the
-`max_workers` workers, so keep locked actions short; every command has a `timeout`,
-so a stuck one holds the others for at most that long. The log says when an action
+**exited** (or, for `detach`, has **started**). A waiting action does not hold up
+other events: it takes none of the `max_workers` slots until its command starts.
+Every command has a `timeout`, so a stuck one holds the others with the same lock for
+at most that long. The log says when an action
 had to wait. What to use, by what the action does:
 
 | The action | Use | The lock is held |
@@ -1319,7 +1373,7 @@ udevmon actions list | remove NAME
 udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT...]
                     [--name NAME] [--timeout S] [--all-tags] [--detach]
                     [--lock NAME] [--retries N] [--retry-delay S]
-                    [--order N] [--notify-on-failure]
+                    [--retry-backoff F] [--order N] [--notify-on-failure]
                     [--allow-unnamed | --named-only] [--file DROPIN]
                     -- COMMAND...
 udevmon actions set NAME [--allow-unnamed | --named-only
@@ -1328,7 +1382,7 @@ udevmon actions set NAME [--allow-unnamed | --named-only
                     [--add-tag NAME ...] [--remove-tag NAME ...]
                     [--all-tags | --any-tags] [--detach | --no-detach]
                     [--lock NAME | --no-lock] [--retries N]
-                    [--retry-delay S] [--order N]
+                    [--retry-delay S] [--retry-backoff F] [--order N]
                     [--notify-on-failure | --no-notify-on-failure]
                     [-- COMMAND...]
 udevmon actions disable | enable NAME...
@@ -1338,9 +1392,12 @@ udevmon pause [--for DURATION]          stop every action (see above)
 udevmon resume                          let actions run again
 udevmon check [--json]                  validate the config
 udevmon edit [FILE] [--no-reload]       edit a file in $EDITOR, checked
+udevmon apply [FILE] [--dry-run] [--no-reload]
+                                        several edits as one change (JSON)
 udevmon version [--json]                version and features
 udevmon run [--dry-run]                 run the daemon in the foreground
 udevmon reload                          make the running daemon reload
+udevmon status [--json]                 the daemon; actions' last results
 udevmon trigger DEVICE [EVENT] [--wait] [--json]
                                         run its actions now (see above)
 udevmon service install [--now]         install the systemd user service

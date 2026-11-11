@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import functools
+import json
 import logging
 import sys
 from pathlib import Path
@@ -46,9 +47,15 @@ def _reload_after_edit(args) -> None:
     """Tell the running daemon (if it uses this config) to pick up the change."""
     if getattr(args, "no_reload", False):
         return
+    from . import control
     from .daemon import reload_running
-    if reload_running(args.config):
-        print("Reloaded the running daemon.")
+    try:
+        if reload_running(args.config):
+            print("Reloaded the running daemon.")
+    except control.Refused as e:
+        print(f"warning: the running daemon did not reload: {e.message}", file=sys.stderr)
+        for problem in e.data.get("problems", []):
+            print(f"  {problem}", file=sys.stderr)
 
 
 def _pause_note() -> str | None:
@@ -59,55 +66,178 @@ def _pause_note() -> str | None:
     return f"automation is paused ({pause.describe_until(until)}): nothing runs."
 
 
+def _copy_config(tmp: Path, main: Path) -> tuple[Path, dict]:
+    """Copy ``main`` and its drop-ins into ``tmp``; (the copy of ``main``, the texts of
+    the copied files: copy path -> text)."""
+    import shutil
+    copy = tmp / main.name
+    if main.exists():
+        shutil.copy2(main, copy)
+    for f in cfgmod.dropin_files(main):
+        cfgmod.dropin_dir(copy).mkdir(mode=0o700, exist_ok=True)
+        shutil.copy2(f, cfgmod.dropin_dir(copy) / f.name)
+    return copy, _texts(copy)
+
+
+def _texts(main: Path) -> dict:
+    """The text of ``main`` and of each of its drop-ins, by path."""
+    return {f: f.read_text() for f in [main, *cfgmod.dropin_files(main)] if f.exists()}
+
+
+def _real(f: Path, copy: Path, main: Path) -> Path:
+    """The real file of ``f``, a file of the copy whose main file is ``copy``."""
+    return main if f == copy else cfgmod.dropin_dir(main) / f.name
+
+
+def _print_diff(before: dict, after: dict, copy: Path, main: Path) -> bool:
+    """Print a unified diff per changed file, named by its real path; whether any changed."""
+    import difflib
+    changed = False
+    for f in sorted(set(before) | set(after), key=lambda f: (f != copy, f.name)):
+        old, new = before.get(f), after.get(f)
+        if old == new:
+            continue
+        changed = True
+        target = str(_real(f, copy, main))
+        sys.stdout.writelines(difflib.unified_diff(
+            (old or "").splitlines(keepends=True), (new or "").splitlines(keepends=True),
+            fromfile=target if old is not None else "/dev/null", tofile=target))
+    return changed
+
+
+def _run_captured(fn, args) -> tuple[int, str, str]:
+    """Run ``fn(args)`` with its output captured: (status, stdout, stderr)."""
+    import contextlib
+    import io
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            rc = fn(args)
+        except SystemExit as e:
+            rc = e.code
+    return rc or 0, out.getvalue(), err.getvalue()
+
+
 def _dry_run(fn, args) -> int:
     """Run the editing command ``fn`` on a copy of the configuration, then print what it
     would change as a unified diff. Writes nothing and tells no daemon to reload."""
-    import contextlib
-    import difflib
-    import io
-    import shutil
     import tempfile
     main = Path(args.config)
     with tempfile.TemporaryDirectory(prefix="udevmon-dry-run-") as tmp:
-        copy = Path(tmp) / main.name
-        real = {copy: main}
-        if main.exists():
-            shutil.copy2(main, copy)
-        for f in cfgmod.dropin_files(main):
-            cfgmod.dropin_dir(copy).mkdir(mode=0o700, exist_ok=True)
-            shutil.copy2(f, cfgmod.dropin_dir(copy) / f.name)
-        before = {f: f.read_text() for f in [copy, *cfgmod.dropin_files(copy)] if f.exists()}
-        out, err = io.StringIO(), io.StringIO()
+        copy, before = _copy_config(Path(tmp), main)
         args.config = copy
         try:
-            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                try:
-                    rc = fn(args)
-                except SystemExit as e:
-                    rc = e.code
+            rc, out, err = _run_captured(fn, args)
         finally:
             args.config = main
+
         def shown(text):                          # the real folder, not the copy's
             return text.replace(str(Path(tmp)), str(main.parent))
-        sys.stderr.write(shown(err.getvalue()))
+        sys.stderr.write(shown(err))
         if rc:
-            sys.stdout.write(shown(out.getvalue()))
+            sys.stdout.write(shown(out))
             return rc
-        after = {f: f.read_text() for f in [copy, *cfgmod.dropin_files(copy)] if f.exists()}
-        changed = False
-        for f in sorted(set(before) | set(after), key=lambda f: (f != copy, f.name)):
-            old, new = before.get(f), after.get(f)
-            if old == new:
-                continue
-            changed = True
-            target = str(real.get(f) or cfgmod.dropin_dir(main) / f.name)
-            sys.stdout.writelines(difflib.unified_diff(
-                (old or "").splitlines(keepends=True), (new or "").splitlines(keepends=True),
-                fromfile=target if old is not None else "/dev/null", tofile=target))
-        if not changed:
+        if not _print_diff(before, _texts(copy), copy, main):
             print("No file would change.")
-        sys.stdout.write(shown(out.getvalue()))
+        sys.stdout.write(shown(out))
         print("Dry run: nothing was written.")
+    return 0
+
+
+#: Options an ``apply`` step may not have (``apply`` itself takes them, for all the steps).
+APPLY_REFUSED = ("--config", "--dry-run", "--no-reload")
+
+
+def _apply_steps(text: str) -> list[list[str]]:
+    """The editing commands of an ``apply`` input: a JSON array of arrays of strings."""
+    try:
+        steps = json.loads(text)
+    except ValueError as e:
+        raise ValueError(f"the input is not JSON: {e}") from None
+    if not (isinstance(steps, list) and steps
+            and all(isinstance(x, list) and x and all(isinstance(w, str) for w in x)
+                    for x in steps)):
+        raise ValueError("the input must be a JSON array of commands, each an array of "
+                         'strings such as ["devices", "add", "NAME", "--match", "KEY=VALUE"]')
+    for i, argv in enumerate(steps, 1):
+        refused = [w for w in argv if w.split("=", 1)[0] in APPLY_REFUSED]
+        if refused:
+            raise ValueError(f"step {i}: {refused[0].split('=', 1)[0]} is not allowed in a "
+                             "step (give it to `apply` itself)")
+    return steps
+
+
+def cmd_apply(args):
+    """``udevmon apply [FILE]``: run a sequence of editing commands as one change: all on a
+    copy first, then written together (or, with ``--dry-run``, shown as one diff), with
+    one reload. A step that fails changes nothing."""
+    import tempfile
+    try:
+        text = sys.stdin.read() if args.file in (None, "-") else Path(args.file).read_text()
+        steps = _apply_steps(text)
+    except (OSError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    main = Path(args.config)
+    parser = build_parser()
+    with tempfile.TemporaryDirectory(prefix="udevmon-apply-") as tmp:
+        copy, before = _copy_config(Path(tmp), main)
+
+        def shown(text):
+            return text.replace(str(Path(tmp)), str(main.parent))
+        outputs = []
+        for i, argv in enumerate(steps, 1):
+            line = ["--config", str(copy), *argv]
+            rc, out, err = _run_captured(lambda a: parse_command(parser, a) and 0, line)
+            if rc:
+                print(f"error: step {i} ({' '.join(argv[:2])}): not a valid command",
+                      file=sys.stderr)
+                sys.stderr.write(shown(err))
+                return 1
+            step = parse_command(parser, line)
+            fn = getattr(step, "fn", None)
+            if not getattr(fn, "edits", False):
+                print(f"error: step {i} ({' '.join(argv[:2])}): not an editing command",
+                      file=sys.stderr)
+                return 1
+            rc, out, err = _run_captured(fn.__wrapped__, step)
+            if rc:
+                sys.stdout.write(shown(out))
+                sys.stderr.write(shown(err))
+                print(f"error: step {i} ({' '.join(argv[:2])}) failed; nothing was written",
+                      file=sys.stderr)
+                return 1
+            outputs.append(shown(out) + shown(err))
+        after = _texts(copy)
+        if args.dry_run:
+            if not _print_diff(before, after, copy, main):
+                print("No file would change.")
+            sys.stdout.write("".join(outputs))
+            print("Dry run: nothing was written.")
+            return 0
+        gone = [f for f in before if f not in after]
+        if gone:
+            print(f"error: the steps removed {_real(gone[0], copy, main)}; apply does not "
+                  "delete files", file=sys.stderr)
+            return 1
+        changed = {_real(f, copy, main): t for f, t in after.items() if before.get(f) != t}
+        for f, old in before.items():                 # changed by someone else meanwhile?
+            real = _real(f, copy, main)
+            if not real.exists() or real.read_text() != old:
+                print(f"error: {real} changed while the steps ran; nothing was written",
+                      file=sys.stderr)
+                return 1
+        sys.stdout.write("".join(outputs))
+        if not changed:
+            print("No file changed.")
+            return 0
+        _guard(configedit.replace_files, main, changed)
+    print(f"Applied {len(steps)} step(s): changed "
+          + ", ".join(cfgmod.file_label(main, f) for f in changed) + ".")
+    _reload_after_edit(args)
+    note = _pause_note()
+    if note:
+        print(f"Note: {note}")
     return 0
 
 
@@ -125,6 +255,7 @@ def _reloads(fn):
             if note:
                 print(f"Note: {note}")
         return rc
+    wrapper.edits = True                        # an editing command (``apply`` takes it)
     return wrapper
 
 
@@ -252,8 +383,12 @@ def cmd_pause(args):
         except ValueError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
-    was_paused, _ = pause.status()
-    until = pause.pause(seconds)
+    result = _ask_daemon("pause", {"seconds": seconds})
+    if result is not None:
+        was_paused, until = result["was_paused"], result["until"]
+    else:
+        was_paused, _ = pause.status()
+        until = pause.pause(seconds)
     print(("Already paused; now paused " if was_paused else "Automation paused ")
           + pause.describe_until(until) + ".")
     if until is not None:
@@ -266,8 +401,23 @@ def cmd_pause(args):
 def cmd_resume(args):
     """``udevmon resume``: end a pause."""
     from . import pause
-    print("Automation resumed." if pause.resume() else "Automation was not paused.")
+    result = _ask_daemon("resume")
+    was_paused = result["was_paused"] if result is not None else pause.resume()
+    print("Automation resumed." if was_paused else "Automation was not paused.")
     return 0
+
+
+def _ask_daemon(method: str, params: dict | None = None) -> dict | None:
+    """The running daemon's answer to ``method``, or None when no daemon answers on the
+    control socket (none runs, or an older one): the caller then does it itself."""
+    from . import control
+    from .daemon import running_pid
+    if running_pid() is None:
+        return None
+    try:
+        return control.call(method, params)
+    except (control.NotRunning, control.ProtocolError, control.Refused, OSError):
+        return None
 
 
 def cmd_explain(args):
@@ -543,14 +693,16 @@ def cmd_actions_set(args):
     targets = _guard(configedit.set_action_options, args.config, args.name,
                      unnamed=args.unnamed, on=on, timeout=args.timeout, run=args.cmd or None,
                      tag_mode=args.tag_mode, detach=args.detach, lock=args.lock,
-                     retries=args.retries, retry_delay=args.retry_delay, order=args.order,
+                     retries=args.retries, retry_delay=args.retry_delay,
+                     retry_backoff=args.retry_backoff, order=args.order,
                      notify_on_failure=args.notify,
                      add_devices=args.add_device, remove_devices=args.remove_device,
                      add_tags=args.add_tag, remove_tags=args.remove_tag)
     retargeted = any((args.add_device, args.remove_device, args.add_tag, args.remove_tag))
     if (retargeted and targets is None and not args.cmd
             and (args.unnamed, args.on, args.timeout, args.tag_mode, args.detach, args.lock,
-                 args.retries, args.retry_delay, args.order, args.notify) == (None,) * 10):
+                 args.retries, args.retry_delay, args.retry_backoff, args.order,
+                 args.notify) == (None,) * 11):
         print(f"Action {args.name!r} already targets that; nothing changed.")
         return 0
     print(f"Updated action {args.name!r}.")
@@ -738,6 +890,7 @@ def cmd_actions_list(args):
         flag += " [detach]" if x.detach else ""
         flag += f" [lock: {x.lock}]" if x.lock else ""
         flag += f" [retries: {x.retries}]" if x.retries else ""
+        flag += f" [backoff: {x.retry_backoff:g}]" if x.retries and x.retry_backoff != 1 else ""
         flag += f" [order: {x.order}]" if x.order != cfgmod.DEFAULT_ORDER else ""
         flag += " [notify on failure]" if x.notify_on_failure else ""
         off = " [disabled]" if not x.enabled else ""
@@ -749,16 +902,21 @@ def cmd_actions_list(args):
 
 
 def _retry_problem(args) -> bool:
-    """Print and return True when --retries / --retry-delay are out of range."""
+    """Print and return True when --retries / --retry-delay / --retry-backoff are out of
+    range."""
     if args.retries is not None and args.retries < 0:
         print("error: --retries must be 0 or more", file=sys.stderr)
         return True
     if args.retry_delay is not None and args.retry_delay <= 0:
         print("error: --retry-delay must be greater than 0", file=sys.stderr)
         return True
-    if (args.retries or args.retry_delay is not None) and getattr(args, "detach", None) is True:
-        print("error: --retries and --retry-delay have no meaning with --detach",
-              file=sys.stderr)
+    if args.retry_backoff is not None and args.retry_backoff < 1:
+        print("error: --retry-backoff must be 1 or more", file=sys.stderr)
+        return True
+    if ((args.retries or args.retry_delay is not None or args.retry_backoff is not None)
+            and getattr(args, "detach", None) is True):
+        print("error: --retries, --retry-delay and --retry-backoff have no meaning with "
+              "--detach", file=sys.stderr)
         return True
     return False
 
@@ -800,7 +958,8 @@ def cmd_actions_add(args):
     name = _guard(configedit.add_action, args.config, args.name, args.device or (),
                   args.tag or (), on, args.cmd, args.timeout, args.allow_unnamed, args.tag_mode,
                   args.detach, args.lock, args.retries or 0, args.retry_delay,
-                  file=args.file, order=args.order, notify_on_failure=args.notify_on_failure)
+                  file=args.file, order=args.order, notify_on_failure=args.notify_on_failure,
+                  retry_backoff=args.retry_backoff)
     print(f"Added action {name!r}.")
     return 0
 
@@ -926,7 +1085,10 @@ def _complete_words(args: list[str]) -> int:
 FEATURES = ("dropins", "order", "lock", "retries", "notify-on-failure", "vars",
             "from-mountpoint", "trigger", "trigger-wait", "trigger-json", "trigger-exit-codes",
             "present-json", "list-json", "check-json", "explain-json", "identify",
-            "edit-dry-run", "version-json", "env-script-dir", "env-state-root", "edit")
+            "edit-dry-run", "version-json", "env-script-dir", "env-state-root", "edit",
+            "retry-backoff", "reload-result", "max-workers-commands", "shutdown-retries",
+            "trigger-output", "dropin-script-dir", "action-program",
+            "apply", "status")
 
 
 def cmd_version(args):
@@ -939,15 +1101,89 @@ def cmd_version(args):
     return 0
 
 
+STATUS_NOT_RUNNING = 3      #: ``status`` exit status when no daemon is running
+STATUS_NO_ANSWER = 7        #: ``status`` exit status when the daemon gives no usable answer
+
+
+def cmd_status(args):
+    """``udevmon status``: whether the daemon runs, with what, and each action's last
+    result since it started; 3 when none runs, 7 when it does not answer."""
+    from datetime import datetime
+
+    from . import control
+    from .daemon import running_daemon
+    found = running_daemon()
+    reply: dict = {"running": found is not None, "pid": found[0] if found else None}
+    rc = 0
+    if found is None:
+        rc = STATUS_NOT_RUNNING
+    else:
+        try:
+            with control.Connection() as conn:
+                reply.update(conn.call("status"))
+                reply["results"] = conn.call("results")["results"]
+        except (control.NotRunning, control.ProtocolError, control.Refused, OSError,
+                KeyError, TypeError) as e:
+            rc = STATUS_NO_ANSWER
+            reply["message"] = f"no usable answer from the daemon: {e}"
+    if args.json:
+        _print_json({"exit_status": rc, "results": [], **reply})
+        return rc
+    if found is None:
+        print("udevmon is not running.")
+        return rc
+    if rc:
+        print(f"udevmon is running (pid {found[0]}) but gives no usable answer: "
+              f"{reply['message']}")
+        return rc
+    print(f"udevmon {reply['version']} is running (pid {reply['pid']}"
+          + (", dry run" if reply["dry_run"] else "") + f") with {reply['config']}: "
+          f"{reply['devices']} device(s), {reply['actions']} action(s).")
+    if reply["paused"]:
+        from . import pause
+        print(f"Automation is paused {pause.describe_until(reply['until'])}.")
+    if not reply["results"]:
+        print("No action has run since it started.")
+        return rc
+    print("Last result of each action (newest first):")
+    for r in reply["results"]:
+        when = datetime.fromtimestamp(r["time"]).strftime("%Y-%m-%d %H:%M:%S")
+        what = f"exit status {r['status']}" if r["status"] is not None else r["failure"]
+        tries = f" after {r['attempts']} attempts" if r["attempts"] > 1 else ""
+        print(f"  {r['action']:<24} {when}  {r['event']}"
+              + (f" {r['device']}" if r["device"] else "") + f": {what}{tries}")
+        if r["status"] != 0:                      # a failure: why, in its last lines
+            for line in r["output"][-3:]:
+                print(f"      {line}")
+    return rc
+
+
 def cmd_reload(args):
-    """``udevmon reload``: tell the running daemon to reread its configuration; 1 when
-    none is running."""
+    """``udevmon reload``: have the running daemon reread its configuration; 1 when none is
+    running or the configuration has errors (the daemon then keeps the previous one)."""
+    from . import control
     from .daemon import reload_running
-    if reload_running():
-        print("Sent reload to the running daemon.")
+    try:
+        result = reload_running()
+    except control.Refused as e:
+        print(f"error: {e.message}:", file=sys.stderr)
+        for problem in e.data.get("problems", []):
+            print(f"  {problem}", file=sys.stderr)
+        return 1
+    if result is None:
+        print("udevmon is not running.", file=sys.stderr)
+        return 1
+    if result["via"] == "signal":
+        print("Sent reload to the running daemon (it gives no answer: restart it to use "
+              "its control socket).")
         return 0
-    print("udevmon is not running.", file=sys.stderr)
-    return 1
+    for warning in result.get("warnings", []):
+        print(f"warning: {warning}", file=sys.stderr)
+    print(f"Reloaded the running daemon: {result['devices']} device(s), "
+          f"{result['actions']} action(s).")
+    if result.get("restart_needed"):
+        print("udev_filters changed: restart the daemon to apply them.")
+    return 0
 
 
 # `udevmon trigger` exit statuses (2 is argparse's usage error).
@@ -976,20 +1212,21 @@ def _trigger_reply(args) -> tuple[int, dict]:
         return fail(TRIGGER_OTHER_CONFIG, "other-config",
                     f"the running daemon uses {its_config}, not {args.config}")
     try:
-        reply = control.request({"cmd": "trigger", "device": args.device, "event": args.event,
-                                 "wait": args.wait}, timeout=None if args.wait else 30.0)
+        reply = control.call("trigger", {"device": args.device, "event": args.event,
+                                         "wait": args.wait},
+                             timeout=None if args.wait else 30.0)
     except control.NotRunning:
         return fail(TRIGGER_NOT_RUNNING, "not-running",
                     "udevmon is not running (no answer on its control socket)")
-    except (OSError, ValueError) as e:
+    except control.Refused as e:
+        return (TRIGGER_UNKNOWN_DEVICE if e.error == "unknown-device" else TRIGGER_REFUSED), \
+            {"ok": False, "error": e.error, "message": e.message}
+    except (OSError, ValueError) as e:            # ProtocolError is a ValueError
         return fail(TRIGGER_NO_ANSWER, "no-answer", f"no usable answer from the daemon: {e}")
     if not isinstance(reply, dict):
         return fail(TRIGGER_NO_ANSWER, "no-answer", "no usable answer from the daemon")
-    if not reply.get("ok"):
-        error = reply.get("error") or "refused"
-        return (TRIGGER_UNKNOWN_DEVICE if error == "unknown-device" else TRIGGER_REFUSED), \
-            {"ok": False, "error": error, "message": reply.get("message", "the daemon refused")}
-    statuses = [{"action": name, "status": status} for name, status in reply.get("statuses", [])]
+    statuses = [{"action": x["action"], "status": x["status"], "failure": x.get("failure"),
+                 "output": x.get("output", [])} for x in reply.get("statuses", [])]
     failed = any(x["status"] != 0 for x in statuses)
     return (TRIGGER_FAILED if failed else 0), {
         "ok": True, "error": None, "message": None, "event": reply["event"],
@@ -1017,10 +1254,15 @@ def cmd_trigger(args):
             print(f"  skipped {skip['action']}: {skip['reason']}")
     for x in reply["statuses"] or []:
         if x["status"] is None:
-            print(f"  {x['action']}: no exit status (timed out, could not start, or "
-                  "detached; see the log)")
+            print(f"  {x['action']}: no exit status ("
+                  + (x["failure"] or "timed out, could not start, or detached; see the log")
+                  + ")")
         else:
             print(f"  {x['action']}: exit status {x['status']}")
+        if x["status"] != 0 and x["output"]:
+            print("    its last output:")
+            for line in x["output"]:
+                print(f"      {line}")
     if args.wait and not reply["statuses"]:
         print("Nothing ran.")
     return rc
@@ -1194,6 +1436,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="run again after a non-zero exit, up to N more times")
     x.add_argument("--retry-delay", type=float, metavar="SECONDS",
                    help="seconds between attempts (default 1)")
+    x.add_argument("--retry-backoff", type=float, metavar="FACTOR",
+                   help="multiply the delay by FACTOR after each attempt (default 1)")
     grp = x.add_mutually_exclusive_group()
     grp.add_argument("--allow-unnamed", dest="allow_unnamed", action="store_const", const=True,
                      default=None, help="also run for unnamed things matching the tag")
@@ -1223,6 +1467,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="run again after a non-zero exit, up to N more times (0 removes it)")
     x.add_argument("--retry-delay", type=float, metavar="SECONDS",
                    help="seconds between attempts")
+    x.add_argument("--retry-backoff", type=float, metavar="FACTOR",
+                   help="multiply the delay by FACTOR after each attempt (1 removes it)")
     x.add_argument("--order", type=int, metavar="N",
                    help="within one event, lower runs first (50, the default, removes it)")
     nt = x.add_mutually_exclusive_group()
@@ -1276,6 +1522,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-reload", action="store_true",
                    help="don't tell the running daemon to reload")
     s.set_defaults(fn=cmd_edit)
+    s = sub.add_parser("apply", help="make several edits as one change (JSON from FILE or "
+                       "stdin)", parents=[edits])
+    s.add_argument("file", nargs="?", metavar="FILE",
+                   help="a JSON array of editing commands, each an array of strings "
+                        "(default: standard input)")
+    s.set_defaults(fn=cmd_apply)
+    s = sub.add_parser("status", help="whether the daemon runs, and each action's last "
+                       "result", parents=[js])
+    s.set_defaults(fn=cmd_status)
     s = sub.add_parser("check", help="validate the config", parents=[js])
     s.set_defaults(fn=cmd_check)
     s = sub.add_parser("version", help="print the version and the features scripts can test",
@@ -1306,12 +1561,10 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv=None) -> int:
-    """Run the command in ``argv`` (default ``sys.argv[1:]``) and return its exit status."""
-    argv = list(sys.argv[1:] if argv is None else argv)
-    if argv[:1] == ["_complete"]:        # not a documented command: see completion.py
-        return _complete_words(argv[1:])
-    parser = build_parser()
+def parse_command(parser, argv: list[str]):
+    """Parse a command line (without the program name) as :func:`main` does: what comes
+    after ``--`` is the command (``args.cmd``), and ``--config`` defaults to the usual
+    file (``args.config_explicit`` says whether it was given)."""
     tail: list[str] = []
     if "--" in argv:                     # everything after -- is a command, verbatim
         i = argv.index("--")
@@ -1321,6 +1574,15 @@ def main(argv=None) -> int:
     args.config_explicit = args.config is not None
     if args.config is None:
         args.config = cfgmod.default_config_path()
+    return args
+
+
+def main(argv=None) -> int:
+    """Run the command in ``argv`` (default ``sys.argv[1:]``) and return its exit status."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["_complete"]:        # not a documented command: see completion.py
+        return _complete_words(argv[1:])
+    args = parse_command(build_parser(), argv)
     _setup_logging(args.verbose)
     try:
         return args.fn(args) or 0

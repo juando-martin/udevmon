@@ -88,7 +88,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_a_sending_error_is_only_logged(self):
         self.send.side_effect = RuntimeError("no notification daemon")
-        self.assertEqual(self.run_it(config(["/bin/false"])), [("sync", 1)])
+        self.assertEqual([r[:2] for r in self.run_it(config(["/bin/false"]))], [("sync", 1)])
 
     def test_a_dry_run_sends_nothing(self):
         self.run_it(config(["/bin/false"]), dry_run=True)

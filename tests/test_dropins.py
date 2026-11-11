@@ -143,7 +143,7 @@ class ProblemTests(Base):
     def test_daemon_settings_only_in_the_main_file(self):
         self.standard()
         self.write(self.dir / "70-x.toml", "[daemon]\ndebounce = 2\n")
-        self.assertIn("[daemon] is only read from config.toml", self.problems()[0])
+        self.assertIn("a drop-in's [daemon] may only have script_dir", self.problems()[0])
 
     def test_problems_inside_a_drop_in_say_where(self):
         self.standard()

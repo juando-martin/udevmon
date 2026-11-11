@@ -55,6 +55,38 @@ their pinned version.
   then the file is replaced (keeping `.bak`) and the daemon reloads. A file
   changed by another program meanwhile is not overwritten (the edit is kept
   as `NAME.edit`). Feature name `edit`.
+- **`scan` through the running daemon**: when a daemon with the same
+  configuration runs, `scan` shows the events it receives instead of
+  watching by itself, so only one process watches.
+- **`udevmon pause` and `resume` tell the running daemon**, which logs the
+  change at once (the pause is still the flag file, and works with no
+  daemon).
+- **Why an action failed, in `trigger --wait`**: each action's result has
+  `failure` (timed out, could not start, ...) and `output`, the last 10
+  lines of what it printed (each cut to 300 characters); the text output
+  shows them under a failed action. Feature name `trigger-output`.
+- **`udevmon status [--json]`**: whether the daemon is running, its version,
+  configuration and pause, and each action's last result since it started
+  (time, event, device, exit status or why there is none, the last output
+  lines of a failure). Exit 3 when no daemon runs. Feature name `status`.
+- **`udevmon apply [FILE] [--dry-run]`**: several editing commands as one
+  change. The input is a JSON array of commands (each an array of words);
+  they run in order on a copy, and only when all succeed are the files
+  written, with one reload. `--dry-run` prints the whole change as one diff.
+  Feature name `apply`.
+- **A drop-in's own `script_dir`**: a drop-in's `[daemon]` may now have
+  `script_dir` (and nothing else). Its folders are searched first, for that
+  drop-in's actions only, so a tool's drop-in can name its programs by bare
+  name without editing `config.toml`, and cannot change what a bare name
+  means elsewhere. Feature name `dropin-script-dir`.
+- **`actions list --json` says which program runs**: `program`, the file
+  the daemon will start (or null), with `program_lookup` (`path`,
+  `script_dir`, `PATH`, `placeholder`) and the action's own `script_dir`.
+  Feature name `action-program`.
+- **`retry_backoff`** for actions (and `--retry-backoff` on `actions add` and
+  `actions set`): each wait between attempts is that many times the one
+  before (`retry_delay = 2`, `retry_backoff = 2`: 2, 4, 8 ... seconds).
+  Feature name `retry-backoff`.
 
 ### Changed (incompatible)
 
@@ -63,6 +95,26 @@ their pinned version.
   names another file, 6 another refusal (not present, ignored, the event
   does not fit, paused), 7 an unreadable answer. 1 now means only that an
   action failed (with `--wait`). Before, all of these gave 1.
+- **`max_workers` counts commands, not events**: every event's actions run in
+  a thread of their own, and `max_workers` is how many commands may run at
+  once. An action waiting for its `lock`, or between two attempts, no longer
+  holds up other events. Feature name `max-workers-commands`.
+- **Retries of `shutdown` actions go on while the daemon stops** (within the
+  service's 120 seconds); before, stopping ended them like any other.
+  Feature name `shutdown-retries`.
+- **`udevmon reload` reports the result and fails on a bad configuration**:
+  it prints what the daemon loaded and its warnings; when the configuration
+  has errors it prints them and exits 1 (so does `systemctl --user reload
+  udevmon`), the daemon keeping the previous one. The editing commands, too,
+  now return only once the daemon has reloaded, so a `udevmon trigger` right
+  after an edit finds the new device. Before, `reload` sent `SIGHUP` and
+  always exited 0 with a daemon running. Feature name `reload-result`.
+- **The control socket speaks JSON-RPC 2.0** (one object per line,
+  persistent connections, methods `hello`, `status`, `present`, `trigger`,
+  `pause`, `resume`, `reload`, `subscribe`; SPECIFICATIONS §8.9, a draft).
+  After upgrading, restart the daemon: against one still running the old
+  version, `trigger` exits 7 and says so, while `reload`, `pause` and
+  `resume` fall back to `SIGHUP` and the flag file.
 
 ### Documentation
 

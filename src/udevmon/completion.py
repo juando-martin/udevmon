@@ -59,12 +59,13 @@ POSITIONALS = {
     ("actions", "add"): ["events"],
     ("explain",): ["event"],
     ("edit",): ["config-file"],
+    ("apply",): ["file"],
 }
 
 #: Every kind a positional slot above may use (tests check these tables against the CLI).
 SLOT_KINDS = {"device", "tag", "declared-tag", "action", "device-tag", "events", "event", "new",
               "rule-tag", "device-exclusion", "trigger-event", "mountpoint",
-              "config-file"}
+              "config-file", "file"}
 
 #: Slots that take a new name typed by the user, so there is nothing to complete.
 FREE_SLOT_KINDS = {"new"}
@@ -80,7 +81,7 @@ OPTION_VALUE_DESTS = {"config", "dest", "device", "tag", "match", "prop", "on",
 PAUSE_DURATIONS = ("15m", "30m", "1h", "2h", "1d")
 
 #: Options that take free text, which is not completed.
-FREE_TEXT_DESTS = {"name", "timeout", "description", "retries", "retry_delay",
+FREE_TEXT_DESTS = {"name", "timeout", "description", "retries", "retry_delay", "retry_backoff",
                    "order"}
 
 HEADER = "# bash completion for udevmon"   #: marks a file as ours (uninstall checks it)
@@ -336,6 +337,8 @@ def _positional(st: _State, cur: str, cfg):
         return WORDS, _startswith(sorted(TRIGGER_KINDS), cur)
     if kind == "mountpoint":
         return DIRS, []
+    if kind == "file":
+        return FILES, []
     if kind == "config-file":
         return _dropins(st, cur)
     if kind in FREE_SLOT_KINDS:

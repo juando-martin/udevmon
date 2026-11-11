@@ -64,7 +64,7 @@ def render_tag(name, match, description="") -> str:
 
 def render_action(name, devices, tags, on, run, timeout=None, allow_unnamed=None,
                   tag_mode=None, detach=False, lock=None, retries=0, retry_delay=None,
-                  order=None, notify_on_failure=False) -> str:
+                  order=None, notify_on_failure=False, retry_backoff=None) -> str:
     """The ``[[actions]]`` block for an action, as ``actions add`` writes it."""
     lines = ["[[actions]]", f"name = {_s(name)}"]
     lines.append(f"device = {_name_or_list(devices)}" if devices
@@ -82,6 +82,8 @@ def render_action(name, devices, tags, on, run, timeout=None, allow_unnamed=None
         lines.append(f"retries = {retries}")
     if retry_delay is not None:
         lines.append(f"retry_delay = {retry_delay:g}")
+    if retry_backoff is not None and retry_backoff != 1:
+        lines.append(f"retry_backoff = {retry_backoff:g}")
     if order is not None and order != cfgmod.DEFAULT_ORDER:
         lines.append(f"order = {order}")
     if notify_on_failure:
@@ -144,6 +146,17 @@ def replace_file(main: Path, path: Path, text: str) -> None:
         ConfigError: the configuration with the new text is invalid (nothing changed).
     """
     _commit(main, {path: text}, lambda cfg: None)
+
+
+def replace_files(main: Path, texts: dict) -> None:
+    """Replace several files of ``main``'s configuration at once (``udevmon apply``):
+    ``texts`` maps each path to its new text. A .bak is kept of each; if the whole
+    configuration then fails to load, every file is rolled back.
+
+    Raises:
+        ConfigError: the configuration with the new texts is invalid (nothing changed).
+    """
+    _commit(main, dict(texts), lambda cfg: None)
 
 
 def _file(cfg, kind: str, name: str, main: Path) -> Path:
@@ -210,7 +223,8 @@ def add_tag(path: Path, name, match, description="", *, file=None) -> None:
 
 def add_action(path: Path, name, devices, tags, on, run, timeout=None, allow_unnamed=None,
                tag_mode=None, detach=False, lock=None, retries=0, retry_delay=None, *,
-               file=None, order: int | None = None, notify_on_failure: bool = False) -> str:
+               file=None, order: int | None = None, notify_on_failure: bool = False,
+               retry_backoff: float | None = None) -> str:
     """Add an action at the end of the main file ``path`` (or of the drop-in ``file``)."""
     target = _target(path, file)
     existing = cfgmod.load(path)
@@ -224,7 +238,8 @@ def add_action(path: Path, name, devices, tags, on, run, timeout=None, allow_unn
         raise cfgmod.ConfigError([f"action {name!r} already exists"
                                   + _in(existing, "action", name)])
     block = render_action(name, devices, tags, on, run, timeout, allow_unnamed, tag_mode,
-                          detach, lock, retries, retry_delay, order, notify_on_failure)
+                          detach, lock, retries, retry_delay, order, notify_on_failure,
+                          retry_backoff)
     _edit(target, _append(target, block),
           lambda c: [a for a in c.actions if a.name == name][0], main=path)
     return name
@@ -478,12 +493,13 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
                        on=None, timeout: float | None = None, run=None, tag_mode=None,
                        detach: bool | None = None, lock: str | None = None,
                        retries: int | None = None, retry_delay: float | None = None,
-                       order: int | None = None, notify_on_failure: bool | None = None,
+                       retry_backoff: float | None = None, order: int | None = None, notify_on_failure: bool | None = None,
                        add_devices=(), remove_devices=(), add_tags=(), remove_tags=()):
     """Change an action's ``allow_unnamed``, events, timeout, command, lock or targets.
 
     ``lock`` is a lock name, or "" to remove the action's lock. ``retries`` is a count
-    (0 removes the setting); ``retry_delay`` is in seconds.
+    (0 removes the setting); ``retry_delay`` is in seconds; ``retry_backoff`` a factor
+    (1 removes the setting).
 
     ``unnamed`` is "allow", "named-only" or "default" (back to not stated). An action
     targets devices or tags, never both, and keeps at least one. Returns the new list of
@@ -503,13 +519,13 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
                                   "apply to actions that use tags"])
     if (unnamed is None and on is None and timeout is None and run is None and tag_mode is None
             and detach is None and lock is None and retries is None and retry_delay is None
-            and order is None and notify_on_failure is None
+            and retry_backoff is None and order is None and notify_on_failure is None
             and not (device_edit or tag_edit)):
         raise cfgmod.ConfigError(["nothing to change: give --allow-unnamed, --named-only, "
                                   "--default-unnamed, --on, --timeout, --add-device, "
                                   "--remove-device, --add-tag, --remove-tag, --all-tags, "
                                   "--any-tags, --detach, --no-detach, --lock, --no-lock, "
-                                  "--retries, --retry-delay, --order, --notify-on-failure, "
+                                  "--retries, --retry-delay, --retry-backoff, --order, --notify-on-failure, "
                                   "--no-notify-on-failure or a new command after --"])
     key = None
     targets = None
@@ -537,7 +553,8 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
             key = None
             if (unnamed is None and on is None and timeout is None and run is None
                     and tag_mode is None and detach is None and lock is None
-                    and retries is None and retry_delay is None and order is None
+                    and retries is None and retry_delay is None and retry_backoff is None
+                    and order is None
                     and notify_on_failure is None):
                 return None
 
@@ -564,6 +581,12 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
         if retry_delay is not None:
             item["retry_delay"] = int(retry_delay) if float(retry_delay).is_integer() \
                 else float(retry_delay)
+        if retry_backoff is not None:
+            if float(retry_backoff) == 1:
+                item.pop("retry_backoff", None)             # the default: no key
+            else:
+                item["retry_backoff"] = int(retry_backoff) \
+                    if float(retry_backoff).is_integer() else float(retry_backoff)
         if notify_on_failure is True:
             item["notify_on_failure"] = True
         elif notify_on_failure is False:
@@ -618,6 +641,7 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
                 or (lock is not None and a.lock != (lock or None))
                 or (retries is not None and a.retries != retries)
                 or (retry_delay is not None and a.retry_delay != float(retry_delay))
+                or (retry_backoff is not None and a.retry_backoff != float(retry_backoff))
                 or (order is not None and a.order != order)
                 or (notify_on_failure is not None and a.notify_on_failure != notify_on_failure)
                 or (key is not None and list(a.targets) != targets)):

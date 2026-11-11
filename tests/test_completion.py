@@ -183,7 +183,7 @@ class EngineTests(unittest.TestCase):
                           "--timeout", "--no-reload", "--help", "--add-device",
                           "--remove-device", "--add-tag", "--remove-tag", "--all-tags", "--any-tags",
                           "--detach", "--no-detach", "--lock", "--no-lock", "--retries",
-                          "--retry-delay", "--order", "--notify-on-failure",
+                          "--retry-delay", "--retry-backoff", "--order", "--notify-on-failure",
                           "--no-notify-on-failure", "--dry-run"})
         self.assertEqual(self.words("udevmon actions set log --timeout "), [])   # free text
         self.assertIn("--no-reload", self.words("udevmon devices ignore --"))

@@ -172,7 +172,8 @@ class OfflineBuildTests(unittest.TestCase):
             "udevmon.sources.udev.UdevSource.start", "udevmon.sources.udev.UdevSource.snapshot",
             "udevmon.sources.udisks.UdisksSource.start",
             "udevmon.sources.udisks.UdisksSource.snapshot",
-            "udevmon.control.ControlServer.start", "udevmon.control.request",
+            "udevmon.control.ControlServer.start", "udevmon.control.call",
+            "udevmon.control.Connection.__init__",
             "udevmon.notify.send", "udevmon.session.update",
             "udevmon.service.install", "udevmon.completion.default_install_path",
         ]

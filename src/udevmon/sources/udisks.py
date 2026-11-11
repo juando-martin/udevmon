@@ -206,9 +206,11 @@ class UdisksSource:
                              Gio.DBusCallFlags.NONE, 5000, None)
         return res.unpack()[0]
 
-    def present(self) -> list[Endpoint]:
-        """Filesystems currently known to be present."""
-        return self.tracker.filesystems(self.include_system)
+    def present(self, include_system: bool | None = None) -> list[Endpoint]:
+        """Filesystems currently known to be present; system ones as the source was made,
+        unless ``include_system`` says otherwise."""
+        return self.tracker.filesystems(self.include_system if include_system is None
+                                        else include_system)
 
     def snapshot(self, include_system: bool = False) -> list[Endpoint]:
         """The filesystems present now, asked from udisks2; empty (with a warning) when it cannot

@@ -168,6 +168,12 @@ class VersionTests(Base):
         self.assertIn("identify", data["features"])
         self.assertEqual(len(set(cli.FEATURES)), len(cli.FEATURES))
 
+    def test_behaviour_changes_have_names_too(self):
+        for name in ("reload-result", "max-workers-commands", "shutdown-retries",
+                     "retry-backoff", "trigger-output", "dropin-script-dir",
+                     "action-program", "apply", "status"):
+            self.assertIn(name, cli.FEATURES)
+
     def test_the_version_option_stays_a_bare_number(self):
         rc, out, _ = self.run_cli("--version")
         self.assertEqual((rc, out), (0, cli.__version__ + "\n"))

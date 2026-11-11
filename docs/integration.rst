@@ -83,13 +83,15 @@ Calling the CLI
   an ``error`` code and each action's status. It needs the daemon's
   ``XDG_RUNTIME_DIR``.
 * ``udevmon reload``, ``pause [--for DURATION]`` and ``resume`` act on the
-  running daemon. The pause is a flag file, so it applies even to a daemon
-  started later.
+  running daemon. ``reload`` exits 1 when the new configuration has errors
+  (printed; the daemon keeps the previous one) or no daemon runs. The pause is
+  a flag file, so it applies even to a daemon started later.
 * ``udevmon check`` validates a configuration (``--config PATH`` for
   another file) without running anything.
 
-The control socket (``$XDG_RUNTIME_DIR/udevmon.sock``) and its JSON lines
-are internal: use the commands above, which own the protocol. Integration
+The control socket (``$XDG_RUNTIME_DIR/udevmon.sock``) speaks JSON-RPC 2.0;
+its protocol (``SPECIFICATIONS.md`` §8.9) is a draft and still internal: use
+the commands above, which own it. Integration
 tests must use a private daemon with its own configuration and runtime
 folder (``DEVELOPMENT.md``, "Live testing"), never the user's service: set
 ``XDG_CONFIG_HOME`` and ``XDG_RUNTIME_DIR`` to private folders for both the
@@ -102,5 +104,7 @@ The contracts above cover today's integrations (kp-sync, rclone-config).
 Things a new integration might miss, none of them planned (planned work is
 in ``SPECIFICATIONS.md`` §12):
 
-* A documented, versioned control-socket protocol for clients other than
-  the CLI, such as a GUI (``SPECIFICATIONS.md`` §11).
+* A public control-socket protocol for clients other than the CLI, such as
+  a GUI: ``SPECIFICATIONS.md`` §8.9 describes a versioned one (``hello``,
+  ``status``, ``present``, ``subscribe`` ...), but it is a draft until a real
+  client has used it.

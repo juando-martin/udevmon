@@ -60,14 +60,19 @@ def tag_entry(cfg: cfgmod.Config, name: str) -> dict:
 
 
 def action_entry(cfg: cfgmod.Config, action: cfgmod.Action) -> dict:
-    """One action, for ``actions list --json``. Every field is given, defaults included."""
+    """One action, for ``actions list --json``. Every field is given, defaults included,
+    with ``program``: the file the daemon would start (``config.program_lookup``, which
+    ``program_lookup`` names)."""
+    lookup, program = cfgmod.program_lookup(cfg.settings, action)
     return {"name": action.name, "devices": list(action.devices), "tags": list(action.tags),
             "tag_mode": action.tag_mode, "on": list(action.on), "run": list(action.run),
             "timeout": action.timeout, "allow_unnamed": action.allow_unnamed,
             "enabled": action.enabled, "detach": action.detach, "lock": action.lock,
             "retries": action.retries, "retry_delay": action.retry_delay,
+            "retry_backoff": action.retry_backoff,
             "order": action.order, "notify_on_failure": action.notify_on_failure,
-            **where(cfg, "action", action.name)}
+            "script_dir": list(action.script_dir), "program": program,
+            "program_lookup": lookup, **where(cfg, "action", action.name)}
 
 
 def file_entries(cfg: cfgmod.Config) -> list[dict]:

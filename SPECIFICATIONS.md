@@ -24,8 +24,8 @@ unprivileged user.
 
 - No TUI/GUI (the config format and CLI are designed so one can be added).
 - No root component, no udev rules installed (optional later, see §12).
-- The control socket (§8.6) carries `trigger` only; reload is still by `SIGHUP`
-  and pause by a flag file.
+- No public protocol for other clients yet: the control socket (§8.9) is a
+  draft, used by the CLI only.
 - No Bluetooth / network / display sources yet (extension points exist, see §11).
 - No backwards compatibility with earlier config spellings while the tool is
   preliminary; format changes are made in place.
@@ -474,7 +474,9 @@ Rules:
   Only regular files named `NAME.toml` with `NAME` starting with a letter, digit
   or `_` are read (no hidden files, no `.bak`/`.tmp`). `config.load()` reads them
   all; a missing main file with drop-ins is fine (`must_exist` then holds).
-- A drop-in has the main file's schema except `[daemon]` (an error there). The
+- A drop-in has the main file's schema, but its `[daemon]` may only have
+  `script_dir` (anything else is an error): it becomes the `script_dir` of that
+  file's own actions (`Action.script_dir`, §7.1). The
   `devices`, `tags` and `actions` of all files are merged before validation, so
   references cross files. A device, declared tag or explicitly named action
   defined in two files is an error naming both; errors inside a drop-in are
@@ -513,8 +515,8 @@ reload keeps the previous configuration:
 - an invalid `timeout`, a `detach` that is not a boolean, or a `timeout` together with
   `detach = true` (§7.2); a `lock` that is not a name (§7.3); `retries` that is not a
 whole number of 0 or more, `order` that is not a whole number, `retry_delay` that
-is not a number above 0, or either of
-them with `detach` (§7.4);
+is not a number above 0, `retry_backoff` that is not a number of 1 or more, or any
+of the three with `detach` (§7.4);
 - a device `status` other than `"disabled"`, `"ignored"`, `"active"` or `""`, or a
   non-boolean `enabled` (§5.7);
 - `exclude_tags` that is not a name or a non-empty list of names, or that lists a tag
@@ -594,6 +596,19 @@ the standard system paths` (logged at WARNING for a real event, listed by `expla
 When it is not set nothing changes: a bare name is left to `PATH`. Changing
 `script_dir` takes a reload; scripts added afterwards need none.
 
+A drop-in's `[daemon] script_dir` (§6.0) is set on each of its actions as
+`Action.script_dir`: for those actions alone it is searched first, then the main
+file's, then `SYSTEM_PATHS`, and it makes a bare name use the lookup even when the
+main file has no `script_dir`. So a tool's drop-in can name its own programs by
+bare name without editing `config.toml`, and cannot change what a bare name means
+in another file's actions (a virtual environment's `python3`, say). `check` warns
+about such a folder that is not a folder, naming its file.
+`config.program_lookup` says how and where an action's program is found, for
+`actions list --json`: `path` (a `/` in `run[0]`; relative to the home folder,
+where commands start), `script_dir`, `PATH` (a bare name without any `script_dir`:
+only the daemon's environment decides) or `placeholder`; with the file for the
+first two, None when it is missing.
+
 - Single instance (`flock` on `$XDG_RUNTIME_DIR/udevmon.lock`, which also
   stores the PID on the first line and the resolved config path on the second).
 - Starts sources, primes caches, emits `startup` events for things already present
@@ -602,10 +617,13 @@ When it is not set nothing changes: a bare name is left to `PATH`. Changing
   check whether automation is paused; if so, log it (debug) and stop. The start and
   the end of a pause are logged once each (info); the start-up line ends with
   `[PAUSED]` when paused.
-- `SIGHUP`: re-read config; on error keep the old config and log. Changes to
+- `SIGHUP`, or `reload` on the control socket (§8.9): re-read config; on error
+  keep the old config and log (`reload` also answers with the errors). Changes to
   `udev_filters` need a restart (logged). Warnings (§6.2) are logged again.
-- The editing CLI commands, and `scan` after saving a device, send `SIGHUP` to the
-  running daemon when its recorded config is the same file as theirs (compared
+- The editing CLI commands, and `scan` after saving a device, ask the running
+  daemon to reload (`daemon.reload_running`: the `reload` method, or `SIGHUP`
+  when the socket does not answer) when its recorded config is the same file as
+  theirs (compared
   after resolving symlinks; a daemon whose config is unknown, from an older lock
   file, is assumed to match). They print `Reloaded the running daemon.`
   `--no-reload` skips it. A daemon running another config is left alone.
@@ -634,8 +652,9 @@ When it is not set nothing changes: a bare name is left to `PATH`. Changing
   3. If none is selected, stop. Otherwise sort the selected actions by `order`
      (an integer, default 50, lower first); the sort is stable, so equal ones keep
      config order (main file, then drop-ins, §6.0). Skips are sorted the same way.
-  4. One job per event runs its selected actions **sequentially in that order**;
-     different events run in parallel in a small thread pool.
+  4. One job per event runs its selected actions **sequentially in that order**,
+     in a thread of its own; different events run in parallel, with at most
+     `max_workers` commands running at once (§7.3).
 - A thing matching several named devices is logged (info): usually a config smell.
 - Selected actions for unnamed things are logged at info with an "unnamed" marker;
   unnamed things skipped because no action allows them are logged at debug.
@@ -676,36 +695,46 @@ program can keep writing without a broken pipe.
 An action may name a `lock` (a name). `ActionRunner` keeps one `FifoLock` per name: a
 ticket counter and a "now serving" counter under a condition variable. `submit()` is
 called on the daemon's main thread, in the order events arrive, and takes one ticket
-for every job that has a lock; the worker that later runs the job waits until its
-ticket is being served and serves the next one when the job has finished, however it
+for every job that has a lock; the event's thread waits, when it reaches the job, until
+its ticket is being served and serves the next one when the job has finished, however it
 finished (a crash, or an exit that is not an exception, still serves it, and so do the
 tickets of the rest of that event's jobs). So the jobs of one lock run one at a time, in
 arrival order; jobs without a lock, and locks with other names, are not affected;
 within one event the jobs still run by `order`, then file order.
 
+- **Command slots:** `max_workers` is a counting semaphore, taken only around each
+  attempt's command (`run_action`) and never while waiting for a lock or between
+  retries (§7.4). A `detach`ed command holds it only while starting. So a job waiting
+  for its lock holds up no other event; a burst of events makes as many threads,
+  most of them idle.
 - **No deadlock:** a job only waits for jobs of earlier events (or earlier in its own
-  event, which run before it in the same worker), and the pool starts tasks in arrival
-  order, so the oldest unfinished job always has a worker; tickets follow arrival order
-  for every lock, so two locks taken in opposite orders by two events cannot cycle.
+  event, which run before it in the same thread); every event has its own thread, and
+  nothing waits for a lock while holding a slot, so the oldest unfinished job can
+  always run; tickets follow arrival order for every lock, so two locks taken in
+  opposite orders by two events cannot cycle.
 - **Bounded wait:** every command has a `timeout`. A `detach`ed command releases the
   lock once started; any other releases it when its process has exited (§7.2), whatever
   it left running.
-- A waiting job occupies one worker (`max_workers`); locks are for short sections.
 - The log says (INFO) when a job had to wait. A `lock` is a name (letters, digits,
   `_ . -`); anything else is an error (§6.1).
 
 ### 7.4 Retries
 
-`retries` (a whole number, default 0) and `retry_delay` (seconds, more than 0, default 1)
-belong to an action. `ActionRunner._run_with_retries` runs the command up to
-`retries + 1` times: after an attempt that returns a non-zero status it waits
-`retry_delay` and tries again. `run_action` returns None for a timeout, a failure to
+`retries` (a whole number, default 0), `retry_delay` (seconds, more than 0, default 1)
+and `retry_backoff` (a number, 1 or more, default 1) belong to an action.
+`ActionRunner._run_with_retries` runs the command up to `retries + 1` times: after an
+attempt that returns a non-zero status it waits and tries again, the first wait
+`retry_delay` and each later one `retry_backoff` times the one before. `run_action` returns None for a timeout, a failure to
 start, a skipped action (unavailable placeholder) and a dry run, and 0 for success, so
 none of those is retried. Before each retry the runner checks that automation is not
 paused, and it waits on the event that `shutdown()` sets, so a stop interrupts the wait
-and ends the retrying. Every failed attempt is logged (WARNING), and after the last one
-`gave up after N attempts`. Each attempt has its own timeout; a `lock` (§7.3) is held
-across all of them. `retries` or `retry_delay` with `detach` is an error (§6.1).
+and ends the retrying, except for a `shutdown` event: its retries go on during the exit
+pass (the service's `TimeoutStopSec=120` bounds them; `shutdown(wait=False)` still
+cuts them short, and then no command not yet started starts). Every failed attempt is
+logged (WARNING), and after the last one `gave up after N attempts`. Each attempt has
+its own timeout; a `lock` (§7.3) is held across all of them, a command slot only while
+each attempt's command runs. `retries`, `retry_delay` or `retry_backoff` with `detach`
+is an error (§6.1).
 
 ### 7.4.1 Failure notifications
 
@@ -775,7 +804,7 @@ udevmon actions list [--json]
 udevmon actions add (--device NAME ... | --tag NAME ...) EVENT[,EVENT ...]
                     [--name NAME] [--timeout SECONDS] [--all-tags]
                     [--detach] [--lock NAME] [--retries N] [--retry-delay S]
-                    [--order N] [--notify-on-failure]
+                    [--retry-backoff F] [--order N] [--notify-on-failure]
                     [--allow-unnamed | --named-only] [--file DROPIN]
                     -- COMMAND [ARG ...]
 udevmon actions remove NAME
@@ -787,7 +816,7 @@ udevmon actions set NAME [--allow-unnamed | --named-only
                     [--add-tag N ...] [--remove-tag N ...]
                     [--all-tags | --any-tags] [--detach | --no-detach]
                     [--lock NAME | --no-lock] [--retries N]
-                    [--retry-delay S] [--order N]
+                    [--retry-delay S] [--retry-backoff F] [--order N]
                     [--notify-on-failure | --no-notify-on-failure]
                     [-- COMMAND ...]
 udevmon explain [EVENT] [--device NAME] [--prop KEY=VALUE ...] [--all]
@@ -796,8 +825,11 @@ udevmon pause [--for DURATION]          stop every action (§8.5)
 udevmon resume                          let actions run again
 udevmon check [--json]                  validate: errors, warnings, notes
 udevmon edit [FILE] [--no-reload]       edit a file, checked (§8.8)
+udevmon apply [FILE] [--dry-run] [--no-reload]
+                                        several edits as one (§8.10)
 udevmon version [--json]                version and feature names (§8.7)
-udevmon reload                          SIGHUP the running daemon
+udevmon reload                          reload the running daemon (§8.9)
+udevmon status [--json]                 the daemon and last results (§8.9)
 udevmon trigger DEVICE [EVENT] [--wait] [--json]
                                         run a present device's actions now
                                         (§8.6)
@@ -845,7 +877,12 @@ The editing commands (every `devices`, `tags` and `actions` sub-command but
 
 ### 8.1 Scan mode
 
-1. Print a banner and start the same sources as the daemon.
+1. Print a banner and start the same sources as the daemon. When a daemon
+   with the same configuration (`status`) answers on the control socket,
+   subscribe to its events instead (`subscribe`, then `present` with `system`
+   false for things already there), so only one process watches; the banner says
+   `through the running daemon`, a `lost` notice is printed as a line, and when
+   the daemon stops the scan ends.
 2. Print each event as it happens (kind, description, properties, strength, and
    whether the thing is named and which tags it has).
 3. After 2 s without new events, present the collected things as a numbered
@@ -987,21 +1024,19 @@ with the reason.
 - While paused no action runs, including `startup` and `shutdown` ones (the
   daemon's exit pass is held back too). Events keep arriving and are not replayed on
   resume. `Engine.plan()` (and so `explain`) ignores the pause.
-- `pause` succeeds even when no daemon is running (and says so): the daemon obeys
-  the file once it starts. Pausing again replaces the previous pause.
+- With a daemon running, `pause` and `resume` go through its control socket
+  (§8.9): the daemon writes or removes the file itself, logs it at once and
+  answers. When no daemon answers, the command writes the file; `pause`
+  succeeds even when no daemon is running (and says so): the daemon obeys the
+  file once it starts. Pausing again replaces the previous pause.
 - `explain` prints `Note: automation is paused (...)`, and the editing commands and
   `scan`, after a successful change, print the same note.
 
 ### 8.6 Trigger
 
-- The daemon listens on `$XDG_RUNTIME_DIR/udevmon.sock` (mode 0600, removed on
-  stop; a stale one is replaced, the lock file proving no other daemon runs).
-  A connection whose peer uid (`SO_PEERCRED`) is not the daemon's is refused.
-  One request per connection: one JSON line in, one out. Reading and replying
-  happen in a thread; the request is handled on the main loop (`idle_add`),
-  so it is ordered with events, and lock tickets are taken there as for events.
-  If the socket cannot be opened the daemon logs a warning and runs without it.
-- `{"cmd": "trigger", "device": NAME, "event": KIND, "wait": BOOL}`. `KIND` is
+- The `trigger` method of the control socket (§8.9), with params `{device:
+  NAME, event: KIND, wait: BOOL}`; lock tickets are taken on the main loop as
+  for events. `KIND` is
   one of `startup` (default), `shutdown`, `connected` (a USB thing), `mounted`
   (a filesystem with a mount point), `unmounted` (a filesystem; `surprise=0`).
   Refused: an unknown device (in the daemon's configuration), an ignored one,
@@ -1011,12 +1046,18 @@ with the reason.
   selection as for a real event (§5.5, §7), but no debounce (and it does not
   count for it) and no presence end (no state folder removed). It is logged as
   `KIND (udevmon trigger): NAME, N action(s)`, with each skip.
-- The reply lists, per thing, the actions submitted and those skipped with the
-  reason. With `wait`, it is sent once they finish, with each action's exit
-  status (`null`: timed out, not started, skipped or detached).
-- A refusal is `{"ok": false, "error": CODE, "message": TEXT}`; `CODE` is
-  `bad-request` (unknown `cmd`, an event that cannot be triggered),
-  `unknown-device`, `ignored`, `paused`, `not-present` or `wrong-event`.
+- The result is `{event, device, things: [{thing, actions, skipped: [[action,
+  reason]]}]}`: per thing, the actions submitted and those skipped with the
+  reason. With `wait`, it is sent once they finish, with `statuses`, each
+  action's `{action, status, failure, output, attempts, event, device,
+  time}` (`actions.Result`): `status` `null` when there is none, `failure` why
+  (`timed out after N s`, `could not start: ...`, `skipped: ...`, `not
+  started: ...`, `detached`, `dry run`), `output` the last 10 lines of its
+  combined stdout and stderr (each cut to 300 characters; none for a detached
+  one), of the last attempt.
+- A refusal's code (§8.9) is `bad-request` (an event that cannot be
+  triggered), `unknown-device`, `ignored`, `paused`, `not-present` or
+  `wrong-event`.
 - CLI exit statuses: 3 no daemon runs (lock file or socket), 4
   `unknown-device`, 5 an explicit `--config` is not the daemon's, 6 any other
   refusal, 7 a reply that cannot be read, 1 with `--wait` when a status is not
@@ -1024,10 +1065,10 @@ with the reason.
   event, device, things: [{thing, actions, skipped: [{action, reason}]}],
   statuses}` for every outcome, the CLI's own failures having the codes
   `not-running`, `other-config` and `no-answer`; `statuses` is
-  `[{action, status}]` with `--wait`, else `null`.
-- The protocol is internal (§11): this section describes it so the daemon and
-  the CLI stay in step, not for other programs. It has no version field; one
-  comes with a public protocol (§12).
+  `[{action, status, failure, output}]` with `--wait`, else `null`; the text
+  output prints `failure` and, under a failed action, its `output`. A daemon that answers in
+  another protocol (an older version still running) gives 7, with a message
+  to restart it.
 
 ### 8.7 Output for scripts
 
@@ -1036,8 +1077,16 @@ The interface of §11 in detail.
 - `--version` prints the version alone on one line (setuptools-scm format,
   §13.1). `version` prints it, then `features: NAME ...`; `version --json`
   prints `{"version", "features"}`. `FEATURES` in `cli.py` lists capability
-  names; a name is added with its capability and never reused, so a caller
-  tests for one instead of comparing versions.
+  names; a name is added with its capability, or with a change of behaviour
+  a caller may depend on, and never reused, so a caller tests for one instead
+  of comparing versions. They describe the installed udevmon; a daemon still
+  running from an older version behaves as that version until restarted.
+  Behaviour names: `reload-result` (`reload` and the editing commands wait
+  for the daemon's reload; `reload` prints the result and exits 1 on a bad
+  configuration), `max-workers-commands` (`max_workers` counts commands, §7.3),
+  `shutdown-retries` (retries of `shutdown` actions go on while stopping,
+  §7.4). The control socket has no feature names: `hello` gives its
+  `protocol` (§8.9).
 - `--json` output is UTF-8 JSON, indented, on standard output. An entry of the
   configuration carries `file` (absolute path of the file that defines it) and
   `dropin` (its drop-in name without `.toml`, as `--file` takes it; `null`
@@ -1051,8 +1100,9 @@ The interface of §11 in detail.
     `file`, `dropin` (`null` when not declared).
   - `actions list`, in file order: every field of §6 with defaults filled in
     (`devices`, `tags`, `tag_mode`, `on`, `run`, `timeout`, `allow_unnamed`,
-    `enabled`, `detach`, `lock`, `retries`, `retry_delay`, `order`,
-    `notify_on_failure`), `name`, `file`, `dropin`.
+    `enabled`, `detach`, `lock`, `retries`, `retry_delay`, `retry_backoff`,
+    `order`, `notify_on_failure`), `name`, `file`, `dropin`, `script_dir` (its
+    drop-in's own folders), `program` and `program_lookup` (§7.1).
   - `check`: `ok`, `errors`, `warnings`, `notes`, `files` (read order; each
     `file`, `dropin` and its `devices`, `tags`, `actions` counts) and the
     totals; exit 1 when `ok` is false.
@@ -1106,6 +1156,87 @@ with `shlex`), else `editor` when on `PATH`, else `vi`.
 It edits any key, which the per-option commands do not. It has no
 `--dry-run`: the check of step 3 is its preview.
 
+### 8.9 Control socket
+
+**Draft.** The protocol below is how the CLI talks to the running daemon. It
+is meant to become public, for clients such as a GUI, once a real client has
+used it (§12); until then it is internal (§11) and may change in any release.
+
+- The daemon listens on `$XDG_RUNTIME_DIR/udevmon.sock` (mode 0600, removed on
+  stop; a stale one is replaced, the lock file proving no other daemon runs).
+  A connection whose peer uid (`SO_PEERCRED`) is not the daemon's gets an
+  error and is closed; at most 32 are open at once (more get the error `busy`).
+  If the socket cannot be opened the daemon logs a warning and runs without it.
+- **JSON-RPC 2.0**, one compact JSON object (or batch array) per line, UTF-8,
+  at most 64 KiB. A connection stays open for any number of requests, read and
+  answered in order by the connection's own thread; each request is handled on
+  the daemon's main loop (`idle_add`, answered within 30 s), so it is ordered
+  with the events around it. A request whose answer waits (`trigger` with
+  `wait`) holds up the later requests of its connection only. A request
+  without `id` is a notification: handled, not answered. A batch is answered
+  with an array (without the notifications). `params`, when given, is an
+  object.
+- **Errors** are `{code, message, data: {error, ...}}`: `-32700` not JSON,
+  `-32600` not a request, `-32601` no such method (`unknown-method`), `-32602`
+  params that do not fit (`bad-request`), `-32603` a failure in the daemon
+  (`internal`), and `1` a refusal, whose `data.error` is a fixed string code
+  (each method lists its own) and which may carry more fields in `data`.
+- **Methods:**
+  - `hello` → `{protocol: 1, version, features}` (the feature names of §8.7).
+  - `status` → `{pid, version, config (resolved path), dry_run, paused, until
+    (epoch seconds or null), devices, actions}` (counts).
+  - `results {action: NAME}` → `{results: [...]}`, the last result of each
+    action since the daemon started (all, or that one), newest first, each as
+    in `trigger`'s `statuses` (§8.6); kept in memory (`Daemon.last_results`,
+    filled by the runner's `on_result`). `udevmon status` shows them with
+    `status`: exit 3 when no daemon runs, 7 when it gives no usable answer;
+    `--json` prints `{exit_status, running, pid, ...status, results}`.
+  - `present {system: BOOL = true}` → `{things: [{source, key, props}]}`, every
+    thing present now; `system` false leaves out system filesystems.
+  - `trigger` (§8.6).
+  - `pause {seconds: NUMBER|null}` → `{paused: true, until, was_paused}`; the
+    daemon writes the flag file (§8.5) and logs it. `resume` → `{was_paused}`.
+  - `reload {config: PATH}` → `{devices, actions, warnings, restart_needed}`.
+    Refused: `other-config` when `config` is given and is not the daemon's
+    file, `bad-config` (with `data.problems`, the list of errors) when the new
+    configuration is invalid; the daemon then keeps the previous one.
+  - `subscribe` → `{}`, then a notification `{method: "event", params: {kind,
+    time, source, key, props}}` for every event the sources report (before
+    debounce and pause), until the connection closes. Other requests still work
+    on the connection. Each subscriber has a queue of 1000: when it is full,
+    events are dropped, and the next one sent is preceded by `{method: "lost",
+    params: {count}}`. The daemon never waits for a subscriber.
+- The client side is `control.Connection` (several calls, notifications) and
+  `control.call` (one call). A reply without `"jsonrpc"` but with `ok` is the
+  old protocol of a daemon still running from before: the CLI says to restart
+  it, and `reload`, `pause` and `resume` fall back to `SIGHUP` and the flag
+  file.
+
+### 8.10 Apply
+
+`udevmon apply [FILE] [--dry-run] [--no-reload]` makes a sequence of editing
+commands one change. `FILE` (default `-`, standard input) is a JSON array of
+steps, each a non-empty array of strings: an editing command's words without the
+program name (`["actions", "add", "--device", "key", "mounted", "--", "x"]`).
+
+1. The input is checked first: anything else, or a step with `--config`,
+   `--dry-run` or `--no-reload` (`APPLY_REFUSED`; `apply` itself takes them),
+   is an error, status 1.
+2. The main file and the drop-ins are copied to a temporary folder (as
+   `--dry-run` does). Each step is parsed as `main` parses a command line
+   (`cli.parse_command`, with `--config` the copy) and must be an editing
+   command (its handler carries `edits`; `edit`, `check` ... are refused). It
+   runs on the copy without its reload, seeing the steps before it. A step
+   that fails stops `apply`: its output is printed and nothing is written,
+   status 1.
+3. With `--dry-run`, one unified diff of all the steps is printed, then their
+   output, and nothing is written.
+4. Otherwise, if a real file changed since it was copied, nothing is written
+   (status 1); a step that removed a file is refused too. The changed files
+   are replaced together (`configedit.replace_files`: each keeps a `.bak`, all
+   are rolled back if the result does not load), then `Applied N step(s):
+   changed FILES.`, and a running daemon reloads once unless `--no-reload`.
+
 ## 9. Resource expectations
 
 Event-driven; idle CPU ≈ 0 with no timers. Resident memory ≈ 20–35 MB.
@@ -1135,7 +1266,7 @@ No disk I/O apart from reading the config.
 - **More udev device classes** need only `udev_filters` plus `udev_<prop>`
   match keys, no code; tag rules make them selectable as a class.
 - **TUI/GUI** can edit the same TOML via the config-edit module, and talk to the
-  daemon over the control socket (§8.6).
+  daemon over the control socket (§8.9).
 
 **Interface for other programs.** Other programs use udevmon through the CLI
 (commands, options, exit statuses), the configuration format with drop-in
@@ -1143,9 +1274,9 @@ files (§6.0), what an action receives (placeholders, `UDEVMON_*` variables,
 the state folder; §7.2, §7.5), the `--json` output and `--version` (§8.7).
 These are provisional while udevmon is 0.x: a minor release may change them,
 and every such change is listed under **Changed (incompatible)** in the
-changelog. The Python modules, the control socket protocol (§8.6) and the
-files in the runtime folder are internal: there is no public Python API
-(`docs/api.rst` keeps the list).
+changelog. The Python modules, the control socket protocol (§8.9, a draft)
+and the files in the runtime folder are internal: there is no public Python
+API (`docs/api.rst` keeps the list).
 
 A program's tests isolate udevmon with `XDG_CONFIG_HOME` (configuration) and
 `XDG_RUNTIME_DIR` (lock, socket, pause flag): every command honours both, so
@@ -1153,16 +1284,13 @@ no `--config-dir` or `--socket` option is needed.
 
 ## 12. Optional later work
 
-Nothing here is started. Ordered roughly from small to large; two items are
-decided designs, waiting to be built.
+Nothing here is started. Ordered roughly from small to large.
 
-**Order.** Some items depend on others: retry back-off waits for the thread
-per event (Medium); `pause`, `resume`, `reload` and a live `scan` come with
-the JSON-RPC protocol, and a GUI and socket activation build on it; the link
-from a USB device to its filesystems (surprise disconnect) comes before the
-cross-key `check` note, which reuses it; a declared source protocol comes
-before the `changed` event and other sources; the root udev rule comes last,
-as it changes how the daemon starts.
+**Order.** Some items depend on others: a GUI and socket activation build on
+the control socket (§8.9); the link from a USB device to its filesystems
+(surprise disconnect) comes before the cross-key `check` note, which reuses
+it; a declared source protocol comes before the `changed` event and other
+sources; the root udev rule comes last, as it changes how the daemon starts.
 
 **Small**
 
@@ -1170,45 +1298,11 @@ as it changes how the daemon starts.
   meet on one thing (`fs_uuid` and `drive_serial`); only containment is noted
   today (§6.2). Needs to know which keys a USB device and a filesystem have,
   or it would note nearly every pair.
-- Retry back-off, after the thread per event: an action key `retry_backoff`
-  (a number, at least 1, default 1) multiplies the wait before each further
-  attempt (`retry_delay`, then `retry_delay × retry_backoff`, ...); an error
-  with `detach`, like `retries`. Retries of `shutdown` actions go on during the
-  daemon's exit pass (bounded by the service's `TimeoutStopSec`); stopping
-  still ends the others.
 - zsh and fish completion: only a small wrapper per shell around
   `udevmon _complete`.
 
 **Medium**
 
-- Thread per event (decided 2026-11-11). Each event's jobs run in a thread of
-  their own, and `max_workers` becomes the number of commands that may run at
-  once: a slot is taken only around each attempt's command, never while
-  waiting for a lock (§7.3) or between retries (§7.4). So a job waiting for
-  its lock no longer holds up other events. `FifoLock`, the tickets and the
-  per-event run order are unchanged, and nothing waits for a lock while
-  holding a slot, so no deadlock. Accepted: a burst of events makes as many
-  (mostly idle) threads. Rejected: a queue per lock continued from the main
-  loop, and no threads at all (child watches): both rewrite the runner.
-- Control socket as JSON-RPC 2.0 (decided 2026-11-11), replacing the
-  one-request `cmd` protocol of §8.6. One compact JSON object per line;
-  a connection stays open for several requests, answered in order; batches and
-  client notifications as in JSON-RPC. Methods: `hello` (protocol version,
-  udevmon version, feature names of §8.7), `status`, `present`, `trigger`,
-  `pause`, `resume`, `reload`, `subscribe` (events as `event` notifications;
-  a slow client loses events, told by a `lost` notification with the count,
-  never blocking the daemon). A refusal is error code 1 with today's string
-  codes in `error.data` (`unknown-device`, ..., new `bad-config`,
-  `other-config`), so `--json` and the exit statuses keep them. The pause
-  stays in the flag file (it works with no daemon, survives a restart and
-  suits socket activation); through the socket the daemon writes it, logs it
-  and answers. `reload` answers with the configuration's errors, so
-  `udevmon reload` (and `systemctl --user reload`) fails visibly; `SIGHUP`
-  stays. `scan` uses `present` and `subscribe` when a daemon runs, so that
-  only one process watches. Rejected: extending the `cmd` protocol (it would
-  grow ids and an envelope of its own), D-Bus (the session bus can be missing,
-  §7.4.1; a D-Bus front end forwarding to the socket remains possible),
-  Varlink (little used).
 - Tag-level default variables that devices override (needs a rule for devices
   in several tags).
 - Per-action environment and working directory.
@@ -1230,9 +1324,10 @@ as it changes how the daemon starts.
   (NetworkManager); each a `sources/` module plus new event kinds (§11).
 - A `changed` event (udev `change`, `bind`, `unbind`) and watching every
   subsystem; non-USB defaults in `scan`.
-- A public API (§11 says there is none). First the JSON-RPC control protocol
-  (Medium): it goes under the compatibility policy (§11) once a real client
-  has used it. Most reusable in Python: the event layer
+- A public API (§11 says there is none). First the control socket (§8.9): it
+  goes under the compatibility policy (§11) once a real client has used it; a
+  D-Bus front end forwarding to it remains possible for desktop clients (D-Bus
+  alone was rejected: the session bus can be missing, §7.4.1). Most reusable in Python: the event layer
   (`events`, `sources/`), USB and mount events without root, which needs a
   blocking `watch()` helper (today `start(emit)` assumes the caller's GLib
   main loop), a declared source protocol and public names; it could become
@@ -1274,7 +1369,7 @@ installed on its own (`rclone-config` is a separate small package). `rclone-conf
 the drive is present.
 
 `completion.py` holds the shell completion (§8.2); `explain.py` the report of §8.4;
-`control.py` the control socket (§8.6); `notify.py` the desktop notifications of
+`control.py` the control socket (§8.9); `notify.py` the desktop notifications of
 `notify_on_failure`; `session.py` the lookup of the graphical session's variables for
 actions; `state.py` the per-instance state folders.
 `matching.py` holds device matching, tag rules, strength and the resolver

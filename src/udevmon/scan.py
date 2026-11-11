@@ -337,10 +337,13 @@ class Scanner:
     def _after_save(self, endpoint: Endpoint, name: str, is_tag: bool, ignore: bool) -> None:
         label = "tag" if is_tag else "device"
         print(f"Saved {label} {name!r} to {self.config_path}" + (" (ignored)" if ignore else ""))
-        from . import pause
+        from . import control, pause
         from .daemon import reload_running
-        if reload_running(self.config_path):
-            print("Reloaded the running daemon.")
+        try:
+            if reload_running(self.config_path):
+                print("Reloaded the running daemon.")
+        except control.Refused as e:
+            print(f"warning: the running daemon did not reload: {e.message}")
         paused, until = pause.status()
         if paused:
             print(f"Note: automation is paused ({pause.describe_until(until)}): nothing runs.")
@@ -353,7 +356,11 @@ class Scanner:
               "-- notify-send 'hello'")
 
     def run(self) -> int:
-        """Watch both sources until Ctrl-C; return the exit status (1: invalid configuration)."""
+        """Watch for events until Ctrl-C; return the exit status (1: invalid configuration).
+
+        When a daemon with the same configuration answers on the control socket, its events
+        are shown (only one process watches); otherwise both sources are started here.
+        """
         from gi.repository import GLib
         try:
             cfg = cfgmod.load(self.config_path)
@@ -362,16 +369,78 @@ class Scanner:
             return 1
         self.loop = GLib.MainLoop()
         GLib.unix_signal_add(GLib.PRIORITY_HIGH, 2, lambda: self.loop.quit() or False)
-        sources = [UdevSource(cfg.settings.udev_filters, announce_present=self.present),
-                   UdisksSource(announce_present=self.present, include_system=False)]
-        for s in sources:
-            s.start(self._emit)
-        print("Scanning" + (" (including devices already present)" if self.present else "")
+        conn, present = self._through_daemon()
+        sources = []
+        if conn is None:
+            sources = [UdevSource(cfg.settings.udev_filters, announce_present=self.present),
+                       UdisksSource(announce_present=self.present, include_system=False)]
+            for s in sources:
+                s.start(self._emit)
+        print("Scanning" + (" through the running daemon" if conn is not None else "")
+              + (" (including devices already present)" if self.present else "")
               + ". Plug or unplug a device, or mount/unmount a filesystem."
               + (" Ctrl+C to quit." if not self.prompt else " After a pause you'll be asked to name it."))
+        if conn is not None:
+            for params in present:
+                self._emit(Event(STARTUP, _endpoint(params)))
+            self._drain(conn)
+            GLib.io_add_watch(conn.fileno(), GLib.PRIORITY_DEFAULT,
+                              GLib.IO_IN | GLib.IO_HUP | GLib.IO_ERR,
+                              lambda *_: self._drain(conn, read=True))
         try:
             self.loop.run()
         finally:
             for s in sources:
                 s.stop()
+            if conn is not None:
+                conn.close()
         return 0
+
+    def _through_daemon(self):
+        """(connection, things present) when the running daemon uses this configuration and
+        answers, subscribed to its events; else (None, [])."""
+        from . import control
+        from .daemon import _same_file, running_pid
+        if running_pid() is None:
+            return None, []
+        try:
+            conn = control.Connection()
+        except (control.NotRunning, OSError):
+            return None, []
+        try:
+            status = conn.call("status")
+            if not _same_file(status.get("config", ""), self.config_path):
+                conn.close()
+                return None, []
+            conn.call("subscribe")                    # first, so that no event is missed
+            present = conn.call("present", {"system": False})["things"] if self.present else []
+            conn.sock.settimeout(None)
+        except (control.NotRunning, control.ProtocolError, control.Refused, OSError,
+                KeyError, TypeError):
+            conn.close()
+            return None, []
+        return conn, present
+
+    def _drain(self, conn, read=False) -> bool:
+        """Show the notifications that have arrived (reading the socket once with ``read``);
+        quits when the daemon goes away. Returns whether to keep watching."""
+        from . import control
+        try:
+            while read or conn.has_buffered():
+                read = False
+                method, params = conn.notification()
+                if method == "event":
+                    self._emit(Event(params["kind"], _endpoint(params), params["time"]))
+                elif method == "lost":
+                    print(f"({params.get('count')} event(s) not shown: the terminal fell "
+                          "behind)")
+        except (control.NotRunning, control.ProtocolError, OSError, KeyError, TypeError):
+            print("The daemon stopped; scan ends here.")
+            self.loop.quit()
+            return False
+        return True
+
+
+def _endpoint(params: dict) -> Endpoint:
+    """An endpoint from the control socket's ``source``, ``key`` and ``props``."""
+    return Endpoint(params["source"], params["key"], dict(params["props"]))

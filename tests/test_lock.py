@@ -338,3 +338,63 @@ class EditTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SlotTests(Base):
+    """`max_workers` counts commands: waiting for a lock takes no slot."""
+
+    def test_waiting_for_a_lock_holds_up_no_other_event(self):
+        gate = self.rec.gate("holder")
+        seen = self.rec.started_event("holder")
+        free = self.rec.started_event("free")
+        r = self.runner(2)
+        r.submit(EVENT, [job("holder", "yk")])
+        self.assertTrue(seen.wait(5))
+        for i in range(4):                                  # more waiters than slots
+            r.submit(EVENT, [job(f"w{i}", "yk")])
+        r.submit(EVENT, [job("free")])
+        self.assertTrue(free.wait(5))                       # runs while the lock is held
+        self.assertEqual(self.rec.starts(), ["holder", "free"])
+        gate.set()
+        self.assertTrue(until(lambda: len(self.rec.starts()) == 6))
+        self.assertEqual(self.rec.starts()[2:], ["w0", "w1", "w2", "w3"])
+
+    def test_no_more_commands_than_slots_run_at_once(self):
+        gates = [self.rec.gate(f"j{i}") for i in range(3)]
+        r = self.runner(2)
+        for i in range(3):
+            r.submit(EVENT, [job(f"j{i}")])
+        self.assertTrue(until(lambda: self.rec.running == 2))
+        time.sleep(0.1)
+        self.assertEqual(self.rec.running, 2)               # the third waits for a slot
+        for g in gates:
+            g.set()
+        self.assertTrue(until(lambda: len(self.rec.starts()) == 3 and self.rec.running == 0))
+        self.assertEqual(self.rec.peak, 2)
+
+    def test_the_future_has_the_statuses(self):
+        r = self.runner(1)
+        self.assertEqual([x[:2] for x in r.submit(EVENT, [job("a"), job("b")]).result(5)],
+                         [("a", 0), ("b", 0)])
+
+    def test_shutdown_without_waiting_starts_nothing_more_but_serves_the_tickets(self):
+        gate = self.rec.gate("holder")
+        seen = self.rec.started_event("holder")
+        r = A.ActionRunner(2)
+        r.submit(EVENT, [job("holder", "yk")])
+        self.assertTrue(seen.wait(5))
+        waiting = r.submit(EVENT, [job("waiter", "yk")])
+        with self.assertLogs("udevmon.actions", "WARNING") as logs:
+            r.shutdown(wait=False)
+            gate.set()
+            (result,) = waiting.result(5)
+            self.assertEqual(result[:3], ("waiter", None, "not started: the daemon is stopping"))
+        self.assertEqual(self.rec.starts(), ["holder"])
+        self.assertIn("action 'waiter': the daemon is stopping, so not started",
+                      [x.getMessage() for x in logs.records])
+
+    def test_no_event_is_taken_after_shutdown(self):
+        r = A.ActionRunner(1)
+        r.shutdown(wait=True)
+        with self.assertRaises(RuntimeError):
+            r.submit(EVENT, [job("late")])

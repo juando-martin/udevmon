@@ -9,7 +9,7 @@ import re
 import shlex
 import shutil
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .events import KNOWN_KEYS, TRUSTED_PLACEHOLDERS, VALID_KINDS, VOLATILE_KEYS, is_raw, is_variable
@@ -86,6 +86,9 @@ class Action:
     retry_delay: float = 1.0        #: seconds between attempts
     order: int = 50                 #: lower runs first within one event; on a tie, config order
     notify_on_failure: bool = False  #: a desktop notification when the last attempt fails
+    retry_backoff: float = 1.0      #: each wait between attempts is this times the one before
+    #: folders its drop-in's ``[daemon] script_dir`` adds, searched first for it alone
+    script_dir: tuple[str, ...] = ()
 
     @property
     def targets(self) -> tuple[str, ...]:
@@ -170,7 +173,7 @@ _DAEMON = {"debounce", "udev_filters", "max_workers", "script_dir"}
 _DEVICE = {"description", "match", "tags", "status", "exclude_tags", "vars"}
 _TAG = {"description", "match"}
 _ACTION = {"name", "device", "tag", "on", "run", "timeout", "allow_unnamed", "enabled",
-           "tag_mode", "detach", "lock", "retries", "retry_delay", "order",
+           "tag_mode", "detach", "lock", "retries", "retry_delay", "retry_backoff", "order",
            "notify_on_failure"}
 #: An action's ``order`` when it states none.
 DEFAULT_ORDER = 50
@@ -392,9 +395,15 @@ def parse(data: dict, origins: dict | None = None) -> Config:
                 and retry_delay > 0):
             problems.append(f"{where}: 'retry_delay' must be a number of seconds, more than 0")
             continue
-        if detach and ("retries" in a or "retry_delay" in a):
-            problems.append(f"{where}: 'retries' and 'retry_delay' have no meaning with "
-                            "'detach' (a detached command's result is not waited for)")
+        retry_backoff = a.get("retry_backoff", 1.0)
+        if not (isinstance(retry_backoff, (int, float)) and not isinstance(retry_backoff, bool)
+                and retry_backoff >= 1):
+            problems.append(f"{where}: 'retry_backoff' must be a number, 1 or more")
+            continue
+        if detach and ("retries" in a or "retry_delay" in a or "retry_backoff" in a):
+            problems.append(f"{where}: 'retries', 'retry_delay' and 'retry_backoff' have no "
+                            "meaning with 'detach' (a detached command's result is not "
+                            "waited for)")
             continue
         notify = a.get("notify_on_failure", False)
         if not isinstance(notify, bool):
@@ -458,7 +467,7 @@ def parse(data: dict, origins: dict | None = None) -> Config:
             continue
         cfg.actions.append(Action(name, devices, tags, on, tuple(run), timeout, allow, enabled,
                                   tag_mode, detach, lock, retries, float(retry_delay), order,
-                                  notify))
+                                  notify, float(retry_backoff)))
 
     if problems:
         raise ConfigError(problems)
@@ -625,19 +634,40 @@ def find_program(name: str, dirs) -> str | None:
     return None
 
 
-def resolve_program(settings: Settings, program: str) -> str | None:
+def resolve_program(settings: Settings, program: str, extra=()) -> str | None:
     """Where a command given by bare name is found when ``script_dir`` is set: the folders
-    in order, then only the standard system paths (the daemon's own PATH is ignored, so
-    it behaves the same under systemd and in a terminal). None when it is not found.
+    ``extra`` (an action's own, from its drop-in), those of ``settings``, then only the
+    standard system paths (the daemon's own PATH is ignored, so it behaves the same under
+    systemd and in a terminal). None when it is not found.
 
-    Only meaningful when ``settings.script_dir`` is set and ``program`` is a bare name.
+    Only meaningful when :func:`uses_script_dir` says so.
     """
-    return find_program(program, (*settings.script_dir, *SYSTEM_PATHS))
+    return find_program(program, (*extra, *settings.script_dir, *SYSTEM_PATHS))
 
 
-def uses_script_dir(settings: Settings, program: str) -> bool:
-    """Whether ``program`` is looked up through ``script_dir`` (a bare name, no placeholder)."""
-    return bool(settings.script_dir) and "/" not in program and "{" not in program
+def uses_script_dir(settings: Settings, program: str, extra=()) -> bool:
+    """Whether ``program`` is looked up through ``script_dir`` (a bare name, no placeholder,
+    and some ``script_dir``: the main file's, or ``extra``, an action's own)."""
+    return bool(settings.script_dir or extra) and "/" not in program and "{" not in program
+
+
+def program_lookup(settings: Settings, action: Action) -> tuple[str, str | None]:
+    """How the daemon finds the action's program, and where: ``("path", PATH)`` for a
+    path (relative to the home folder, where commands start), ``("script_dir", PATH)``
+    for a bare name with a ``script_dir``, ``("PATH", None)`` for a bare name left to the
+    daemon's PATH (only the daemon knows it), ``("placeholder", None)`` when it is filled
+    in at run time. ``PATH`` is None when no executable file is there."""
+    prog = action.run[0]
+    if "{" in prog:
+        return "placeholder", None
+    if uses_script_dir(settings, prog, action.script_dir):
+        return "script_dir", resolve_program(settings, prog, action.script_dir)
+    if "/" in prog:
+        full = os.path.join(os.path.expanduser("~"), os.path.expanduser(prog))
+        full = os.path.normpath(full)
+        ok = os.path.isfile(full) and os.access(full, os.X_OK)
+        return "path", full if ok else None
+    return "PATH", None
 
 
 def _optional_missing(settings: Settings) -> list[str]:
@@ -667,12 +697,17 @@ def command_problems(cfg: Config, path: str | None = None) -> list[str]:
     for d in cfg.settings.script_dir:
         if d not in quiet and not os.path.isdir(os.path.expanduser(d)):
             problems.append(f"script_dir {d!r} is not a folder")
+    for d in dict.fromkeys(d for a in cfg.actions for d in a.script_dir):
+        if not os.path.isdir(os.path.expanduser(d)):
+            files = sorted({str(cfg.source("action", a.name)) for a in cfg.actions
+                            if d in a.script_dir})
+            problems.append(f"script_dir {d!r} (of {', '.join(files)}) is not a folder")
     for a in cfg.actions:
         prog = os.path.expanduser(a.run[0])
         if "{" in prog:                          # decided at run time
             continue
-        if uses_script_dir(cfg.settings, prog):
-            if resolve_program(cfg.settings, prog) is None:
+        if uses_script_dir(cfg.settings, prog, a.script_dir):
+            if resolve_program(cfg.settings, prog, a.script_dir) is None:
                 problems.append(f"action {a.name!r}: command {prog!r} was not found in "
                                 "script_dir or the standard system paths")
             continue
@@ -775,7 +810,8 @@ def read_files(main: Path):
     """Read ``main`` and its drop-ins.
 
     Returns (merged data, origins for ``parse``, the files read, sources: (kind, name) ->
-    file for devices and tags, the file of each action by position).
+    file for devices and tags, the file of each action by position, and the
+    ``[daemon] script_dir`` of each drop-in that has one: file -> folders).
     """
     files = ([main] if main.exists() else []) + dropin_files(main)
     folder = dropin_dir(main)
@@ -785,6 +821,7 @@ def read_files(main: Path):
     origins: dict = {}
     sources: dict = {}
     action_files: list[Path] = []
+    dropin_dirs: dict[Path, tuple[str, ...]] = {}
     problems: list[str] = []
     for path in files:
         raw = _read_toml(path)
@@ -792,7 +829,18 @@ def read_files(main: Path):
         if path == main:
             data = {k: v for k, v in raw.items() if k not in ("devices", "tags", "actions")}
         elif "daemon" in raw:
-            problems.append(f"{label}: [daemon] is only read from {main.name}")
+            daemon = raw["daemon"]
+            dirs = daemon.get("script_dir") if isinstance(daemon, dict) else None
+            dirs = [dirs] if isinstance(dirs, str) else dirs
+            if not isinstance(daemon, dict) or set(daemon) - {"script_dir"}:
+                problems.append(f"{label}: a drop-in's [daemon] may only have script_dir "
+                                f"(the other settings are read from {main.name})")
+            elif not (isinstance(dirs, list) and dirs
+                      and all(isinstance(x, str) and x for x in dirs)):
+                problems.append(f"{label}: [daemon] script_dir must be a folder or a "
+                                "list of folders")
+            else:
+                dropin_dirs[path] = tuple(dict.fromkeys(dirs))
         for key in raw:
             if path != main and key not in _TOP:
                 problems.append(f"{label}: top level: unknown key {key!r}")
@@ -835,7 +883,7 @@ def read_files(main: Path):
     if problems:
         raise ConfigError(problems)
     sources = {k: v for k, v in sources.items() if k[0] != "action"}
-    return data, origins, files, sources, action_files
+    return data, origins, files, sources, action_files, dropin_dirs
 
 
 def load(path: Path, *, must_exist: bool = False) -> Config:
@@ -853,9 +901,12 @@ def load(path: Path, *, must_exist: bool = False) -> Config:
         if must_exist:
             raise ConfigError([f"{path} does not exist"])
         return Config(main=path)
-    data, origins, files, sources, action_files = read_files(path)
+    data, origins, files, sources, action_files, dropin_dirs = read_files(path)
     cfg = parse(data, origins)
     cfg.main, cfg.files, cfg.sources = path, files, sources
     for action, file in zip(cfg.actions, action_files):
         cfg.sources[("action", action.name)] = file
+    if dropin_dirs:                              # a drop-in's script_dir, for its own actions
+        cfg.actions = [replace(a, script_dir=dropin_dirs[f]) if f in dropin_dirs else a
+                       for a, f in zip(cfg.actions, action_files)]
     return cfg

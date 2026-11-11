@@ -110,15 +110,58 @@ See
 for how to stop and reload it.
 .TP
 .B udevmon reload
-Ask the running daemon to re\-read its configuration.
+Ask the running daemon to re\-read its configuration, and print what it
+loaded (devices and actions) and any warnings.
+If the new configuration has errors, the daemon keeps the previous one, the
+errors are printed and the status is 1, so
+.B systemctl \-\-user reload udevmon
+fails visibly too.
 It exits with status 1 and the message
 .RB \(lq "udevmon is not running" \(rq
 if there is no daemon.
+A daemon that does not answer on its control socket (an older version still
+running) is sent
+.B SIGHUP
+instead.
 Reloading does not fire
 .B startup
 actions again; use
 .B udevmon trigger
 for a device configured while plugged in.
+.TP
+.B udevmon status \fR[\fB\-\-json\fR]
+Say whether the daemon is running, its version, configuration and pause, and
+the last result of each action since it started (newest first): when it ended,
+for which event and device, its exit status or why it has none, and for a
+failure its last output lines.
+The results are kept in the daemon's memory, so a restart forgets them.
+It exits with status 3 when no daemon is running and 7 when the daemon gives no
+usable answer (an older version still running).
+.B \-\-json
+prints one object:
+.BR exit_status ,
+.BR running ,
+.BR pid ,
+.BR version ,
+.BR config ,
+.BR dry_run ,
+.BR paused ,
+.BR until ,
+.BR devices ,
+.B actions
+(counts) and
+.B results
+(each with
+.BR action ,
+.BR status ,
+.BR failure ,
+.BR output ,
+.BR attempts ,
+.BR event ,
+.B device
+and
+.BR time ,
+in seconds since the epoch).
 .TP
 .B udevmon trigger \fIDEVICE\fR [\fIEVENT\fR] [\fB\-\-wait\fR] [\fB\-\-json\fR]
 Ask the running daemon to run the actions of the named device, which must be
@@ -148,8 +191,9 @@ names another file than the daemon's, 6 when the daemon refuses (the device is
 not present, is ignored, the event does not fit it, or automation is paused)
 and 7 when its answer cannot be read.
 .B \-\-wait
-waits for the actions to finish and prints their exit status; then an action
-that fails, times out or gives no status gives status 1.
+waits for the actions to finish and prints their exit status, why there is none
+(timed out, could not start ...), and for a failed one the last lines of its
+output; then an action that fails, times out or gives no status gives status 1.
 .B \-\-json
 prints one JSON object instead, also when it fails:
 .B exit_status
@@ -185,10 +229,15 @@ and
 (with
 .BR \-\-wait ,
 each
-.B action
-and its
-.BR status ,
-null when it has none; otherwise null).
+.BR action ,
+its
+.B status
+(null when it has none),
+.B failure
+(why there is none, or null) and
+.B output
+(the last 10 lines of its output, each at most 300 characters; empty for a
+detached action); otherwise null).
 It talks to the daemon over its control socket,
 .IR $XDG_RUNTIME_DIR/udevmon.sock .
 .TP
@@ -227,6 +276,10 @@ Your configuration is never touched.
 .TP
 .B udevmon scan \fR[\fB\-\-present\fR] [\fB\-\-no\-prompt\fR] [\fB\-\-all\-props\fR]
 Watch events and offer to name what you see.
+When the daemon is running with the same configuration, the events come from it
+(only one process watches); otherwise
+.B scan
+watches by itself.
 Plug something in (or unplug it, or mount a filesystem).
 After a short pause udevmon lists what it saw and asks:
 .IP
@@ -410,6 +463,32 @@ action), then
 .B note:
 lines, and ends with
 .BR "OK: N device(s), N tag rule(s), N action(s)" .
+.TP
+.B udevmon apply \fR[\fIFILE\fR] [\fB\-\-dry\-run\fR] [\fB\-\-no\-reload\fR]
+Make several edits as one change.
+.I FILE
+(default: standard input) is a JSON array of editing commands, each an array of
+its words without
+.BR udevmon ,
+for example
+.BR "[[\(dqdevices\(dq, \(dqadd\(dq, \(dqkey\(dq, \(dq\-\-match\(dq, \(dqfs_uuid=U\(dq], [\(dqactions\(dq, \(dqadd\(dq, ...]]" .
+The steps run in order on a copy of the configuration, each seeing the ones
+before; if one fails, nothing is written (status 1).
+Otherwise every changed file is replaced at once (keeping
+.IR NAME.bak ),
+and a running daemon reloads once.
+.B \-\-dry\-run
+shows the whole change as one diff and writes nothing.
+A step may not have
+.BR \-\-config ,
+.B \-\-dry\-run
+or
+.B \-\-no\-reload
+(give them to
+.B apply
+itself); only editing commands can be steps.
+Nothing is written either when a file is changed by another program while the
+steps run.
 .TP
 .B udevmon edit \fR[\fIFILE\fR] [\fB\-\-no\-reload\fR]
 Edit the configuration file, or the drop\-in
@@ -714,13 +793,28 @@ included:
 .BR lock ,
 .BR retries ,
 .BR retry_delay ,
+.BR retry_backoff ,
 .BR order ,
 .BR notify_on_failure ,
-.B file
-and
-.BR dropin .
+.BR file ,
+.BR dropin ,
+.B script_dir
+(the folders of its drop\-in's own
+.BR script_dir ),
+.B program
+(the file the daemon will start, or null) and
+.B program_lookup
+(how it is found:
+.BR path ,
+.BR script_dir ,
+.B PATH
+or
+.BR placeholder ;
+for the last two only the daemon can tell, so
+.B program
+is null).
 .TP
-.B udevmon actions add (\-\-device \fINAME\fR ... | \-\-tag \fINAME\fR ...) \fIEVENT\fR[,\fIEVENT\fR...] [\fB\-\-name \fINAME\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-all\-tags\fR] [\fB\-\-detach\fR] [\fB\-\-lock \fINAME\fR] [\fB\-\-retries \fIN\fR] [\fB\-\-retry\-delay \fISECONDS\fR] [\fB\-\-order \fIN\fR] [\fB\-\-notify\-on\-failure\fR] [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR] \-\- \fICOMMAND\fR [\fIARG\fR...]
+.B udevmon actions add (\-\-device \fINAME\fR ... | \-\-tag \fINAME\fR ...) \fIEVENT\fR[,\fIEVENT\fR...] [\fB\-\-name \fINAME\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-all\-tags\fR] [\fB\-\-detach\fR] [\fB\-\-lock \fINAME\fR] [\fB\-\-retries \fIN\fR] [\fB\-\-retry\-delay \fISECONDS\fR] [\fB\-\-retry\-backoff \fIFACTOR\fR] [\fB\-\-order \fIN\fR] [\fB\-\-notify\-on\-failure\fR] [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR] \-\- \fICOMMAND\fR [\fIARG\fR...]
 Add an action.
 Options go before the
 .BR \-\- ;
@@ -758,7 +852,10 @@ runs the command again after a non-zero exit, up to
 .I N
 more times, waiting
 .B \-\-retry\-delay
-seconds (default 1) between attempts; never after a timeout (see
+seconds (default 1) before the first retry, and
+.B \-\-retry\-backoff
+times longer before each one after it (default 1: always the same); never after a
+timeout (see
 .BR udevmon.toml (5)).
 .B \-\-order
 sets the action's
@@ -785,7 +882,7 @@ An action created by hand without a
 .B name
 line cannot be removed this way; edit the file.
 .TP
-.B udevmon actions set \fINAME\fR [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR | \fB\-\-default\-unnamed\fR] [\fB\-\-on \fIEVENTS\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-add\-device \fINAME\fR ...] [\fB\-\-remove\-device \fINAME\fR ...] [\fB\-\-add\-tag \fINAME\fR ...] [\fB\-\-remove\-tag \fINAME\fR ...] [\fB\-\-all\-tags\fR | \fB\-\-any\-tags\fR] [\fB\-\-detach\fR | \fB\-\-no\-detach\fR] [\fB\-\-lock \fINAME\fR | \fB\-\-no\-lock\fR] [\fB\-\-retries \fIN\fR] [\fB\-\-retry\-delay \fISECONDS\fR] [\fB\-\-order \fIN\fR] [\fB\-\-notify\-on\-failure\fR | \fB\-\-no\-notify\-on\-failure\fR] [\fB\-\- \fICOMMAND\fR ...]
+.B udevmon actions set \fINAME\fR [\fB\-\-allow\-unnamed\fR | \fB\-\-named\-only\fR | \fB\-\-default\-unnamed\fR] [\fB\-\-on \fIEVENTS\fR] [\fB\-\-timeout \fISECONDS\fR] [\fB\-\-add\-device \fINAME\fR ...] [\fB\-\-remove\-device \fINAME\fR ...] [\fB\-\-add\-tag \fINAME\fR ...] [\fB\-\-remove\-tag \fINAME\fR ...] [\fB\-\-all\-tags\fR | \fB\-\-any\-tags\fR] [\fB\-\-detach\fR | \fB\-\-no\-detach\fR] [\fB\-\-lock \fINAME\fR | \fB\-\-no\-lock\fR] [\fB\-\-retries \fIN\fR] [\fB\-\-retry\-delay \fISECONDS\fR] [\fB\-\-retry\-backoff \fIFACTOR\fR] [\fB\-\-order \fIN\fR] [\fB\-\-notify\-on\-failure\fR | \fB\-\-no\-notify\-on\-failure\fR] [\fB\-\- \fICOMMAND\fR ...]
 Change an action without removing and adding it again.
 .B \-\-on
 replaces the events (comma\-separated).
@@ -836,10 +933,12 @@ An action with an explicit timeout cannot be detached.
 sets the action's lock name and
 .B \-\-no\-lock
 removes it.
-.B \-\-retries
-and
+.BR \-\-retries ,
 .B \-\-retry\-delay
-change the retries (\fB\-\-retries 0\fR removes them).
+and
+.B \-\-retry\-backoff
+change the retries (\fB\-\-retries 0\fR removes them, and
+\fB\-\-retry\-backoff 1\fR the back-off).
 .B \-\-order
 changes the order
 .RB ( "\-\-order 50" ,
@@ -887,13 +986,15 @@ While paused nothing runs, not even
 and
 .B shutdown
 actions; events during the pause are logged but not replayed afterwards.
-It works when no daemon is running, and applies once one starts.
+With a daemon running, it is told at once and logs it; the command also works
+when no daemon is running, and the pause applies once one starts.
 See
 .B FILES
 for where the pause is kept.
 .TP
 .B udevmon resume
-Let actions run again.
+Let actions run again (the running daemon is told, as for
+.BR pause ).
 .SS "Version"
 .TP
 .B udevmon version \fR[\fB\-\-json\fR]
@@ -1028,9 +1129,9 @@ line has to be given one first.
 .SH SIGNALS
 .TP
 .B SIGHUP
-Reload the configuration (what
+Reload the configuration, as
 .B udevmon reload
-sends).
+does through the control socket.
 If the new file is invalid, the error is logged and the daemon keeps running
 with the old configuration.
 .TP
@@ -1065,9 +1166,15 @@ Held by the running daemon.
 Line one is its process ID, line two the resolved path of its configuration.
 .TP
 .I $XDG_RUNTIME_DIR/udevmon.sock
-The running daemon's control socket, used by
-.BR "udevmon trigger" .
+The running daemon's control socket (JSON\-RPC 2.0), used by
+.BR "udevmon trigger" ,
+.BR reload ,
+.BR pause ,
+.B resume
+and
+.BR scan .
 Only you can connect to it.
+Its protocol is a draft, not yet a public interface.
 .TP
 .I $XDG_RUNTIME_DIR/udevmon.paused
 Exists while automation is paused.

@@ -5,14 +5,13 @@
 import contextlib
 import io
 import json
-import threading
 import unittest
 from concurrent.futures import Future
 from unittest import mock
 
 from udevmon import cli, control, daemon, pause
 from udevmon import config as C
-from udevmon.actions import ActionRunner
+from udevmon.actions import ActionRunner, Result
 from udevmon.engine import Engine
 from udevmon.events import Endpoint, Event
 
@@ -59,9 +58,12 @@ class Base(unittest.TestCase):
                           Source(Endpoint("udev", "/sys/y", {"serial": "Y1", "instance": "y"}))]
 
     def ask(self, device, event=None, **extra):
-        reply, wait = self.d.control({"cmd": "trigger", "device": device, "event": event,
-                                      **extra})
-        return reply, wait
+        """The trigger request's answer, as {"ok", ...result} or {"ok", "error", "message"}."""
+        try:
+            result, wait = self.d.control("trigger", {"device": device, "event": event, **extra})
+        except control.Refused as e:
+            return {"ok": False, "error": e.error, "message": e.message}, None
+        return {"ok": True, **result}, wait
 
 
 class ControlTests(Base):
@@ -124,14 +126,21 @@ class ControlTests(Base):
 
     def test_wait_reports_the_exit_statuses(self):
         future = Future()
-        future.set_result([("up", 0), ("tagged", 3)])
+        future.set_result([Result("up", 0, event="startup", device="key", time=5.0),
+                           Result("tagged", 3, output=("no profile 'x'",), attempts=2)])
         self.d.runner.submit.return_value = future
         reply, wait = self.ask("key", wait=True)
-        self.assertEqual(wait(), {"statuses": [["up", 0], ["tagged", 3]]})
+        statuses = wait()["statuses"]
+        self.assertEqual(statuses[0], {"action": "up", "status": 0, "failure": None,
+                                       "output": [], "attempts": 1, "event": "startup",
+                                       "device": "key", "time": 5.0})
+        self.assertEqual((statuses[1]["status"], statuses[1]["output"]), (3, ["no profile 'x'"]))
 
-    def test_an_unknown_request(self):
-        reply, _ = self.d.control({"cmd": "frobnicate"})
-        self.assertEqual((reply["ok"], reply["error"]), (False, "bad-request"))
+    def test_an_unknown_method(self):
+        with self.assertRaises(control.UnknownMethod) as cm:
+            self.d.control("frobnicate", {})
+        self.assertEqual((cm.exception.error, cm.exception.code),
+                         ("unknown-method", control.METHOD_NOT_FOUND))
 
 
 class RunnerTests(unittest.TestCase):
@@ -147,63 +156,21 @@ class RunnerTests(unittest.TestCase):
         event = Event("startup", fs("U"))
         jobs, _ = engine.trigger(event)
         with self.assertLogs("udevmon.actions", "INFO"):
-            self.assertEqual(runner.submit(event, jobs).result(5), [("ok", 0), ("bad", 3)])
-
-
-class SocketTests(unittest.TestCase):
-    """The control socket, end to end, on a real GLib main loop."""
-
-    def setUp(self):
-        from gi.repository import GLib
-        self.loop = GLib.MainLoop()
-        self.requests = []
-
-        def handler(req):
-            self.requests.append(req)
-            if req.get("wait"):
-                return {"ok": True}, lambda: {"statuses": [["a", 0]]}
-            return {"ok": True, "echo": req.get("device")}, None
-        self.server = control.ControlServer(handler)
-        self.server.start()
-        running = threading.Event()
-        GLib.idle_add(lambda: running.set() or False)
-        thread = threading.Thread(target=self.loop.run, daemon=True)
-        thread.start()
-        running.wait(5)                  # so that quit() below never comes before run()
-        self.addCleanup(thread.join, 5)
-        self.addCleanup(self.loop.quit)
-        self.addCleanup(self.server.stop)
-
-    def test_a_request_and_its_answer(self):
-        self.assertEqual(control.request({"cmd": "trigger", "device": "key"}),
-                         {"ok": True, "echo": "key"})
-        self.assertEqual(control.request({"wait": True}, timeout=None),
-                         {"ok": True, "statuses": [["a", 0]]})
-
-    def test_the_socket_is_private_and_removed_on_stop(self):
-        import os
-        import stat
-        path = self.server.path
-        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
-        self.server.stop()
-        self.assertFalse(path.exists())
-        with self.assertRaises(control.NotRunning):
-            control.request({"cmd": "trigger"})
-
-    def test_garbage_gets_an_error(self):
-        import socket
-        with socket.socket(socket.AF_UNIX) as s:
-            s.connect(str(self.server.path))
-            s.sendall(b"not json\n")
-            self.assertIn(b"bad request", s.recv(4096))
-        self.assertEqual(self.requests, [])
+            self.assertEqual([r[:2] for r in runner.submit(event, jobs).result(5)],
+                             [("ok", 0), ("bad", 3)])
 
 
 class CliTests(unittest.TestCase):
     def run_cli(self, *args, running=(123, None), reply=None, error=None):
+        """Run the CLI with ``control.call`` answering ``reply`` (a refusal when its ``ok``
+        is false) or raising ``error``."""
         out, err = io.StringIO(), io.StringIO()
+        if reply is not None and not reply.get("ok", True):
+            error, reply = control.Refused(reply["error"], reply["message"]), None
+        elif reply is not None:
+            reply = {k: v for k, v in reply.items() if k != "ok"}
         with mock.patch("udevmon.daemon.running_daemon", return_value=running), \
-                mock.patch("udevmon.control.request", return_value=reply,
+                mock.patch("udevmon.control.call", return_value=reply,
                            side_effect=error) as request, \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             try:
@@ -225,6 +192,10 @@ class CliTests(unittest.TestCase):
         rc, _, err, _ = self.run_cli("trigger", "key", error=ValueError("bad JSON"))
         self.assertEqual(rc, 7)
         self.assertIn("no usable answer", err)
+        rc, _, err, _ = self.run_cli("trigger", "key",
+                                     error=control.ProtocolError("an older protocol"))
+        self.assertEqual(rc, 7)
+        self.assertIn("an older protocol", err)
 
     def test_a_daemon_with_another_config(self):
         rc, _, err, _ = self.run_cli("--config", "/x/other.toml", "trigger", "key",
@@ -240,16 +211,28 @@ class CliTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("startup for key (Filesystem KEY): up", out)
         self.assertIn("skipped x: the action is disabled", out)
-        self.assertEqual(request.call_args.args[0],
-                         {"cmd": "trigger", "device": "key", "event": "startup", "wait": False})
+        self.assertEqual(request.call_args.args,
+                         ("trigger", {"device": "key", "event": "startup", "wait": False}))
 
     def test_wait_fails_on_a_failed_action(self):
         reply = {"ok": True, "event": "mounted", "device": "key",
                  "things": [{"thing": "t", "actions": ["up"], "skipped": []}],
-                 "statuses": [["up", 2]]}
+                 "statuses": [{"action": "up", "status": 2, "failure": None,
+                               "output": ["identity mismatch", "giving up"]}]}
         rc, out, _, _ = self.run_cli("trigger", "key", "mounted", "--wait", reply=reply)
         self.assertEqual(rc, 1)
         self.assertIn("up: exit status 2", out)
+        self.assertIn("its last output:\n      identity mismatch\n      giving up", out)
+
+    def test_a_timeout_says_so(self):
+        reply = {"ok": True, "event": "mounted", "device": "key",
+                 "things": [{"thing": "t", "actions": ["up"], "skipped": []}],
+                 "statuses": [{"action": "up", "status": None,
+                               "failure": "timed out after 5 s", "output": ["half"]}]}
+        rc, out, _, _ = self.run_cli("trigger", "key", "mounted", "--wait", reply=reply)
+        self.assertEqual(rc, 1)
+        self.assertIn("up: no exit status (timed out after 5 s)", out)
+        self.assertIn("      half", out)
 
     def test_an_error_reply(self):
         rc, _, err, _ = self.run_cli("trigger", "key",
@@ -268,14 +251,16 @@ class CliTests(unittest.TestCase):
         reply = {"ok": True, "event": "mounted", "device": "key",
                  "things": [{"thing": "t", "actions": ["up", "x"],
                              "skipped": [["y", "the action is disabled"]]}],
-                 "statuses": [["up", 0], ["x", None]]}
+                 "statuses": [{"action": "up", "status": 0, "output": ["fine"]},
+                              {"action": "x", "status": None, "failure": "detached"}]}
         rc, out, _, _ = self.run_cli("trigger", "key", "mounted", "--wait", "--json",
                                      reply=reply)
         data = json.loads(out)
         self.assertEqual(rc, 1)                       # no status counts as a failure
         self.assertEqual(data["exit_status"], 1)
-        self.assertEqual(data["statuses"], [{"action": "up", "status": 0},
-                                            {"action": "x", "status": None}])
+        self.assertEqual(data["statuses"], [
+            {"action": "up", "status": 0, "failure": None, "output": ["fine"]},
+            {"action": "x", "status": None, "failure": "detached", "output": []}])
         self.assertEqual(data["things"][0]["skipped"],
                          [{"action": "y", "reason": "the action is disabled"}])
         rc, out, _, _ = self.run_cli("trigger", "key", "--json", reply={**reply, "statuses": []})

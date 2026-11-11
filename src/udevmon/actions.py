@@ -8,16 +8,35 @@ import logging
 import os
 import signal
 import subprocess
+import collections
+import itertools
 import threading
-from concurrent.futures import ThreadPoolExecutor
+import time
+from concurrent.futures import Future
+from typing import Callable, NamedTuple
 
 from . import notify
 from . import pause as pause_flag
 from . import session, state
 from .config import Action, expand
-from .events import Event
+from .events import SHUTDOWN, Event
 
 log = logging.getLogger("udevmon.actions")
+
+OUTPUT_LINES = 10        #: lines of an action's output kept for its result (the last ones)
+OUTPUT_WIDTH = 300       #: characters kept of each such line
+
+
+class Result(NamedTuple):
+    """How one job of an event ended (its last attempt)."""
+    action: str                     #: the action's name
+    status: int | None              #: the exit status; None when there is none
+    failure: str | None = None      #: why there is no status (timed out, not started, ...)
+    output: tuple[str, ...] = ()    #: the last lines of the output (``OUTPUT_LINES``)
+    attempts: int = 1               #: how many times the command ran
+    event: str = ""                 #: the event kind
+    device: str | None = None       #: the device it ran for, if any
+    time: float = 0.0               #: when it ended, in seconds since the epoch
 
 
 def build_env(event: Event, device: str | None, tag: str | None = None,
@@ -57,7 +76,9 @@ def run_action(action: Action, event: Event, device: str | None, tag: str | None
     """Run one action; returns exit status (None if skipped/timeout-killed).
 
     ``outcome``, if given, gets ``failure``: how a None result failed (a timeout, a
-    command that could not start), for the notification; it is left alone otherwise.
+    command that could not start), for the notification; ``skipped``: why it did not
+    run (an unavailable placeholder); and ``output``: the last lines of the command's
+    output (``OUTPUT_LINES``, each cut to ``OUTPUT_WIDTH``), not for a detached one.
     """
     outcome = {} if outcome is None else outcome
     props = dict(event.props)
@@ -73,6 +94,7 @@ def run_action(action: Action, event: Event, device: str | None, tag: str | None
     except KeyError as e:
         log.error("action %r skipped: placeholder(s) %s unavailable for event %r",
                   action.name, e.args[0], event.kind)
+        outcome["skipped"] = f"skipped: placeholder(s) {e.args[0]} unavailable"
         return None
     if dry_run:
         log.info("[dry-run] action %r would run: %s", action.name, argv)
@@ -93,7 +115,8 @@ def run_action(action: Action, event: Event, device: str | None, tag: str | None
     # The output is logged as it arrives, by a reader that outlives the command if it has to:
     # a program the command leaves running in the background keeps the pipe open, and
     # waiting for the pipe (instead of the command) made the action look stuck.
-    reader = threading.Thread(target=_pump, args=(action, proc), daemon=True,
+    tail: collections.deque = collections.deque(maxlen=OUTPUT_LINES)
+    reader = threading.Thread(target=_pump, args=(action, proc, tail), daemon=True,
                               name=f"output-{action.name}")
     reader.start()
     if action.detach:
@@ -112,8 +135,10 @@ def run_action(action: Action, event: Event, device: str | None, tag: str | None
             _kill_group(proc, signal.SIGKILL)
             proc.wait()
         reader.join(timeout=1)
+        outcome["output"] = tuple(tail)
         return None
     reader.join(timeout=_DRAIN_WAIT)      # normally the pipe is already closed; not for long
+    outcome["output"] = tuple(tail)
     _log_exit(action, proc.returncode)
     return proc.returncode
 
@@ -121,11 +146,15 @@ def run_action(action: Action, event: Event, device: str | None, tag: str | None
 _DRAIN_WAIT = 0.2      # seconds to let the reader catch up after the command has exited
 
 
-def _pump(action, proc) -> None:
-    """Log the command's output line by line until its last writer closes the pipe."""
+def _pump(action, proc, tail=None) -> None:
+    """Log the command's output line by line until its last writer closes the pipe, keeping
+    the last lines in ``tail`` (a bounded deque)."""
     try:
         for line in proc.stdout:
-            log.info("[%s] %s", action.name, line.rstrip("\r\n"))
+            line = line.rstrip("\r\n")
+            log.info("[%s] %s", action.name, line)
+            if tail is not None:
+                tail.append(line[:OUTPUT_WIDTH])
     except (OSError, ValueError):                 # the pipe went away under us
         pass
     finally:
@@ -190,17 +219,26 @@ class FifoLock:
 
 
 class ActionRunner:
-    """Runs the jobs of each event on a pool of ``max_workers`` threads.
+    """Runs the jobs of each event in a thread of its own.
 
-    The jobs of one event run one after another in one worker; those of different events
-    can overlap, unless their actions share a ``lock``. With ``dry_run`` the commands are
-    logged, not run.
+    The jobs of one event run one after another; those of different events can overlap,
+    unless their actions share a ``lock``. At most ``max_workers`` commands run at once:
+    a slot is taken only around each attempt's command, never while a job waits for its
+    lock or between retries, so a waiting job holds up no other event. With ``dry_run``
+    the commands are logged, not run.
     """
-    def __init__(self, max_workers: int = 4, dry_run: bool = False):
+    def __init__(self, max_workers: int = 4, dry_run: bool = False,
+                 on_result: Callable[[Result], None] | None = None):
         self.dry_run = dry_run
-        self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="action")
+        self.on_result = on_result              # called with each job's Result
+        self._slots = threading.BoundedSemaphore(max_workers)
         self._locks: dict[str, FifoLock] = {}
+        self._threads: set[threading.Thread] = set()
+        self._threads_mutex = threading.Lock()
+        self._numbers = itertools.count(1)
+        self._closed = False
         self._stopping = threading.Event()      # set by shutdown(): no more retries
+        self._cancelled = threading.Event()     # shutdown(wait=False): start no more commands
 
     def _lock(self, name: str) -> FifoLock:
         return self._locks.setdefault(name, FifoLock(name))
@@ -211,20 +249,44 @@ class ActionRunner:
         Called in the order the events arrived: a job whose action has a ``lock`` takes its
         ticket now, so locked jobs run in that order and never at the same time. ``ended``
         is the instance whose presence this event ends: its state folder is removed once
-        the jobs are done.
+        the jobs are done. Returns a Future of the jobs' :class:`Result`, in order.
         """
+        if self._closed:
+            raise RuntimeError("cannot run actions after shutdown")
         ticketed = [(job, self._lock(job.action.lock).take() if job.action.lock else None)
                     for job in jobs]
-        return self._pool.submit(self._run_all, event, ticketed, ended)
+        future: Future = Future()
+        future.set_running_or_notify_cancel()
+        thread = threading.Thread(target=self._thread, args=(future, event, ticketed, ended),
+                                  name=f"event-{next(self._numbers)}")
+        with self._threads_mutex:
+            self._threads.add(thread)
+        thread.start()
+        return future
+
+    def _thread(self, future, event, ticketed, ended):
+        try:
+            future.set_result(self._run_all(event, ticketed, ended))
+        except BaseException as e:                      # a crash is logged by _run_one
+            future.set_exception(e)
+        finally:
+            with self._threads_mutex:
+                self._threads.discard(threading.current_thread())
 
     def _run_all(self, event, ticketed, ended=None):
-        """Run the jobs in order; returns [(action name, exit status or None)]."""
+        """Run the jobs in order; returns their :class:`Result`."""
         done = 0
         results = []
         try:
             for job, ticket in ticketed:
                 done += 1
-                results.append((job.action.name, self._run_one(event, job, ticket)))
+                result = self._run_one(event, job, ticket)
+                results.append(result)
+                if self.on_result is not None:
+                    try:
+                        self.on_result(result)
+                    except Exception:
+                        log.exception("recording the result of %r failed", result.action)
         except BaseException:
             for job, ticket in ticketed[done:]:            # never leave a ticket unserved
                 if ticket is not None:
@@ -244,9 +306,10 @@ class ActionRunner:
                 log.info("action %r waited for lock %r", job.action.name, lock.name)
         try:
             return self._run_with_retries(event, job)
-        except Exception:
+        except Exception as e:
             log.exception("action %r crashed", job.action.name)
-            return None
+            return Result(job.action.name, None, f"crashed: {e}", event=event.kind,
+                          device=job.device, time=time.time())
         finally:
             if lock is not None:
                 lock.release()
@@ -273,23 +336,40 @@ class ActionRunner:
                 if outcome.get("attempts", 1) > 1:
                     what += f" (after {outcome['attempts']} attempts)"
                 notify.action_failed(job.action.name, job.device, what)
-        return status
+        failure = outcome.get("failure") or outcome.get("skipped")
+        if status is None and failure is None:
+            failure = "dry run" if self.dry_run else ("detached" if job.action.detach
+                                                      else None)
+        return Result(job.action.name, status, failure, outcome.get("output", ()),
+                      outcome.get("attempts", 1), event.kind, job.device, time.time())
 
     def _attempts(self, event, job, outcome):
         """Run the action; after a non-zero exit run it again, up to ``retries`` more times.
 
+        Each wait is ``retry_backoff`` times the one before, starting at ``retry_delay``.
         Not retried: a timeout, a command that cannot start, a skipped or dry run (they
-        return None), and nothing once automation is paused or the daemon is stopping.
-        The lock, if any, is held across the attempts.
+        return None), and nothing once automation is paused. A stopping daemon ends the
+        retries, except those of a ``shutdown`` event, which go on during its exit pass.
+        The lock, if any, is held across the attempts; a command slot only while each
+        attempt's command runs.
         """
         action = job.action
         attempts = action.retries + 1
+        delay = action.retry_delay
+        # the wait that a stop interrupts: a shutdown event's retries are cut short only
+        # by shutdown(wait=False)
+        interrupt = self._cancelled if event.kind == SHUTDOWN else self._stopping
         for attempt in range(1, attempts + 1):
             outcome.clear()
             outcome["attempts"] = attempt
-            status = run_action(action, event, job.device, job.tag, dry_run=self.dry_run,
-                                variables=job.vars, state_dir=self._state_dir(event),
-                                outcome=outcome)
+            if self._cancelled.is_set():
+                log.warning("action %r: the daemon is stopping, so not started", action.name)
+                outcome["skipped"] = "not started: the daemon is stopping"
+                return None
+            with self._slots:
+                status = run_action(action, event, job.device, job.tag, dry_run=self.dry_run,
+                                    variables=job.vars, state_dir=self._state_dir(event),
+                                    outcome=outcome)
             if status is None or status == 0:
                 return status
             if attempt == attempts:
@@ -302,15 +382,28 @@ class ActionRunner:
                             "retrying", action.name, status)
                 return status
             log.warning("action %r attempt %d of %d failed with status %d; retrying in %g s",
-                        action.name, attempt, attempts, status, action.retry_delay)
-            if self._stopping.wait(action.retry_delay):
+                        action.name, attempt, attempts, status, delay)
+            if interrupt.wait(delay):
                 log.warning("action %r: the daemon is stopping, so not retrying", action.name)
                 return status
+            delay *= action.retry_backoff
         return None
 
     def shutdown(self, wait=False):
-        """Stop retrying and shut the pool down: with ``wait``, after the running and queued jobs;
-        else queued jobs are cancelled.
+        """Take no more events and stop retrying (but a ``shutdown`` event's retries go on).
+
+        With ``wait``, return once every event's jobs have finished; else return at once,
+        and jobs whose command has not started yet do not start it.
         """
+        self._closed = True
         self._stopping.set()
-        self._pool.shutdown(wait=wait, cancel_futures=not wait)
+        if not wait:
+            self._cancelled.set()
+            return
+        while True:
+            with self._threads_mutex:
+                threads = list(self._threads)
+            if not threads:
+                return
+            for t in threads:
+                t.join()

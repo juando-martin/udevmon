@@ -71,9 +71,16 @@ are read too, after it, in the order of their names (so
 .I 50\-kp\-sync.toml
 comes before
 .IR 90\-rclone\-config.toml ).
-They have the same tables, except
-.BR [daemon] ,
-which only the main file has.
+They have the same tables; their
+.B [daemon]
+may only have
+.BR script_dir ,
+which then applies to that file's own actions alone: its folders are searched
+first for them, and never change what a bare name means in the actions of
+another file.
+The other
+.B [daemon]
+settings are only read from the main file.
 Their devices, tags and actions join those of the main file: an action of one file
 may use a device or tag of another.
 This lets a program that installs actions keep them in a file of its own, which
@@ -134,8 +141,12 @@ turns it off.
 .B max_workers
 Integer of at least 1, default
 .BR 4 .
-How many events are handled in parallel.
-Actions for one event run one after another.
+How many commands may run at the same time.
+Every event's actions run in a thread of their own, one after another; an action
+waiting for its
+.B lock
+or for its next attempt does not count.
+A detached command counts only while it is being started.
 .TP
 .B udev_filters
 List of udev filters, default
@@ -174,6 +185,8 @@ Without
 .B script_dir
 bare names use the
 .BR PATH .
+A drop\-in can add folders for its own actions (see
+.BR "DROP-IN FILES" ).
 A folder that does not exist is a warning, or only a note when another folder of
 the list exists.
 .SH "[devices.NAME]"
@@ -435,7 +448,13 @@ See
 .BR "TRYING AGAIN" .
 .TP
 .B retry_delay
-Seconds, more than 0, default 1: how long to wait between attempts.
+Seconds, more than 0, default 1: how long to wait before the first retry.
+.TP
+.B retry_backoff
+Number, at least 1, default 1: each later wait is this many times the one before
+.RB ( 2
+waits 1, 2, 4, 8 ... seconds with the default
+.BR retry_delay ).
 .TP
 .B notify_on_failure
 Boolean, default false.
@@ -1020,6 +1039,15 @@ When the command exits with a non\-zero status it is run again after
 up to
 .B retries
 more times, and each failed attempt is logged.
+With
+.B retry_backoff
+the waits grow: each is that many times the one before, which suits a service that
+needs a while to come back
+.RB ( "retries = 5" ,
+.B "retry_delay = 2"
+and
+.B "retry_backoff = 2"
+wait 2, 4, 8 and 16 seconds).
 It is never retried after a
 .BR timeout ,
 when the program cannot start, or when the action was skipped, because repeating those
@@ -1029,18 +1057,27 @@ Each attempt has its own
 so the worst case is
 .RI ( retries " + 1) x " timeout
 plus the delays.
-Retrying stops at once when automation is paused or the daemon is stopping, and a
+Retrying stops at once when automation is paused or the daemon is stopping, except for
+the
+.B shutdown
+event: its retries go on while the daemon exits (the service file that
+.B udevmon service install
+writes gives it 120 seconds in all to stop,
+.BR TimeoutStopSec ).
+A
 .B lock
 is held across all the attempts.
-.B retries
-and
+.BR retries ,
 .B retry_delay
+and
+.B retry_backoff
 cannot be combined with
 .BR detach .
 .SH "RUNNING ACTIONS ONE AT A TIME"
 The actions of one event run one after another, but different events run at the same
 time (up to
-.BR max_workers ).
+.B max_workers
+commands at once).
 So the actions for a plug and for the unplug that follows can overlap.
 Give the actions that must not overlap the same
 .BR lock .
@@ -1062,11 +1099,12 @@ The lock is held while the command runs and is released as soon as the command h
 exited (for a
 .B detach
 action, as soon as it has started).
-A waiting action occupies one of the
+A waiting action does not hold up other events: it takes none of the
 .B max_workers
-workers, so keep locked actions short; every command has a
+slots until its command starts.
+Every command has a
 .BR timeout ,
-so a stuck one holds the others for at most that long.
+so a stuck one holds the others with the same lock for at most that long.
 The log says when an action had to wait.
 .PP
 To choose by what an action does:
@@ -1138,7 +1176,9 @@ that is not a name, a
 .B retries
 that is not a whole number of 0 or more, a
 .B retry_delay
-that is not a number above 0, either of them with
+that is not a number above 0, a
+.B retry_backoff
+that is not a number of 1 or more, any of them with
 .BR detach ,
 a
 .B tag_mode

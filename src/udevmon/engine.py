@@ -94,9 +94,9 @@ class Engine:
             """The action with its program resolved through script_dir; None (and a skip)
             when it is set but the program is nowhere to be found."""
             settings = self.config.settings
-            if not uses_script_dir(settings, action.run[0]):
+            if not uses_script_dir(settings, action.run[0], action.script_dir):
                 return action
-            path = resolve_program(settings, action.run[0])
+            path = resolve_program(settings, action.run[0], action.script_dir)
             if path is None:
                 reason = (f"program {action.run[0]!r} not found in script_dir or the "
                           "standard system paths")
