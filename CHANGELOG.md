@@ -12,6 +12,11 @@ to the version and date, and start a new empty **Unreleased** above it.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-11
+
+The first public release, on GitHub and PyPI. udevmon behaves as in 0.8.0:
+this release adds the license, the packaging and the HTML manual.
+
 ### Added
 
 - **An HTML reference manual** (Sphinx, optional `docs` extra):
