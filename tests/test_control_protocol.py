@@ -305,9 +305,10 @@ class DaemonMethodTests(unittest.TestCase):
     def test_subscribers_get_every_event_before_the_engine(self):
         result, sub = self.call("subscribe")
         self.assertIsInstance(sub, control.Subscription)
+        self.assertEqual(result["seq"], 0)
         event = Event(CONNECTED, self.usb, time=123.0)
         self.d._emit(event)
-        self.assertEqual(sub._next(), [("event", {"kind": "connected", "time": 123.0,
+        self.assertEqual(sub._next(), [("event", {"seq": 1, "kind": "connected", "time": 123.0,
                                                   "source": "udev", "key": "/sys/k",
                                                   "props": {"serial": "S", "instance": "k"}})])
         sub.close()
@@ -396,8 +397,8 @@ class FakeConnection:
 
     def call(self, method, params=None):
         self.calls.append(method)
-        return {"status": {"config": self.config}, "subscribe": {},
-                "present": {"things": self.things}}[method]
+        return {"status": {"config": self.config},
+                "subscribe": {"seq": 0, "present": self.things}}[method]
 
     def has_buffered(self):
         return bool(self.notes)
@@ -429,11 +430,11 @@ class ScanThroughDaemonTests(unittest.TestCase):
                 mock.patch("udevmon.control.Connection", return_value=conn):
             return self.scanner._through_daemon()
 
-    def test_it_subscribes_before_asking_what_is_present(self):
+    def test_what_is_present_comes_with_the_subscription(self):
         conn = FakeConnection(str(self.cfg), present=[self.thing])
         got, present = self.through(conn)
         self.assertIs(got, conn)
-        self.assertEqual(conn.calls, ["status", "subscribe", "present"])
+        self.assertEqual(conn.calls, ["status", "subscribe"])
         self.assertEqual(present, [self.thing])
 
     def test_not_through_a_daemon_with_another_config_or_none(self):

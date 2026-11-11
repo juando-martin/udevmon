@@ -80,6 +80,7 @@ class Event:
     kind: str                       #: one of :data:`VALID_KINDS`
     endpoint: Endpoint              #: the thing it happened to
     time: float = field(default_factory=time.time)  #: when, in seconds since the epoch
+    seq: int = 0                    #: the daemon's number for it, or 0 when it has none
 
     @property
     def props(self) -> dict[str, str]:

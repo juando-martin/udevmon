@@ -34,6 +34,7 @@ log = logging.getLogger("udevmon.control")
 PROTOCOL = 1                     #: the protocol version that ``hello`` reports
 HANDLE_TIMEOUT = 30.0            #: seconds the main loop has to answer a request
 MAX_REQUEST = 64 * 1024          #: bytes; a longer request line is refused
+MAX_REPLY = 64 * 1024 * 1024     #: bytes; a longer line from the daemon is not read
 MAX_CONNECTIONS = 32             #: connections open at once; more are refused
 QUEUE_SIZE = 1000                #: notifications waiting for a slow subscriber
 
@@ -138,10 +139,10 @@ def _peer_uid(conn: socket.socket) -> int | None:
 
 
 class _Lines:
-    """Reads newline-terminated lines from a socket."""
+    """Reads newline-terminated lines from a socket, each at most ``limit`` bytes."""
 
-    def __init__(self, conn: socket.socket):
-        self.conn, self.buf = conn, b""
+    def __init__(self, conn: socket.socket, limit: int = MAX_REQUEST):
+        self.conn, self.buf, self.limit = conn, b"", limit
 
     def next(self) -> bytes | None:
         """The next line without its newline; None at the end of the stream."""
@@ -150,8 +151,8 @@ class _Lines:
             if not chunk:
                 return None
             self.buf += chunk
-            if len(self.buf) > MAX_REQUEST and b"\n" not in self.buf:
-                raise ValueError("request too long")
+            if len(self.buf) > self.limit and b"\n" not in self.buf:
+                raise ValueError(f"line longer than {self.limit} bytes")
         line, _, self.buf = self.buf.partition(b"\n")
         return line
 
@@ -358,12 +359,24 @@ class ControlServer:
                     return
 
     def on_main_loop(self, method: str, params: dict):
-        """Run the handler on the main loop and wait for its answer."""
+        """Run the handler on the main loop and wait for its answer.
+
+        After :data:`HANDLE_TIMEOUT` a request the loop has not started is cancelled
+        (refused ``not-run``: it never runs, so it can be sent again); one that has started
+        is refused ``still-running``: it may still complete, so it must not be sent again
+        blindly.
+        """
         from gi.repository import GLib
         done = threading.Event()
         result: list = []
+        mutex = threading.Lock()
+        phase = ["queued"]                            # queued -> running, or cancelled
 
         def call():
+            with mutex:
+                if phase[0] == "cancelled":
+                    return False
+                phase[0] = "running"
             try:
                 result.append(("ok", self.handler(method, params)))
             except BaseException as e:                # re-raised in the connection's thread
@@ -372,7 +385,16 @@ class ControlServer:
             return False
         GLib.idle_add(call, priority=GLib.PRIORITY_DEFAULT)
         if not done.wait(HANDLE_TIMEOUT):
-            raise Refused("no-answer", "the daemon did not answer in time", INTERNAL_ERROR)
+            with mutex:
+                started = phase[0] == "running"
+                if not started:
+                    phase[0] = "cancelled"
+            if started:
+                raise Refused("still-running", "the daemon did not answer in time; the "
+                              "request is still running and may yet take effect",
+                              INTERNAL_ERROR)
+            raise Refused("not-run", "the daemon did not answer in time; the request was "
+                          "not run", INTERNAL_ERROR)
         kind, value = result[0]
         if kind == "raise":
             raise value
@@ -394,7 +416,7 @@ class Connection:
         except (FileNotFoundError, ConnectionRefusedError) as e:
             self.sock.close()
             raise NotRunning(str(e)) from None
-        self._lines = _Lines(self.sock)
+        self._lines = _Lines(self.sock, MAX_REPLY)
         self._next_id = 0
         self.pending: list[dict] = []                 # notifications read while waiting
 

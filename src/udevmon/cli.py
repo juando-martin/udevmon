@@ -1219,8 +1219,11 @@ def _trigger_reply(args) -> tuple[int, dict]:
         return fail(TRIGGER_NOT_RUNNING, "not-running",
                     "udevmon is not running (no answer on its control socket)")
     except control.Refused as e:
-        return (TRIGGER_UNKNOWN_DEVICE if e.error == "unknown-device" else TRIGGER_REFUSED), \
-            {"ok": False, "error": e.error, "message": e.message}
+        if e.code != control.REFUSED:                 # no answer in time, or a failure
+            status = TRIGGER_NO_ANSWER
+        else:
+            status = TRIGGER_UNKNOWN_DEVICE if e.error == "unknown-device" else TRIGGER_REFUSED
+        return status, {"ok": False, "error": e.error, "message": e.message}
     except (OSError, ValueError) as e:            # ProtocolError is a ValueError
         return fail(TRIGGER_NO_ANSWER, "no-answer", f"no usable answer from the daemon: {e}")
     if not isinstance(reply, dict):

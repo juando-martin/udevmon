@@ -58,6 +58,7 @@ class PresentKindsTests(unittest.TestCase):
         class Eng:
             def handle(self, e): seen.append((e.kind, e.endpoint.key))
         d = Daemon.__new__(Daemon)
+        d._seq = 0
         d.engine, d.sources = Eng(), [Src([Endpoint("udev", "a", {})]), Src([Endpoint("udisks", "b", {})])]
         d.fire_shutdown()
         self.assertEqual(seen, [(SHUTDOWN, "a"), (SHUTDOWN, "b")])

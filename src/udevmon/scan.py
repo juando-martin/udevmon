@@ -412,8 +412,10 @@ class Scanner:
             if not _same_file(status.get("config", ""), self.config_path):
                 conn.close()
                 return None, []
-            conn.call("subscribe")                    # first, so that no event is missed
-            present = conn.call("present", {"system": False})["things"] if self.present else []
+            # what is present comes with the subscription, taken at the same moment, so no
+            # event falls between the two
+            reply = conn.call("subscribe", {"system": False})
+            present = reply["present"] if self.present else []
             conn.sock.settimeout(None)
         except (control.NotRunning, control.ProtocolError, control.Refused, OSError,
                 KeyError, TypeError):

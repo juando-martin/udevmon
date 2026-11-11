@@ -110,8 +110,15 @@ their pinned version.
   after an edit finds the new device. Before, `reload` sent `SIGHUP` and
   always exited 0 with a daemon running. Feature name `reload-result`.
 - **The control socket speaks JSON-RPC 2.0** (one object per line,
-  persistent connections, methods `hello`, `status`, `present`, `trigger`,
-  `pause`, `resume`, `reload`, `subscribe`; SPECIFICATIONS §8.9, a draft).
+  persistent connections, methods `hello`, `status`, `present`, `results`,
+  `trigger`, `pause`, `resume`, `reload`, `subscribe`; SPECIFICATIONS §8.9,
+  a draft). Params are strict (an unknown or mistyped one is refused);
+  replies may be up to 64 MiB; a request that times out says whether it ran
+  (`not-run`) or may still take effect (`still-running`); events are
+  numbered, and `subscribe` returns what is present at that moment and
+  takes filters (kinds, devices, tags) and what to be told: the raw
+  `event`, what the engine did with it (`handled`) and each action's
+  `result`. The versioning rule is written down.
   After upgrading, restart the daemon: against one still running the old
   version, `trigger` exits 7 and says so, while `reload`, `pause` and
   `resume` fall back to `SIGHUP` and the flag file.

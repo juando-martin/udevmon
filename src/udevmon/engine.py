@@ -26,6 +26,18 @@ class Job(NamedTuple):
     vars: Mapping = {}      #: that device's variables, for {var_NAME} (empty when unnamed)
 
 
+class Handled(NamedTuple):
+    """What the engine did with a real event (``Engine(on_handled=...)``)."""
+    event: Event            #: the event
+    #: ``ran``, ``nothing-to-run`` (matched, no action applies), ``unmatched``, ``ignored``
+    #: (an ignored device), ``paused`` or ``debounced`` (a repeat)
+    outcome: str
+    devices: tuple          #: the named devices it matched
+    tags: tuple             #: its tags
+    jobs: list              #: the :class:`Job` objects submitted, in run order
+    skipped: list           #: the :class:`Skip` objects
+
+
 class Skip(NamedTuple):
     """An action that applies to the event but will not run, and why."""
     action: Action          #: the action that will not run
@@ -60,9 +72,11 @@ class Engine:
     ``submit(event, jobs, ended=None)``; ``paused`` is a callable that says whether a
     pause is on (the pause flag file by default).
     """
-    def __init__(self, config: Config, runner, clock=time.monotonic, paused=None):
+    def __init__(self, config: Config, runner, clock=time.monotonic, paused=None,
+                 on_handled=None):
         self.config = config
         self.runner = runner
+        self.on_handled = on_handled            # called with a Handled for each real event
         self._clock = clock
         self._paused = paused or pause_flag.is_paused        # a callable: injectable for tests
         self._was_paused = False
@@ -79,9 +93,12 @@ class Engine:
         skipped: list[Skip] = []
         return Plan(res, self.select(event, res, skipped), skipped)
 
-    def select(self, event: Event, res, skipped: list | None = None) -> list[Job]:
+    def select(self, event: Event, res, skipped: list | None = None,
+               warn: bool | None = None) -> list[Job]:
         """The actions that apply to this event (each at most once), in the order they run:
-        by ``order``, then config order."""
+        by ``order``, then config order. ``warn`` (default: without ``skipped``) logs a
+        program that cannot be found as a warning, as for a real event."""
+        warn = skipped is None if warn is None else warn
         named = {d.name for d in res.named}
         jobs: list[Job] = []
 
@@ -101,7 +118,7 @@ class Engine:
                 reason = (f"program {action.run[0]!r} not found in script_dir or the "
                           "standard system paths")
                 skip(action, reason)
-                if skipped is None:                   # a real event, not `explain`: say so
+                if warn:                              # a real event, not `explain`: say so
                     log.warning("%s: action %r skipped: %s", event.kind, action.name, reason)
                 return None
             return replace(action, run=(path, *action.run[1:]))
@@ -189,7 +206,15 @@ class Engine:
         ends a presence the runner is told even without jobs, so that it removes the state
         folder after them.
         """
-        jobs = self._dispatch(event)
+        skipped: list[Skip] = []
+        jobs, outcome, res = self._dispatch(event, skipped)
+        if self.on_handled is not None:
+            try:
+                self.on_handled(Handled(
+                    event, outcome, tuple(d.name for d in res.named) if res else (),
+                    tuple(res.tags) if res else (), jobs, skipped))
+            except Exception:
+                log.exception("reporting %s failed", event.kind)
         ended = presence_ends(event)
         if ended:                        # tidy up after the actions, even when there are none
             self.runner.submit(event, jobs, ended)
@@ -214,25 +239,29 @@ class Engine:
         self._last[key] = (event.kind, now)
         return False
 
-    def _dispatch(self, event: Event) -> list[Job]:
-        """Work out the jobs for an event (debounce and pause included); submits nothing."""
+    def _dispatch(self, event: Event, skipped: list) -> tuple[list[Job], str, object]:
+        """Work out the jobs for an event (debounce and pause included); submits nothing.
+        Returns (jobs, outcome as in :class:`Handled`, the resolution or None); the skips
+        go to ``skipped``."""
         if self._pause_check():                       # startup and shutdown are held back too
             log.debug("%s: paused, skipped (%s)", event.kind, event.endpoint.key)
-            return []
+            return [], "paused", None
         if self._repeat(event):
-            return []
+            return [], "debounced", None
         props = event.props
         res = resolve(self.config, props)
         if not res.named and not res.tags:
             log.debug("%s: nothing matched (%s)", event.kind, event.endpoint.key)
-            return []
+            return [], "unmatched", res
         if len(res.named) > 1:
             log.info("%s matches several devices: %s", event.kind,
                      ", ".join(d.name for d in res.named))
-        jobs = self.select(event, res)
+        jobs = self.select(event, res, skipped, warn=True)
+        if res.ignored:
+            return [], "ignored", res
         if not jobs:
-            return []
+            return [], "nothing-to-run", res
         subject = res.named[0].name if res.named else f"unnamed:{event.endpoint.key}"
         log.info("%s: %s%s, %d action(s)", event.kind, subject if res.named else "unnamed thing",
                  f" [{', '.join(res.tags)}]" if res.tags else "", len(jobs))
-        return jobs
+        return jobs, "ran", res

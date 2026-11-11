@@ -133,7 +133,7 @@ class ControlTests(Base):
         statuses = wait()["statuses"]
         self.assertEqual(statuses[0], {"action": "up", "status": 0, "failure": None,
                                        "output": [], "attempts": 1, "event": "startup",
-                                       "device": "key", "time": 5.0})
+                                       "device": "key", "time": 5.0, "seq": 0})
         self.assertEqual((statuses[1]["status"], statuses[1]["output"]), (3, ["no profile 'x'"]))
 
     def test_an_unknown_method(self):

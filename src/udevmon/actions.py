@@ -37,6 +37,7 @@ class Result(NamedTuple):
     event: str = ""                 #: the event kind
     device: str | None = None       #: the device it ran for, if any
     time: float = 0.0               #: when it ended, in seconds since the epoch
+    seq: int = 0                    #: the number of its event (``Event.seq``)
 
 
 def build_env(event: Event, device: str | None, tag: str | None = None,
@@ -309,7 +310,7 @@ class ActionRunner:
         except Exception as e:
             log.exception("action %r crashed", job.action.name)
             return Result(job.action.name, None, f"crashed: {e}", event=event.kind,
-                          device=job.device, time=time.time())
+                          device=job.device, time=time.time(), seq=event.seq)
         finally:
             if lock is not None:
                 lock.release()
@@ -341,7 +342,8 @@ class ActionRunner:
             failure = "dry run" if self.dry_run else ("detached" if job.action.detach
                                                       else None)
         return Result(job.action.name, status, failure, outcome.get("output", ()),
-                      outcome.get("attempts", 1), event.kind, job.device, time.time())
+                      outcome.get("attempts", 1), event.kind, job.device, time.time(),
+                      event.seq)
 
     def _attempts(self, event, job, outcome):
         """Run the action; after a non-zero exit run it again, up to ``retries`` more times.

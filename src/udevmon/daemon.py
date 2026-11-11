@@ -9,15 +9,17 @@ import logging
 import os
 import signal
 import threading
+from collections import OrderedDict
+from dataclasses import replace
 from pathlib import Path
 
 from . import config as cfgmod
 from . import state
 from .actions import ActionRunner
 from .control import BadParams, Refused
-from .engine import Engine
-from .events import (CONNECTED, MOUNTED, SHUTDOWN, STARTUP, TRIGGER_KINDS, UNMOUNTED, Endpoint,
-                     Event, describe)
+from .engine import Engine, Handled
+from .events import (CONNECTED, MOUNTED, SHUTDOWN, STARTUP, TRIGGER_KINDS, UNMOUNTED,
+                     VALID_KINDS, Endpoint, Event, describe)
 from .runtime import lock_path  # noqa: F401  (also used as daemon.lock_path)
 from .sources.udev import UdevSource
 from .sources.udisks import UdisksSource
@@ -74,16 +76,83 @@ def endpoint_params(endpoint: Endpoint) -> dict:
 def result_params(result) -> dict:
     """A job's ``actions.Result`` as the control socket sends it: ``action``, ``status``,
     ``failure``, ``output`` (the last lines), ``attempts``, ``event``, ``device``,
-    ``time``."""
+    ``time`` and ``seq`` (its event's number)."""
     return {"action": result.action, "status": result.status, "failure": result.failure,
             "output": list(result.output), "attempts": result.attempts,
-            "event": result.event, "device": result.device, "time": result.time}
+            "event": result.event, "device": result.device, "time": result.time,
+            "seq": result.seq}
 
 
 def event_params(event: Event) -> dict:
-    """An event as the control socket's ``event`` notification sends it: ``kind``,
-    ``time`` and the thing's ``source``, ``key`` and ``props``."""
-    return {"kind": event.kind, "time": event.time, **endpoint_params(event.endpoint)}
+    """An event as the control socket's ``event`` notification sends it: ``seq``,
+    ``kind``, ``time`` and the thing's ``source``, ``key`` and ``props``."""
+    return {"seq": event.seq, "kind": event.kind, "time": event.time,
+            **endpoint_params(event.endpoint)}
+
+
+def handled_params(handled, trigger: bool = False) -> dict:
+    """What the engine did with an event (``engine.Handled``), as the ``handled``
+    notification sends it."""
+    return {"seq": handled.event.seq, "kind": handled.event.kind, "trigger": trigger,
+            "outcome": handled.outcome, "devices": list(handled.devices),
+            "tags": list(handled.tags),
+            "actions": [{"action": j.action.name, "device": j.device, "tag": j.tag}
+                        for j in handled.jobs],
+            "skipped": [{"action": x.action.name, "reason": x.reason}
+                        for x in handled.skipped]}
+
+
+#: The params each control-socket method takes, name -> kind (``str``, ``bool``, ``number``,
+#: ``int`` or ``strs``, a list of strings). A leading ``!`` makes it required and a
+#: trailing ``?`` allows null. Any other param, or a wrong type, is refused (-32602).
+PARAMS = {
+    "hello": {"protocol": "int"},
+    "status": {},
+    "present": {"system": "bool"},
+    "results": {"action": "str"},
+    "trigger": {"device": "!str", "event": "str?", "wait": "bool"},
+    "pause": {"seconds": "number?"},
+    "resume": {},
+    "reload": {"config": "str"},
+    "subscribe": {"notify": "strs", "kinds": "strs", "devices": "strs", "tags": "strs",
+                  "system": "bool"},
+}
+
+#: What ``subscribe`` can ask to be told (raw events, what the engine did, action results).
+NOTIFY_KINDS = ("event", "handled", "result")
+
+_INTEREST_KEPT = 1000         # events whose handled/result notifications are still routed
+
+_TYPES = {"str": lambda v: isinstance(v, str),
+          "bool": lambda v: isinstance(v, bool),
+          "int": lambda v: isinstance(v, int) and not isinstance(v, bool),
+          "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+          "strs": lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v)}
+_TYPE_NAMES = {"str": "a string", "bool": "true or false", "int": "a whole number",
+               "number": "a number", "strs": "a list of strings"}
+
+
+def check_params(method: str, params: dict) -> None:
+    """Refuse (``control.BadParams``) params that ``PARAMS`` does not list for ``method``,
+    a missing required one, or one of the wrong type."""
+    spec = PARAMS[method]
+    for name in params:
+        if name not in spec:
+            takes = ", ".join(sorted(spec)) or "none"
+            raise BadParams(f"{method}: unknown parameter {name!r} (it takes: {takes})")
+    for name, kind in spec.items():
+        required, nullable = kind.startswith("!"), kind.endswith("?")
+        kind = kind.strip("!?")
+        if name not in params:
+            if required:
+                raise BadParams(f"{method}: parameter {name!r} is required")
+            continue
+        value = params[name]
+        if value is None and nullable:
+            continue
+        if not _TYPES[kind](value):
+            raise BadParams(f"{method}: parameter {name!r} must be {_TYPE_NAMES[kind]}"
+                            + (" or null" if nullable else ""))
 
 
 def _same_file(a, b) -> bool:
@@ -104,6 +173,9 @@ class Daemon:
         self._subscribers: set = set()          # control.Subscription, for every event
         self._subscribers_mutex = threading.Lock()
         self.last_results: dict = {}            # action name -> its last actions.Result
+        self._seq = 0                           # the number of the last event
+        # event number -> the subscribers that asked for its handled/result notifications
+        self._interest: OrderedDict = OrderedDict()
 
     def _acquire_lock(self):
         fd = os.open(lock_path(), os.O_RDWR | os.O_CREAT, 0o600)
@@ -122,24 +194,70 @@ class Daemon:
                 f"{len(self.cfg.actions)} action(s)" + (" [dry-run]" if self.dry_run else "")
                 + (" [PAUSED]" if pause.is_paused() else ""))
 
+    def _number(self, event: Event) -> Event:
+        """The event with the next number (``Event.seq``)."""
+        self._seq += 1
+        return replace(event, seq=self._seq)
+
     def _emit(self, event: Event) -> None:
-        with self._subscribers_mutex:
-            subscribers = list(self._subscribers)
-        if subscribers:
-            params = event_params(event)
-            for sub in subscribers:
-                sub.publish("event", params)
+        event = self._number(event)
+        try:
+            self._route(event)
+        except Exception:
+            log.exception("error telling the subscribers about %s", event.kind)
         try:
             self.engine.handle(event)
         except Exception:
             log.exception("error dispatching %s", event.kind)
+
+    def _route(self, event: Event, announce: bool = True) -> None:
+        """Send the ``event`` notification to the subscribers whose filters it passes
+        (unless not ``announce``: a triggered event), and remember which of them want its
+        ``handled`` and ``result`` notifications."""
+        from .matching import resolve
+        with self._subscribers_mutex:
+            subscribers = list(self._subscribers)
+        if not subscribers:
+            return
+        res, params, later = None, None, []
+        for sub in subscribers:
+            f = sub.filters
+            if f["kinds"] and event.kind not in f["kinds"]:
+                continue
+            if f["devices"] or f["tags"]:
+                if res is None:
+                    res = resolve(self.cfg, event.props)
+                if f["devices"] and not set(f["devices"]) & {d.name for d in res.named}:
+                    continue
+                if f["tags"] and not set(f["tags"]) & set(res.tags):
+                    continue
+            if announce and "event" in f["notify"]:
+                params = params or event_params(event)
+                sub.publish("event", params)
+            if {"handled", "result"} & set(f["notify"]):
+                later.append(sub)
+        if later:
+            self._interest[event.seq] = later
+            while len(self._interest) > _INTEREST_KEPT:
+                self._interest.popitem(last=False)
+
+    def _handled(self, handled, trigger: bool = False) -> None:
+        """Tell the subscribers that asked what the engine did with the event."""
+        subs = self._interest.get(handled.event.seq, ())
+        params = None
+        for sub in subs:
+            if "handled" in sub.filters["notify"]:
+                params = params or handled_params(handled, trigger)
+                sub.publish("handled", params)
+        if subs and not handled.jobs:
+            self._interest.pop(handled.event.seq, None)   # no results will follow
 
     def fire_shutdown(self) -> None:
         """Emit a ``shutdown`` event for every device still present."""
         for s in self.sources:
             try:
                 for endpoint in s.present():
-                    self.engine.handle(Event(SHUTDOWN, endpoint))
+                    self.engine.handle(self._number(Event(SHUTDOWN, endpoint)))
             except Exception:
                 log.exception("error firing shutdown events")
 
@@ -148,9 +266,15 @@ class Daemon:
         return [e for s in self.sources for e in s.present()]
 
     def record_result(self, result) -> None:
-        """Keep each action's last result (``results`` on the control socket); called by
-        the runner from the event's thread."""
+        """Keep each action's last result (``results`` on the control socket) and tell the
+        subscribers that asked; called by the runner from the event's thread."""
         self.last_results[result.action] = result
+        subs = self._interest.get(result.seq, ())
+        params = None
+        for sub in subs:
+            if "result" in sub.filters["notify"]:
+                params = params or result_params(result)
+                sub.publish("result", params)
 
     #: The control socket's methods (``control.ControlServer``), each a method of this class.
     METHODS = {"hello": "_hello", "status": "_status", "present": "_present",
@@ -163,13 +287,19 @@ class Daemon:
         from .control import UnknownMethod
         if method not in self.METHODS:
             raise UnknownMethod(method)
+        check_params(method, params)
         return getattr(self, self.METHODS[method])(params)
 
     def _hello(self, params):
         from . import __version__
         from .cli import FEATURES
         from .control import PROTOCOL
-        return {"protocol": PROTOCOL, "version": __version__, "features": list(FEATURES)}, None
+        theirs = params.get("protocol")
+        if theirs is not None and theirs != PROTOCOL:
+            raise Refused("protocol-mismatch", f"the daemon speaks protocol {PROTOCOL}, "
+                          f"not {theirs}", protocol=PROTOCOL)
+        return {"protocol": PROTOCOL, "version": __version__, "features": list(FEATURES),
+                "methods": sorted(self.METHODS)}, None
 
     def _status(self, params):
         from . import __version__, pause
@@ -181,28 +311,26 @@ class Daemon:
 
     def _results(self, params):
         action = params.get("action")
-        if action is not None and not isinstance(action, str):
-            raise BadParams("'action' must be an action name")
         results = sorted(dict(self.last_results).values(), key=lambda r: r.time, reverse=True)
         return {"results": [result_params(r) for r in results
                             if action is None or r.action == action]}, None
 
-    def _present(self, params):
-        system = params.get("system", True)
-        if not isinstance(system, bool):
-            raise BadParams("'system' must be true or false")
+    def _present_params(self, system: bool = True) -> list[dict]:
         things = []
         for s in self.sources:
             things += s.present(include_system=system) if isinstance(s, UdisksSource) \
                 else s.present()
-        return {"things": [endpoint_params(e) for e in things]}, None
+        return [endpoint_params(e) for e in things]
+
+    def _present(self, params):
+        return {"seq": self._seq,
+                "things": self._present_params(params.get("system", True))}, None
 
     def _pause(self, params):
         from . import pause
         seconds = params.get("seconds")
-        if seconds is not None and (isinstance(seconds, bool)
-                                    or not isinstance(seconds, (int, float)) or seconds <= 0):
-            raise BadParams("'seconds' must be a number above 0, or null")
+        if seconds is not None and seconds <= 0:
+            raise BadParams("pause: parameter 'seconds' must be above 0, or null")
         was_paused, _ = pause.status()
         until = pause.pause(seconds)
         log.info("automation paused %s (udevmon pause)", pause.describe_until(until))
@@ -218,8 +346,6 @@ class Daemon:
     def _reload(self, params):
         config = params.get("config")
         if config is not None:
-            if not isinstance(config, str):
-                raise BadParams("'config' must be a path")
             if not _same_file(config, self.config_path):
                 raise Refused("other-config", f"the daemon uses "
                               f"{os.path.realpath(self.config_path)}, not {config}")
@@ -232,14 +358,26 @@ class Daemon:
 
     def _subscribe(self, params):
         from .control import Subscription
+        notify = params.get("notify", ["event"])
+        bad = [n for n in notify if n not in NOTIFY_KINDS] or ([] if notify else ["none"])
+        if bad:
+            raise BadParams(f"subscribe: 'notify' takes {', '.join(NOTIFY_KINDS)}, not "
+                            f"{bad[0]!r}")
+        kinds = params.get("kinds", [])
+        bad = [k for k in kinds if k not in VALID_KINDS]
+        if bad:
+            raise BadParams(f"subscribe: {bad[0]!r} is not an event kind")
 
         def closed(sub):
             with self._subscribers_mutex:
                 self._subscribers.discard(sub)
         sub = Subscription(on_close=closed)
+        sub.filters = {"notify": list(dict.fromkeys(notify)), "kinds": kinds,
+                       "devices": params.get("devices", []), "tags": params.get("tags", [])}
         with self._subscribers_mutex:
             self._subscribers.add(sub)
-        return {}, sub
+        # taken on the main loop, like the events: every later event has a higher seq
+        return {"seq": self._seq, "present": self._present_params(params.get("system", True))}, sub
 
     def _trigger(self, params):
         from . import pause
@@ -272,8 +410,13 @@ class Daemon:
             if kind == UNMOUNTED:                       # as after a clean unmount
                 endpoint = Endpoint(endpoint.source, endpoint.key,
                                     {**endpoint.props, "surprise": "0"})
-            event = Event(kind, endpoint)
+            event = self._number(Event(kind, endpoint))
+            self._route(event, announce=False)
             jobs, skipped = self.engine.trigger(event)
+            res = resolve(self.cfg, event.props)
+            self._handled(Handled(event, "ran" if jobs else "nothing-to-run",
+                                  tuple(d.name for d in res.named), tuple(res.tags), jobs,
+                                  skipped), trigger=True)
             if jobs:
                 futures.append(self.runner.submit(event, jobs))
             results.append({"thing": describe(endpoint),
@@ -342,7 +485,7 @@ class Daemon:
         state.wipe()                             # folders left by a crash or an earlier run
         self.runner = ActionRunner(self.cfg.settings.max_workers, self.dry_run,
                                    on_result=self.record_result)
-        self.engine = Engine(self.cfg, self.runner)
+        self.engine = Engine(self.cfg, self.runner, on_handled=self._handled)
         loop = GLib.MainLoop()
         for sig, cb in ((signal.SIGHUP, lambda: self.reload()),
                         (signal.SIGTERM, lambda: loop.quit() or False),

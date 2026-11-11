@@ -1166,46 +1166,90 @@ used it (§12); until then it is internal (§11) and may change in any release.
   stop; a stale one is replaced, the lock file proving no other daemon runs).
   A connection whose peer uid (`SO_PEERCRED`) is not the daemon's gets an
   error and is closed; at most 32 are open at once (more get the error `busy`).
-  If the socket cannot be opened the daemon logs a warning and runs without it.
-- **JSON-RPC 2.0**, one compact JSON object (or batch array) per line, UTF-8,
-  at most 64 KiB. A connection stays open for any number of requests, read and
-  answered in order by the connection's own thread; each request is handled on
-  the daemon's main loop (`idle_add`, answered within 30 s), so it is ordered
-  with the events around it. A request whose answer waits (`trigger` with
-  `wait`) holds up the later requests of its connection only. A request
-  without `id` is a notification: handled, not answered. A batch is answered
-  with an array (without the notifications). `params`, when given, is an
-  object.
+  A refused connection is closed only after the client's request is read (for
+  a second at most), so the error is not lost to a reset. If the socket cannot
+  be opened the daemon logs a warning and runs without it.
+- **JSON-RPC 2.0**, one compact JSON object (or batch array) per line, UTF-8.
+  A request line is at most 64 KiB (`MAX_REQUEST`); a line from the daemon
+  may be up to 64 MiB (`MAX_REPLY`: `present` on a busy machine is tens of
+  KiB). A connection stays open for any number of requests, read and answered
+  in order by the connection's own thread; each request is handled on the
+  daemon's main loop (`idle_add`), so it is ordered with the events around it.
+  A request whose answer waits (`trigger` with `wait`) holds up the later
+  requests of its connection only. A request without `id` is a notification:
+  handled, not answered. A batch is answered with an array (without the
+  notifications). `params`, when given, is an object.
+- **Timeouts.** The main loop has 30 s (`HANDLE_TIMEOUT`) to answer. A request
+  it has not started by then is cancelled and refused `not-run`: it never runs,
+  so it may be sent again. One it has started is refused `still-running`: it
+  may still take effect (a `trigger` may still run its actions), so it must
+  not be sent again blindly. Both have code `-32603`; `trigger` exits 7.
+- **Params are strict** (`daemon.PARAMS`, checked by `daemon.check_params`
+  before a method runs): an unknown param, a missing required one or a wrong
+  type is refused `-32602` naming it. So a typo is not silently ignored, and a
+  client can tell that a daemon lacks a param it relies on.
 - **Errors** are `{code, message, data: {error, ...}}`: `-32700` not JSON,
   `-32600` not a request, `-32601` no such method (`unknown-method`), `-32602`
   params that do not fit (`bad-request`), `-32603` a failure in the daemon
-  (`internal`), and `1` a refusal, whose `data.error` is a fixed string code
-  (each method lists its own) and which may carry more fields in `data`.
-- **Methods:**
-  - `hello` → `{protocol: 1, version, features}` (the feature names of §8.7).
+  (`internal`, `not-run`, `still-running`, `busy`), and `1` a refusal, whose
+  `data.error` is a fixed string code (each method lists its own) and which
+  may carry more fields in `data`.
+- **Methods** (params with their types; all optional unless marked):
+  - `hello {protocol: int}` → `{protocol: 1, version, features, methods}`
+    (the feature names of §8.7, the method names). With `protocol` other than
+    the daemon's it is refused `protocol-mismatch`, with `data.protocol`.
   - `status` → `{pid, version, config (resolved path), dry_run, paused, until
     (epoch seconds or null), devices, actions}` (counts).
-  - `results {action: NAME}` → `{results: [...]}`, the last result of each
+  - `results {action: str}` → `{results: [...]}`, the last result of each
     action since the daemon started (all, or that one), newest first, each as
-    in `trigger`'s `statuses` (§8.6); kept in memory (`Daemon.last_results`,
-    filled by the runner's `on_result`). `udevmon status` shows them with
-    `status`: exit 3 when no daemon runs, 7 when it gives no usable answer;
-    `--json` prints `{exit_status, running, pid, ...status, results}`.
-  - `present {system: BOOL = true}` → `{things: [{source, key, props}]}`, every
-    thing present now; `system` false leaves out system filesystems.
-  - `trigger` (§8.6).
-  - `pause {seconds: NUMBER|null}` → `{paused: true, until, was_paused}`; the
+    in `trigger`'s `statuses` (§8.6) plus `seq`; kept in memory
+    (`Daemon.last_results`, filled by the runner's `on_result`). `udevmon
+    status` shows them with `status`: exit 3 when no daemon runs, 7 when it
+    gives no usable answer; `--json` prints `{exit_status, running, pid,
+    ...status, results}`.
+  - `present {system: bool = true}` → `{seq, things: [{source, key, props}]}`,
+    every thing present now, and the number of the last event (`seq`) at that
+    moment; `system` false leaves out system filesystems.
+  - `trigger {device: str (required), event: str|null, wait: bool}` (§8.6).
+  - `pause {seconds: number|null}` → `{paused: true, until, was_paused}`; the
     daemon writes the flag file (§8.5) and logs it. `resume` → `{was_paused}`.
-  - `reload {config: PATH}` → `{devices, actions, warnings, restart_needed}`.
+  - `reload {config: str}` → `{devices, actions, warnings, restart_needed}`.
     Refused: `other-config` when `config` is given and is not the daemon's
     file, `bad-config` (with `data.problems`, the list of errors) when the new
     configuration is invalid; the daemon then keeps the previous one.
-  - `subscribe` → `{}`, then a notification `{method: "event", params: {kind,
-    time, source, key, props}}` for every event the sources report (before
-    debounce and pause), until the connection closes. Other requests still work
-    on the connection. Each subscriber has a queue of 1000: when it is full,
-    events are dropped, and the next one sent is preceded by `{method: "lost",
-    params: {count}}`. The daemon never waits for a subscriber.
+  - `subscribe {notify: [str], kinds: [str], devices: [str], tags: [str],
+    system: bool}` → `{seq, present}`: what `present` gives, taken at the same
+    moment on the main loop, then notifications until the connection closes.
+    Other requests still work on the connection.
+- **Events and notifications.** Every event the sources report gets the next
+  number (`Event.seq`, from 1); a triggered event and the exit pass's
+  `shutdown` events are numbered too. A subscriber is sent, for each event its
+  filters pass, what its `notify` lists (default `["event"]`):
+  - `event` `{seq, kind, time, source, key, props}`: the event as the source
+    reported it, before debounce and pause (not for a triggered event).
+  - `handled` `{seq, kind, trigger, outcome, devices, tags, actions: [{action,
+    device, tag}], skipped: [{action, reason}]}`: what the engine did
+    (`engine.Handled`); `outcome` is `ran`, `nothing-to-run`, `unmatched`,
+    `ignored`, `paused` or `debounced`.
+  - `result`: each action's result when it ends, as in `results`, with the
+    `seq` of its event.
+
+  Filters: `kinds` (event kinds), `devices` (named devices the thing
+  matches), `tags` (its tags); each given filter must pass, any of its values
+  will do. Since every later event has a higher `seq` than the snapshot, a
+  client knows where it stands; after a `lost` notice, or a gap in `seq`
+  among the events its filters pass, it calls `present` and continues from
+  that `seq`. The routing of `handled` and `result` is kept for the last 1000
+  events. Each subscriber has a queue of 1000 notifications: when it is full,
+  they are dropped, and the next one sent is preceded by `{method: "lost",
+  params: {count}}`. The daemon never waits for a subscriber.
+- **Versioning.** `protocol` is 1. Within it, methods, params, result fields,
+  notifications, `outcome` values and error codes are only added, never
+  removed or changed in meaning; a client ignores fields and notifications it
+  does not know. A client detects an added method by `-32601` and an added
+  param by `-32602` from an older daemon (or by `methods` in `hello`). The
+  number goes up only when something is removed or changes meaning, and a
+  client sends `hello {protocol}` to have a mismatch refused at once.
 - The client side is `control.Connection` (several calls, notifications) and
   `control.call` (one call). A reply without `"jsonrpc"` but with `ok` is the
   old protocol of a daemon still running from before: the CLI says to restart
