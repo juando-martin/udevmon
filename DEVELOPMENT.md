@@ -23,7 +23,9 @@ the suite (`tests/__init__.py`):
   real desktop or sends a notification.
 
 A new test that needs a daemon, a session bus or the desktop must fake it the
-same way; `tests/test_notify.py` and `tests/test_trigger.py` show how.
+same way; `tests/test_notify.py` (the session bus) and
+`tests/test_control_protocol.py` (a control socket on a real main loop) show
+how.
 
 After writing a test for a rule, break the rule in the code on purpose and check
 that the test fails (a quick mutation check). It catches a test that passes for
@@ -69,8 +71,10 @@ man pages where relevant, README, SPECIFICATIONS, and the changelog.
 `docs/` is a Sphinx manual for integrators and maintainers: integration
 contracts, what is provisional and what internal, the command reference
 (generated from the parser) and the module reference (from docstrings).
-Sphinx is optional (the `docs` extra); install it in a private virtual
-environment, never in `~/.venvs/tools`:
+Sphinx is optional (the `docs` extra) and only needed for the manual. Where
+to install it is up to you: in a private virtual environment, as below, or in
+one you already use (even your everyday one, if you prefer to have it
+there):
 
 ```
 python3 -m venv --system-site-packages /path/to/venv
@@ -82,16 +86,18 @@ python3 -m venv --system-site-packages /path/to/venv
 The build is fresh, nitpicky and fails on any warning; the output, in
 `docs/_build/html` (ignored by git) or `--output PATH`, is never committed.
 The preview listens on 127.0.0.1 only, does not rebuild after edits, and
-stops with Ctrl-C. Run the test suite with that venv's Python too, so that
-`test_documentation` builds the manual instead of being skipped.
+stops with Ctrl-C. Run the test suite with a Python that has Sphinx too, so
+that `test_documentation` builds the manual instead of being skipped.
 
 Docstrings are PEP 257 and reStructuredText (double backquotes for code);
 Napoleon reads Google-style `Args:`, `Returns:` and `Raises:` sections. Give
 the contract a caller needs (blocking work, files written, subprocesses,
 failure), not boilerplate. Every public object needs one, and every public
-constant and class field a `#:` comment without `: ` in it; private
-`_helpers` need none. A new module shows up in the manual by itself, under "Other modules"; list a core one in
-`docs/internals.rst`. `docs/contributing.rst` has the details.
+constant and class field a `#:` comment without `: ` in it. Private
+`_helpers` are not required to have one, but give one to any whose logic is
+not obvious from its name. A new module shows up in the manual by itself,
+under "Other modules"; list a core one in `docs/internals.rst`.
+`docs/contributing.rst` has the details.
 
 ## Live testing
 
@@ -108,8 +114,10 @@ The unit tests use synthetic events. For the real thing:
   XDG_RUNTIME_DIR=$rt udevmon --config test.toml run --dry-run
   ```
 
-  Commands that talk to it (`trigger`, `pause`, `reload`) need the same
-  `XDG_RUNTIME_DIR`.
+  Commands that talk to it (`trigger`, `pause`, `resume`, `reload`,
+  `status`, and `scan` through the daemon) need the same `XDG_RUNTIME_DIR`;
+  with `XDG_CONFIG_HOME` set as well, it uses a private configuration
+  without `--config`.
 
 While testing: leave nothing behind in `/tmp` (a `trap` as above), keep the
 desktop from opening a file-manager window for each mounted stick
@@ -132,12 +140,16 @@ nothing in the source holds it.
    0.4.1).
 2. In `CHANGELOG.md`, add `## [X.Y.Z] - YYYY-MM-DD` under `## [Unreleased]`,
    which stays, empty, above it.
-3. Check the man page dates (see Docs) and run the tests.
-4. Commit as `Release X.Y.Z`, then tag: `git tag -a vX.Y.Z -m "udevmon X.Y.Z"`.
-5. Push `main` and the tag. On GitHub the tag starts the release workflow
+3. Review the documentation against the code, every time: the docstrings
+   of new and changed code, `README.md`, both man pages, `SPECIFICATIONS.md`
+   (§12 current), this release's changelog entries and `docs/*.rst`.
+   The tests catch what is missing, not what is wrong or out of date.
+4. Check the man page dates (see Docs) and run the tests.
+5. Commit as `Release X.Y.Z`, then tag: `git tag -a vX.Y.Z -m "udevmon X.Y.Z"`.
+6. Push `main` and the tag. On GitHub the tag starts the release workflow
    (`.github/workflows/release.yml`): it checks the tag against the version
    from git, builds, and publishes to PyPI. Never re-upload a version.
-6. Reinstall where it is used, and restart the service if the daemon changed.
+7. Reinstall where it is used, and restart the service if the daemon changed.
 
 ## Installing a development build
 

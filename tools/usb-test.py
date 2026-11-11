@@ -357,9 +357,10 @@ def steps(sim):
         return_to_plug = False
     wanted = ["unmounted dev=stick-fs surprise=1", "removed dev=stick-fs surprise=1"]
     if usb:
-        wanted.append("disconnected dev=stick surprise=")
+        wanted.append("disconnected dev=stick surprise=1")
     if not sim:
-        expect("`unmounted`, `removed` (surprise=1) and `disconnected`", m, wanted, timeout=90)
+        expect("`unmounted`, `removed` and `disconnected`, all surprise=1", m, wanted,
+               timeout=90)
 
     say("\n[7/7] Plug it back in, then stop the daemon")
     m = mark()

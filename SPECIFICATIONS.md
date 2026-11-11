@@ -69,7 +69,12 @@ them, and the runner executes the selected actions.
 - The **engine** resolves each event's endpoint to the named devices and tags it
   belongs to (§5.5), selects the actions that apply, debounces, and hands them to
   the runner.
-- The same sources feed `scan`, `present` and the daemon.
+- The same sources feed `scan`, `present` and the daemon; when the daemon runs,
+  `scan` takes its events from it instead (§8.1).
+- The daemon numbers each event and also sends it to the control socket's
+  subscribers (§8.9).
+- The **runner** runs each event's jobs in a thread of its own, with locks,
+  retries and at most `max_workers` commands at once (§7.3).
 
 ### 4.1 Data model
 
@@ -1410,9 +1415,10 @@ changes how the daemon starts.
 ```
 pyproject.toml
 setup.py                          version from git (§13.1)
-src/udevmon/{__init__,__main__,cli,config,configedit,events,matching,
-             engine,actions,daemon,control,notify,session,state,scan,
-             service,completion,explain,pause,runtime,_scm}.py
+src/udevmon/{__init__,__main__,cli,config,configedit,edit,events,
+             matching,engine,actions,daemon,control,notify,session,
+             state,scan,service,completion,explain,jsonout,pause,
+             runtime,_scm}.py
 src/udevmon/sources/{__init__,udev,udisks}.py
 contrib/rclone-config/            helper run as an action (own package)
 docs/                             Sphinx sources of the HTML manual
@@ -1428,11 +1434,14 @@ Building it imports the package but reads no config and starts nothing.
 
 `contrib/` holds helpers that udevmon runs as ordinary actions; they are not part
 of the udevmon package and import nothing from it; each has its own README and is
-installed on its own (`rclone-config` is a separate small package). `rclone-config` publishes the rclone config of a drive tagged for it while
-the drive is present.
+installed on its own (`rclone-config` is a separate small package).
+`rclone-config` publishes the rclone config of a drive tagged for it while the
+drive is present.
 
 `completion.py` holds the shell completion (§8.2); `explain.py` the report of §8.4;
-`control.py` the control socket (§8.9); `notify.py` the desktop notifications of
+`control.py` the control socket (§8.9); `jsonout.py` the `--json` entries of the
+configuration (§8.7); `edit.py` `udevmon edit` (§8.8); `notify.py` the desktop
+notifications of
 `notify_on_failure`; `session.py` the lookup of the graphical session's variables for
 actions; `state.py` the per-instance state folders.
 `matching.py` holds device matching, tag rules, strength and the resolver
@@ -1460,18 +1469,11 @@ Tests build throwaway repositories for each case above. The outputs were also
 compared with the real setuptools-scm 10.2.3 on 19 repository states and were
 identical.
 
-Automated tests cover: editing hand-formatted files (sub-tables, multi-line values,
-commented headers, CRLF, rollback, a missing `tomlkit`), auto-reload and the lock file, the missing-program check,
-`explain` and the engine's `plan()`, the docs' renderability (balanced code fences,
-code lines that fit an 80-column glow), the HTML manual (strict offline build with
-every config, source, socket and subprocess entry point made to fail; preview on
-127.0.0.1 only), service and completion uninstall (never touching the real
-systemd), shell completion (engine, helper protocol, the real
-bash function, and a guard that fails when a command, positional argument or
-value option of the CLI is not covered by the completion tables), config parsing/validation (including the error, warning
-and note rules of §6), matching and strength, tag rules and the resolver, the
-named/unnamed gate and `allow_unnamed`, placeholder expansion and safety, action
-runner (incl. timeout), debounce, config edit/rollback (including tag edits), the
-udev property normalizer and the udisks object tracker state machine (fed
-synthetic signals). Live behaviour (real plug / unplug / mount) is verified
-manually.
+The unit tests (`tests/`, `unittest`, one module per area) feed synthetic
+events, D-Bus signals and udisks object trees, run real commands and a real
+control socket on a GLib main loop, and edit hand-formatted TOML files; they run
+isolated from the user's configuration, daemon and desktop (DEVELOPMENT.md,
+"Tests"). Guard tests keep the CLI, completion, man pages, docstrings and HTML
+manual in step with the code. Live behaviour (a real plug, mount and pull) is
+checked with `tools/usb-test.py` or a private daemon (DEVELOPMENT.md, "Live
+testing").

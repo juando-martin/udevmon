@@ -1675,12 +1675,8 @@ and stability" and "Integration contracts".
 
 ## Development
 
-```
-PYTHONPATH=src python3 -m unittest discover -s tests -t .
-```
-
-Running from the source tree needs the dependencies installed too, `tomlkit`
-included (`pip install --user tomlkit`, or `apt install python3-tomlkit`).
+How to run the tests and work on udevmon is in
+[`DEVELOPMENT.md`](https://github.com/juando-martin/udevmon/blob/main/DEVELOPMENT.md).
 
 ### Real-hardware test
 
@@ -1701,8 +1697,7 @@ prints PASS or FAIL for each check. If one fails it writes
 `usb-test-report.txt` in the current folder. `--keep-popups` leaves the
 desktop setting alone.
 
-[`SPECIFICATIONS.md`](https://github.com/juando-martin/udevmon/blob/main/SPECIFICATIONS.md) describes the design, data
-model and behaviour in detail, and [`CHANGELOG.md`](https://github.com/juando-martin/udevmon/blob/main/CHANGELOG.md) what
-changed in each version. [`DEVELOPMENT.md`](https://github.com/juando-martin/udevmon/blob/main/DEVELOPMENT.md) is for
-working on udevmon: the checks that keep docs and code in step, live
-testing and releasing.
+[`SPECIFICATIONS.md`](https://github.com/juando-martin/udevmon/blob/main/SPECIFICATIONS.md)
+describes the design, data model and behaviour in detail, and
+[`CHANGELOG.md`](https://github.com/juando-martin/udevmon/blob/main/CHANGELOG.md)
+what changed in each version.

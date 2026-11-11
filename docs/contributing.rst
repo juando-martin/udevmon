@@ -8,8 +8,9 @@ releasing. This page covers the HTML manual.
 Building
 --------
 
-Sphinx is optional, in the ``docs`` extra. Install it into a private
-virtual environment, not the one udevmon is installed in for daily use::
+Sphinx is optional, in the ``docs`` extra, and only needed for the
+manual. Install it where you like: a private virtual environment, as here,
+or one you already use::
 
    python3 -m venv --system-site-packages /path/to/private-venv
    /path/to/private-venv/bin/python -m pip install -e '.[docs]'
