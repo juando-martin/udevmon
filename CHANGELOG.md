@@ -18,6 +18,8 @@ their pinned version.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-11
+
 ### Added
 
 - **`--json` for scripts** on `devices list`, `devices show`, `tags list`,
@@ -148,7 +150,7 @@ their pinned version.
   udevmon from other programs"; SPECIFICATIONS §8.7, §11): the compatibility
   policy above, the `--json` fields, feature names, and how a program's tests
   run a private udevmon with `XDG_CONFIG_HOME` and `XDG_RUNTIME_DIR`. The
-  control socket protocol is described in §8.6, still internal.
+  control socket protocol is described in §8.9, as a draft.
 - The module reference in the HTML manual is complete: the command
   handlers, module constants (event kinds, `trigger` exit statuses,
   `FEATURES`, ...) and the fields of the data classes are documented, and
