@@ -214,7 +214,7 @@ def _variables(table: dict, where: str, problems: list[str]) -> dict[str, str] |
 
 
 def variables_for(cfg: "Config", device: str | None, tag: str | None) -> dict[str, str]:
-    """The ``{var_NAME}`` values of a job (spec 6.3): for a tag action, ``tag``'s defaults;
+    """The ``{var_NAME}`` values of a job (spec 5.8): for a tag action, ``tag``'s defaults;
     for a device action, those of the device's tags in the order it lists them (the
     first that sets a name wins); then the device's own, which override them all."""
     d = cfg.devices.get(device) if device else None
@@ -661,6 +661,7 @@ def thing_kind(match) -> str | None:
 
 
 def _values(value) -> set:
+    """A device match value (a string or a list) as a set of casefolded strings."""
     return {v.casefold() for v in ([value] if isinstance(value, str) else value)}
 
 
@@ -776,11 +777,15 @@ def uses_script_dir(settings: Settings, program: str, extra=()) -> bool:
 
 
 def program_lookup(settings: Settings, action: Action) -> tuple[str, str | None]:
-    """How the daemon finds the action's program, and where: ``("path", PATH)`` for a
-    path (relative to the home folder, where commands start), ``("script_dir", PATH)``
-    for a bare name with a ``script_dir``, ``("PATH", None)`` for a bare name left to the
-    daemon's PATH (only the daemon knows it), ``("placeholder", None)`` when it is filled
-    in at run time (or is relative to a ``cwd`` that is). ``PATH`` is None when no executable file is there."""
+    """How the daemon finds the action's program, and where.
+
+    ``("path", PATH)`` for a path (a relative one counts from the action's ``cwd``, or
+    the home folder, where the command starts); ``("script_dir", PATH)`` for a bare
+    name with a ``script_dir``; ``("PATH", None)`` for a bare name left to the daemon's
+    PATH (only the daemon knows it); ``("placeholder", None)`` when it is filled in at
+    run time, or is relative to a ``cwd`` that is. ``PATH`` is None when no executable
+    file is there.
+    """
     prog = action.run[0]
     if "{" in prog:
         return "placeholder", None

@@ -16,7 +16,9 @@ Provisional (meant for integration, may still change)
   variables and the state folder (:doc:`integration`).
 * The JSON printed by ``--json`` (``present``, ``devices list|show|identify``,
   ``tags list|show``, ``actions list``, ``check``, ``explain``,
-  ``trigger``, ``version``), and the feature names in ``version --json``.
+  ``trigger``, ``status``, ``version``), and the feature names in
+  ``version --json``.
+* The input of ``udevmon apply``: a JSON array of editing commands.
 * The output of ``udevmon --version``: the version alone, on one line.
 
 Internal (no promise at all)
@@ -25,8 +27,8 @@ Internal (no promise at all)
 * Every Python module of the ``udevmon`` package. There is no public Python
   API: nothing is meant to be imported by another program, and appearing in
   :doc:`internals` or :doc:`modules` does not make an object public.
-* The control socket protocol, the lock file, the pause flag file and the
-  layout of ``$XDG_RUNTIME_DIR``.
+* The control socket protocol (a draft, ``SPECIFICATIONS.md`` §8.9), the
+  lock file, the pause flag file and the layout of ``$XDG_RUNTIME_DIR``.
 * Log message wording, and the human-readable output of every command.
 
 A program that needs udevmon's data model should call the ``--json``

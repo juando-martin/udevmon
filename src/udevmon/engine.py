@@ -70,7 +70,8 @@ class Engine:
 
     Used from the daemon's main loop only; not thread-safe. ``runner`` needs
     ``submit(event, jobs, ended=None)``; ``paused`` is a callable that says whether a
-    pause is on (the pause flag file by default).
+    pause is on (the pause flag file by default); ``on_handled``, if given, is called
+    with a :class:`Handled` for every real event, whatever became of it.
     """
     def __init__(self, config: Config, runner, clock=time.monotonic, paused=None,
                  on_handled=None):
@@ -167,6 +168,7 @@ class Engine:
         return jobs
 
     def _vars(self, device: str | None, tag: str | None) -> Mapping:
+        """A job's ``{var_NAME}`` values (``config.variables_for``)."""
         return variables_for(self.config, device, tag)
 
     def trigger(self, event: Event) -> tuple[list[Job], list[Skip]]:
@@ -203,7 +205,7 @@ class Engine:
 
         Nothing runs while paused, and a repeat within ``debounce`` is dropped. When the event
         ends a presence the runner is told even without jobs, so that it removes the state
-        folder after them.
+        folder after them. ``on_handled`` is told what became of it either way.
         """
         skipped: list[Skip] = []
         jobs, outcome, res = self._dispatch(event, skipped)

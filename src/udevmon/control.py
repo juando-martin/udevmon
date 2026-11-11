@@ -10,10 +10,16 @@ around it; reading and answering happen in the connection's own thread, so a slo
 client never holds the loop up. A request whose answer waits (``trigger`` with
 ``wait``) holds up the later requests of its connection, not those of others.
 
-``subscribe`` turns on notifications for the connection: each event the daemon sees
-is sent as ``{"jsonrpc": "2.0", "method": "event", "params": ...}``, from a queue of
-:data:`QUEUE_SIZE`; a client that does not keep up loses events, and is told how many
-by a ``lost`` notification once there is room again. The daemon never waits for it.
+A request line is at most :data:`MAX_REQUEST` bytes, a line from the daemon
+:data:`MAX_REPLY`. The loop has :data:`HANDLE_TIMEOUT` seconds to answer: a request
+it has not started by then is cancelled (``not-run``), one it has started is reported
+``still-running``. Errors carry a string code in ``data.error`` (:class:`Refused`).
+
+A handler may start notifications on the connection (:class:`Subscription`); the
+daemon's ``subscribe`` sends ``event``, ``handled`` and ``result`` notifications
+(``daemon.Daemon``), each from a queue of :data:`QUEUE_SIZE`; a client that does not
+keep up loses some, and is told how many by a ``lost`` notification once there is
+room again. The daemon never waits for it. SPECIFICATIONS §8.9 has the protocol.
 """
 
 from __future__ import annotations
@@ -65,6 +71,8 @@ class Refused(Exception):
     """
 
     def __init__(self, error: str, message: str, code: int = REFUSED, **data):
+        """``code`` is the JSON-RPC error code: :data:`REFUSED` for a refusal, else one
+        of the standard ones."""
         super().__init__(message)
         self.error, self.message, self.code, self.data = error, message, code, data
 
@@ -73,6 +81,7 @@ class BadParams(Refused):
     """A handler's refusal because the params do not fit the method."""
 
     def __init__(self, message: str):
+        """``message`` names the param and what is wrong with it."""
         super().__init__("bad-request", message, INVALID_PARAMS)
 
 
@@ -80,6 +89,7 @@ class UnknownMethod(Refused):
     """A handler's refusal of a method it does not have."""
 
     def __init__(self, method: str):
+        """``method`` is the name the client asked for."""
         super().__init__("unknown-method", f"no method {method!r}", METHOD_NOT_FOUND)
 
 
@@ -91,6 +101,8 @@ class Subscription:
     """
 
     def __init__(self, on_close: Callable[["Subscription"], None] | None = None):
+        """``filters`` may be set on it by the handler for its own use (the daemon's
+        ``subscribe`` keeps what was asked for there)."""
         self._queue: queue.Queue = queue.Queue(QUEUE_SIZE)
         self._lost = 0
         self._mutex = threading.Lock()
@@ -142,6 +154,7 @@ class _Lines:
     """Reads newline-terminated lines from a socket, each at most ``limit`` bytes."""
 
     def __init__(self, conn: socket.socket, limit: int = MAX_REQUEST):
+        """A longer line raises ValueError; the client reads with :data:`MAX_REPLY`."""
         self.conn, self.buf, self.limit = conn, b"", limit
 
     def next(self) -> bytes | None:
@@ -158,6 +171,7 @@ class _Lines:
 
 
 def _error(id_, code: int, error: str, message: str, **data) -> dict:
+    """A JSON-RPC error response for request ``id_``, with ``error`` in ``data``."""
     return {"jsonrpc": "2.0", "id": id_,
             "error": {"code": code, "message": message, "data": {"error": error, **data}}}
 
@@ -173,6 +187,7 @@ class ControlServer:
     """
 
     def __init__(self, handler: Callable[[str, dict], tuple[dict, object]], path=None):
+        """``path`` is the socket's (default ``runtime.socket_path()``)."""
         self.handler = handler
         self.path = path or socket_path()
         self._sock: socket.socket | None = None
@@ -224,6 +239,8 @@ class ControlServer:
                 pass
 
     def _accept(self, *_args) -> bool:
+        """A new connection (on the main loop): serve it in a thread of its own, or
+        refuse it ``busy`` beyond :data:`MAX_CONNECTIONS`."""
         try:
             conn, _ = self._sock.accept()
         except (BlockingIOError, OSError):
@@ -244,6 +261,8 @@ class ControlServer:
 
     @staticmethod
     def _send(conn: socket.socket, mutex: threading.Lock, message) -> bool:
+        """Write one message as a line (``mutex`` keeps replies and notifications from
+        interleaving); False when the client has gone."""
         data = json.dumps(message, separators=(",", ":")).encode() + b"\n"
         try:
             with mutex:
@@ -266,6 +285,8 @@ class ControlServer:
                 pass
 
     def _serve(self, conn: socket.socket) -> None:
+        """A connection's thread: check the peer, then read and answer lines until the
+        client closes; on the way out, end its subscriptions."""
         mutex = threading.Lock()                      # one writer at a time: replies, events
         subs: list[Subscription] = []
         try:
@@ -311,6 +332,8 @@ class ControlServer:
         return self._one(message, conn, mutex, subs)
 
     def _one(self, request, conn, mutex, subs):
+        """The response to one request object (None for a notification): run it on the
+        main loop, wait for a waiting answer, or start a subscription's sender."""
         if not (isinstance(request, dict) and request.get("jsonrpc") == "2.0"
                 and isinstance(request.get("method"), str)):
             return _error(request.get("id") if isinstance(request, dict) else None,
@@ -348,6 +371,8 @@ class ControlServer:
         return None if notification else {"jsonrpc": "2.0", "id": id_, "result": result}
 
     def _notify(self, conn, mutex, sub: Subscription) -> None:
+        """A subscription's sender thread: send its notifications until it is closed or
+        the client goes away."""
         while True:
             items = sub._next()
             if items is None:
@@ -409,6 +434,8 @@ class Connection:
     """
 
     def __init__(self, path=None, timeout: float | None = 10.0):
+        """``path`` is the socket (default ``runtime.socket_path()``); ``timeout`` the
+        seconds a call may take (None: no limit), which :meth:`call` can change."""
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC)
         self.sock.settimeout(timeout)
         try:
@@ -425,9 +452,11 @@ class Connection:
         self.sock.close()
 
     def __enter__(self):
+        """The connection itself, closed at the end of the ``with``."""
         return self
 
     def __exit__(self, *exc):
+        """Close the connection."""
         self.close()
 
     def fileno(self) -> int:
@@ -435,6 +464,8 @@ class Connection:
         return self.sock.fileno()
 
     def _read(self) -> dict:
+        """The next message from the daemon; :class:`ProtocolError` for one that is not
+        JSON-RPC 2.0 (an older daemon's answer says to restart it)."""
         line = self._lines.next()
         if line is None:
             raise NotRunning("the daemon closed the connection")

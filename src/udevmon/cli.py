@@ -44,7 +44,8 @@ def _guard(fn, *a, **kw):
 
 
 def _reload_after_edit(args) -> None:
-    """Tell the running daemon (if it uses this config) to pick up the change."""
+    """Tell the running daemon (if it uses this config) to pick up the change; through
+    the control socket this returns once it has reloaded (a refusal is a warning)."""
     if getattr(args, "no_reload", False):
         return
     from . import control
@@ -260,7 +261,7 @@ def _reloads(fn):
 
 
 def _print_json(data) -> None:
-    import json
+    """Print ``data`` as indented UTF-8 JSON (the ``--json`` format, §8.7)."""
     print(json.dumps(data, indent=2, ensure_ascii=False))
 
 
@@ -387,7 +388,10 @@ def _parse_props(pairs) -> dict:
 
 
 def cmd_pause(args):
-    """``udevmon pause [DURATION]``: stop running actions until ``resume`` or the time is up."""
+    """``udevmon pause [DURATION]``: stop running actions until ``resume`` or the time is up.
+
+    A running daemon writes the pause flag itself (and logs it); with none answering,
+    the command writes it."""
     from . import pause
     from .daemon import running_pid
     seconds = None
@@ -413,7 +417,7 @@ def cmd_pause(args):
 
 
 def cmd_resume(args):
-    """``udevmon resume``: end a pause."""
+    """``udevmon resume``: end a pause (through the running daemon when it answers)."""
     from . import pause
     result = _ask_daemon("resume")
     was_paused = result["was_paused"] if result is not None else pause.resume()
@@ -840,7 +844,7 @@ def cmd_tags_list(args):
 
 
 def cmd_tags_show(args):
-    """``udevmon tags show NAME``: one tag, its rule, members and actions."""
+    """``udevmon tags show NAME``: one tag, its rule, members, variables and actions."""
     cfg = _load(args, must_exist=True)
     if args.name not in cfg.all_tag_names():
         print(f"error: no such tag {args.name!r}", file=sys.stderr)
@@ -1058,7 +1062,8 @@ def cmd_service_uninstall(args):
 
 
 def cmd_completion_uninstall(args):
-    """``udevmon completion uninstall``: remove the completion script, if it is ours."""
+    """``udevmon completion uninstall [--shell SHELL]``: remove that shell's completion
+    script, if it is ours."""
     from .completion import default_install_path, is_ours
     dest = args.dest or default_install_path(args.shell)
     if not dest.exists():
@@ -1139,7 +1144,8 @@ STATUS_NO_ANSWER = 7        #: ``status`` exit status when the daemon gives no u
 
 def cmd_status(args):
     """``udevmon status``: whether the daemon runs, with what, and each action's last
-    result since it started; 3 when none runs, 7 when it does not answer."""
+    result since it started (``--json``: one object); 3 when none runs, 7 when it
+    does not answer."""
     from datetime import datetime
 
     from . import control

@@ -1,6 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Juan Domingo Martín
-"""The long-running daemon: sources -> engine -> runner, on one GLib main loop."""
+"""The long-running daemon: sources -> engine -> runner, on one GLib main loop.
+
+Every event from the sources is numbered (``Event.seq``), sent to the control socket's
+subscribers whose filters it passes, and handed to the engine; a ``disconnected`` first
+gets ``surprise`` from the udisks source. The control socket's methods are
+:attr:`Daemon.METHODS`, their params :data:`PARAMS` (SPECIFICATIONS §8.9).
+"""
 
 from __future__ import annotations
 
@@ -167,6 +173,7 @@ class Daemon:
     actions are logged instead of run.
     """
     def __init__(self, config_path: Path, dry_run: bool = False):
+        """Nothing starts until :meth:`run`."""
         self.config_path = config_path
         self.dry_run = dry_run
         self.sources = []
@@ -211,6 +218,9 @@ class Daemon:
                                                  "surprise": "1" if surprise else "0"}))
 
     def _emit(self, event: Event) -> None:
+        """What the sources call with each event (on the main loop): add ``surprise`` to
+        a ``disconnected``, number it, tell the subscribers, then let the engine
+        handle it. An error is logged, never raised into the source."""
         if event.kind == DISCONNECTED:
             event = self._surprise(event)
         event = self._number(event)
@@ -304,6 +314,7 @@ class Daemon:
         return getattr(self, self.METHODS[method])(params)
 
     def _hello(self, params):
+        """``hello``: the protocol, version, feature names and methods (§8.9)."""
         from . import __version__
         from .cli import FEATURES
         from .control import PROTOCOL
@@ -315,6 +326,7 @@ class Daemon:
                 "methods": sorted(self.METHODS)}, None
 
     def _status(self, params):
+        """``status``: pid, version, config, dry run, pause and counts (§8.9)."""
         from . import __version__, pause
         paused, until = pause.status()
         return {"pid": os.getpid(), "version": __version__,
@@ -323,12 +335,15 @@ class Daemon:
                 "actions": len(self.cfg.actions)}, None
 
     def _results(self, params):
+        """``results``: each action's last result since start, newest first (§8.9)."""
         action = params.get("action")
         results = sorted(dict(self.last_results).values(), key=lambda r: r.time, reverse=True)
         return {"results": [result_params(r) for r in results
                             if action is None or r.action == action]}, None
 
     def _present_params(self, system: bool = True) -> list[dict]:
+        """Every thing present now, as :func:`endpoint_params`; system filesystems
+        only with ``system``."""
         things = []
         for s in self.sources:
             things += s.present(include_system=system) if isinstance(s, UdisksSource) \
@@ -336,10 +351,12 @@ class Daemon:
         return [endpoint_params(e) for e in things]
 
     def _present(self, params):
+        """``present``: the things present now, with the current ``seq`` (§8.9)."""
         return {"seq": self._seq,
                 "things": self._present_params(params.get("system", True))}, None
 
     def _pause(self, params):
+        """``pause``: write the pause flag file (§8.5), log it and answer the state."""
         from . import pause
         seconds = params.get("seconds")
         if seconds is not None and seconds <= 0:
@@ -350,6 +367,7 @@ class Daemon:
         return {"paused": True, "until": until, "was_paused": was_paused}, None
 
     def _resume(self, params):
+        """``resume``: remove the pause flag file; whether there was a pause."""
         from . import pause
         was_paused = pause.resume()
         if was_paused:
@@ -357,6 +375,8 @@ class Daemon:
         return {"was_paused": was_paused}, None
 
     def _reload(self, params):
+        """``reload``: :meth:`apply_reload`, refusing ``other-config`` for another
+        file and ``bad-config`` (with the problems) for an invalid one (§8.9)."""
         config = params.get("config")
         if config is not None:
             if not _same_file(config, self.config_path):
@@ -370,6 +390,9 @@ class Daemon:
                           "previous one", problems=list(e.problems)) from None
 
     def _subscribe(self, params):
+        """``subscribe``: register a :class:`control.Subscription` with the filters
+        and notifications asked for, and answer what is present now with the
+        current ``seq``, taken at the same moment (§8.9)."""
         from .control import Subscription
         notify = params.get("notify", ["event"])
         bad = [n for n in notify if n not in NOTIFY_KINDS] or ([] if notify else ["none"])
@@ -393,6 +416,8 @@ class Daemon:
         return {"seq": self._seq, "present": self._present_params(params.get("system", True))}, sub
 
     def _trigger(self, params):
+        """``trigger``: fire an event for the present things of a named device, as
+        ``udevmon trigger`` does (§8.6); with ``wait``, answer once the actions end."""
         from . import pause
         from .matching import resolve
         name, kind = params.get("device"), params.get("event") or STARTUP

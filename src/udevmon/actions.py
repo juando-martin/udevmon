@@ -1,6 +1,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Juan Domingo Martín
-"""Run actions as subprocesses (never via a shell)."""
+"""Run actions as subprocesses (never via a shell).
+
+:func:`run_action` runs one command: placeholders filled in, the ``UDEVMON_*``
+environment plus the action's own ``env``, started in its ``cwd``, its output logged
+and its last lines kept. :class:`ActionRunner` runs each event's jobs in a thread of
+its own, in order, with locks, retries and at most ``max_workers`` commands at once,
+and reports each job's :class:`Result`.
+"""
 
 from __future__ import annotations
 
@@ -74,7 +81,13 @@ def build_env(event: Event, device: str | None, tag: str | None = None,
 def run_action(action: Action, event: Event, device: str | None, tag: str | None = None, *,
                dry_run: bool = False, variables=None, state_dir: str | None = None,
                outcome: dict | None = None) -> int | None:
-    """Run one action; returns exit status (None if skipped/timeout-killed).
+    """Run one action and return its exit status: None when it was skipped (a missing
+    placeholder), timed out, could not start (a missing program or ``cwd``), was a dry
+    run, or was detached.
+
+    The command gets :func:`build_env`'s environment with the action's own ``env`` on
+    top, and starts in its ``cwd`` (placeholders filled in; relative to the home
+    folder), else in the home folder.
 
     ``outcome``, if given, gets ``failure``: how a None result failed (a timeout, a
     command that could not start), for the notification; ``skipped``: why it did not
@@ -191,9 +204,9 @@ class FifoLock:
     """A mutex that hands the turn out in the order the tickets were taken.
 
     A ticket is taken when the event is submitted (on the daemon's single main thread, so in
-    the order the events arrived) and used later, by whichever worker runs the job. That
-    keeps the actions of a plug ahead of those of the following unplug even when the unplug
-    reaches a free worker first, which a plain lock would not.
+    the order the events arrived) and used later, by the event's own thread. That keeps
+    the actions of a plug ahead of those of the following unplug even when the unplug's
+    thread reaches the lock first, which a plain lock would not.
     """
 
     def __init__(self, name: str):
@@ -235,6 +248,8 @@ class ActionRunner:
     """
     def __init__(self, max_workers: int = 4, dry_run: bool = False,
                  on_result: Callable[[Result], None] | None = None):
+        """``on_result`` is called with each job's :class:`Result` when it ends, from the
+        event's thread (the daemon records it and tells subscribers)."""
         self.dry_run = dry_run
         self.on_result = on_result              # called with each job's Result
         self._slots = threading.BoundedSemaphore(max_workers)
@@ -250,7 +265,7 @@ class ActionRunner:
         return self._locks.setdefault(name, FifoLock(name))
 
     def submit(self, event: Event, jobs, ended: str | None = None):
-        """Run the jobs (engine.Job) sequentially in one worker.
+        """Run the jobs (``engine.Job``) one after another in a new thread of their own.
 
         Called in the order the events arrived: a job whose action has a ``lock`` takes its
         ticket now, so locked jobs run in that order and never at the same time. ``ended``
@@ -271,6 +286,7 @@ class ActionRunner:
         return future
 
     def _thread(self, future, event, ticketed, ended):
+        """The body of an event's thread: run its jobs and complete ``future``."""
         try:
             future.set_result(self._run_all(event, ticketed, ended))
         except BaseException as e:                      # a crash is logged by _run_one
@@ -306,6 +322,8 @@ class ActionRunner:
         return results
 
     def _run_one(self, event, job, ticket):
+        """Run one job: wait for its lock turn (``ticket``), run it with its retries, and
+        always serve the next turn; a crash becomes a Result with ``failure``."""
         lock = self._lock(job.action.lock) if ticket is not None else None
         if lock is not None:
             if lock.wait(ticket):

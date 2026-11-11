@@ -335,6 +335,8 @@ class Scanner:
             print("Not a valid choice.")
 
     def _after_save(self, endpoint: Endpoint, name: str, is_tag: bool, ignore: bool) -> None:
+        """After a device or tag is saved: reload the running daemon, note a pause, and
+        suggest an action for it."""
         label = "tag" if is_tag else "device"
         print(f"Saved {label} {name!r} to {self.config_path}" + (" (ignored)" if ignore else ""))
         from . import control, pause

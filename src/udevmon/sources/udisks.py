@@ -1,6 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Juan Domingo Martín
-"""udisks2 source: filesystem mount/unmount via D-Bus signals on the system bus."""
+"""udisks2 source: filesystem mount/unmount via D-Bus signals on the system bus.
+
+It also links each mounted filesystem to the USB device it is on (through sysfs,
+:func:`usb_parent`), so that the daemon can tell a surprise ``disconnected``
+(:meth:`UdisksTracker.surprise_for`).
+"""
 
 from __future__ import annotations
 
@@ -68,7 +73,7 @@ class UdisksTracker:
 
     With ``find_usb`` (devnode -> the USB device's sysfs path, like :func:`usb_parent`) it
     also remembers which USB device each mounted filesystem is on, for
-    :meth:`surprise_for`.
+    :meth:`surprise_for`; ``clock`` (monotonic seconds) times :data:`SURPRISE_WINDOW`.
     """
 
     def __init__(self, find_usb: Callable[[str], str | None] | None = None,
@@ -117,6 +122,8 @@ class UdisksTracker:
         return Endpoint("udisks", path, props)
 
     def _note_usb(self, path: str, endpoint: Endpoint) -> None:
+        """Remember the USB device the newly mounted filesystem at ``path`` is on (read
+        now: after a pull its sysfs entries are gone)."""
         devnode = endpoint.props.get("devnode")
         if self._find_usb is not None and devnode:
             usb = self._find_usb(devnode)
@@ -149,6 +156,8 @@ class UdisksTracker:
                 self._note_usb(path, self._mounted[path])
 
     def _reconcile(self, path: str) -> list[Event]:
+        """The events from comparing the object's mount points with what was mounted:
+        ``mounted`` (a new instance) or a clean ``unmounted``; none otherwise."""
         mps = self._mount_points(path)
         was = self._mounted.get(path)
         if mps and was is None:
@@ -238,7 +247,9 @@ class UdisksSource:
     """Filesystems from udisks2 on the system bus: ``mounted``, ``unmounted`` and ``removed``.
 
     It follows udisks2 starting and stopping. With ``announce_present`` the filesystems
-    already there get ``startup`` once, when udisks2 is first seen.
+    already there get ``startup`` once, when udisks2 is first seen; ``include_system``
+    says whether :meth:`present` lists system filesystems. Its tracker links mounts to
+    their USB devices (:func:`usb_parent`).
     """
     name = "udisks"         #: the ``source`` of its endpoints
 
@@ -337,6 +348,7 @@ class UdisksSource:
                 self._emit(Event(STARTUP, dev))
 
     def _vanished(self, conn, name) -> None:
+        """udisks2 left the bus: stop listening and forget its state until it is back."""
         log.info("udisks2 not available; filesystem events paused until it appears")
         self._unsubscribe()
         self.tracker = UdisksTracker(find_usb=usb_parent)

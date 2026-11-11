@@ -503,7 +503,7 @@ def set_action_options(path: Path, name: str, *, unnamed: str | None = None,
                        notify_on_failure: bool | None = None, set_env=None, unset_env=(),
                        cwd: str | None = None,
                        add_devices=(), remove_devices=(), add_tags=(), remove_tags=()):
-    """Change an action's ``allow_unnamed``, events, timeout, command, lock or targets.
+    """Change an action's options, command or targets; only what is given changes.
 
     ``lock`` is a lock name, or "" to remove the action's lock. ``retries`` is a count
     (0 removes the setting); ``retry_delay`` is in seconds; ``retry_backoff`` a factor

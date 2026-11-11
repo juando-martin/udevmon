@@ -2,9 +2,10 @@
 # Copyright (C) 2026 Juan Domingo Martín
 """Shell tab completion.
 
-The bash side is a few lines (SCRIPT) that call ``udevmon _complete``; the logic is
-here, so it can be tested and cannot drift from the CLI: it reads the real argparse
-parser and offers live names (devices, tags, actions) from the config.
+Each shell's side is a few lines (:data:`SCRIPTS`: bash, zsh, fish) that call
+``udevmon _complete``; the logic is here, so it can be tested and cannot drift from
+the CLI: it reads the real argparse parser and offers live names (devices, tags,
+actions, variables) from the config.
 
 ``complete()`` returns ``(mode, candidates)``:
 
@@ -342,6 +343,7 @@ def _dropins(st: _State, cur: str):
 
 
 def _option_value(st: _State, cur: str):
+    """``(mode, candidates)`` for the value of the option just typed (``st.pending``)."""
     dest, path = st.pending.dest, tuple(st.path)
     if dest == "config":
         return FILES, []
@@ -389,6 +391,8 @@ def _option_value(st: _State, cur: str):
 
 
 def _positional(st: _State, cur: str, cfg):
+    """``(mode, candidates)`` for the next positional argument, by its slot kind in
+    :data:`POSITIONALS`."""
     slots = POSITIONALS.get(tuple(st.path))
     if not slots:
         return WORDS, []
