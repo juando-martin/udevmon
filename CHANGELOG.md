@@ -18,6 +18,8 @@ their pinned version.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-12
+
 ### Added
 
 - **`check --json` says where each finding comes from**: a `findings` list
