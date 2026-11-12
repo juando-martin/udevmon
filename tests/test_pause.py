@@ -4,7 +4,6 @@
 
 import contextlib
 import io
-import logging
 import os
 import stat
 import tempfile

@@ -1409,11 +1409,11 @@ changes how the daemon starts.
 - A public API (§11 says there is none). First the control socket (§8.9): it
   goes under the compatibility policy (§11) once a real client has used it; a
   D-Bus front end forwarding to it remains possible for desktop clients (D-Bus
-  alone was rejected: the session bus can be missing, §7.4.1). Most reusable in Python: the event layer
-  (`events`, `sources/`), USB and mount events without root, which needs a
-  blocking `watch()` helper (today `start(emit)` assumes the caller's GLib
-  main loop), a declared source protocol and public names; it could become
-  its own package. Then reading the configuration (`config.load`,
+  alone was rejected: the session bus can be missing, §7.4.1). Most reusable
+  in Python: the event layer (`events`, `sources/`), USB and mount events
+  without root, which needs a blocking `watch()` helper (today `start(emit)`
+  assumes the caller's GLib main loop), a declared source protocol and public
+  names; it could become its own package. Then reading the configuration (`config.load`,
   `matching.resolve`) and editing it (`configedit`), which kp-sync now
   reimplements or calls as commands. The `--json` output (§8.7) covers what
   integrations parse today.

@@ -5,7 +5,6 @@
 import contextlib
 import io
 import tempfile
-import threading
 import time
 import unittest
 from pathlib import Path

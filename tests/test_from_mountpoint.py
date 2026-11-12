@@ -16,7 +16,7 @@ from udevmon import config as C
 from udevmon.events import Endpoint
 from udevmon.sources import udisks as D
 
-from .test_sources import BLK, DRV, FS, P, managed
+from .test_sources import DRV, FS, P, managed
 
 
 def fs(**props):
