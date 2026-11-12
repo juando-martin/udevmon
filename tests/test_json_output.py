@@ -172,7 +172,7 @@ class VersionTests(Base):
         for name in ("reload-result", "max-workers-commands", "shutdown-retries",
                      "retry-backoff", "trigger-output", "dropin-script-dir",
                      "action-program", "apply", "status",
-                     "action-env-cwd", "disconnect-surprise"):
+                     "action-env-cwd", "disconnect-surprise", "check-json-findings"):
             self.assertIn(name, cli.FEATURES)
 
     def test_the_version_option_stays_a_bare_number(self):

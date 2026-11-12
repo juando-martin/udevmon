@@ -18,6 +18,15 @@ their pinned version.
 
 ## [Unreleased]
 
+### Added
+
+- **`check --json` says where each finding comes from**: a `findings` list
+  beside the unchanged `errors`, `warnings` and `notes`, one object per
+  finding with `level`, `message` and `subjects`, the entries it concerns
+  (`device`, `tag`, `action`, `daemon` or `file`, with `name`, `file` and
+  `dropin`). A finding about two entries names both; a load error that
+  knows only its file names the file. Feature name `check-json-findings`.
+
 ## [0.9.0] - 2026-11-11
 
 ### Added

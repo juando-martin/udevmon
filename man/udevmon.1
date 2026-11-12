@@ -1,6 +1,6 @@
 .\" Manual page for the udevmon command. Keep it in step with the CLI:
 .\" tests/test_manpages.py fails when a command or option is missing here.
-.TH UDEVMON 1 "2026-11-11" "udevmon" "User Commands"
+.TH UDEVMON 1 "2026-11-12" "udevmon" "User Commands"
 .SH NAME
 udevmon \- run your own commands when USB devices and filesystems appear or go away
 .SH SYNOPSIS
@@ -463,6 +463,38 @@ action), then
 .B note:
 lines, and ends with
 .BR "OK: N device(s), N tag rule(s), N action(s)" .
+.B \-\-json
+prints one object:
+.BR ok ,
+.BR errors ,
+.B warnings
+and
+.B notes
+(lists of messages),
+.B findings
+(each finding once, with its
+.B level
+.RB ( error ,
+.B warning
+or
+.BR note ),
+.B message
+and
+.BR subjects ,
+the entries it concerns, each with
+.B kind
+.RB ( device ,
+.BR tag ,
+.BR action ,
+.B daemon
+or
+.BR file ),
+.BR name ,
+.B file
+and
+.BR dropin ),
+.B files
+(in the order they are read, each with its counts) and the totals.
 .TP
 .B udevmon apply \fR[\fIFILE\fR] [\fB\-\-dry\-run\fR] [\fB\-\-no\-reload\fR]
 Make several edits as one change.

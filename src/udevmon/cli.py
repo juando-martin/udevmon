@@ -1014,21 +1014,28 @@ def cmd_edit(args):
 
 def cmd_check(args):
     """``udevmon check``: load the configuration and report problems; 1 on errors."""
+    main = Path(args.config)
     try:
         cfg = cfgmod.load(args.config, must_exist=True)
     except cfgmod.ConfigError as e:
         if args.json:
             _print_json({"ok": False, "errors": list(e.problems), "warnings": [], "notes": [],
+                         "findings": [jsonout.finding_entry(main, f) for f in e.findings],
                          "files": [], "devices": 0, "tags": 0, "actions": 0})
             return 1
         for p in e.problems:
             print(f"error: {p}")
         return 1
-    warnings = [*cfg.warnings, *cfgmod.command_problems(cfg)]
-    notes = [*cfg.notes, *cfgmod.command_notes(cfg)]
+    found = [*(f for f in cfg.findings if f.level == "warning"),
+             *cfgmod.command_problem_findings(cfg),
+             *(f for f in cfg.findings if f.level == "note"),
+             *cfgmod.command_note_findings(cfg)]
+    warnings = [f.message for f in found if f.level == "warning"]
+    notes = [f.message for f in found if f.level == "note"]
     files = jsonout.file_entries(cfg)
     if args.json:
         _print_json({"ok": True, "errors": [], "warnings": warnings, "notes": notes,
+                     "findings": [jsonout.finding_entry(cfg.main, f) for f in found],
                      "files": files, "devices": len(cfg.devices), "tags": len(cfg.tags),
                      "actions": len(cfg.actions)})
         return 0
@@ -1125,7 +1132,7 @@ FEATURES = ("dropins", "order", "lock", "retries", "notify-on-failure", "vars",
             "retry-backoff", "reload-result", "max-workers-commands", "shutdown-retries",
             "trigger-output", "dropin-script-dir", "action-program",
             "apply", "status",
-            "action-env-cwd", "disconnect-surprise")
+            "action-env-cwd", "disconnect-surprise", "check-json-findings")
 
 
 def cmd_version(args):

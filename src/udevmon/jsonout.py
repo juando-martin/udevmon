@@ -77,6 +77,25 @@ def action_entry(cfg: cfgmod.Config, action: cfgmod.Action) -> dict:
             "program_lookup": lookup, **where(cfg, "action", action.name)}
 
 
+def subject_entry(main, subject: cfgmod.Subject) -> dict:
+    """One subject of a finding: ``{kind, name, file, dropin}``, ``dropin`` as for an
+    entry (None for the main file or an unknown file)."""
+    path = subject.file
+    dropin = None
+    if path is not None and main is not None and path != main \
+            and path.parent == cfgmod.dropin_dir(main):
+        dropin = path.name[:-len(".toml")]
+    return {"kind": subject.kind, "name": subject.name,
+            "file": str(path) if path is not None else None, "dropin": dropin}
+
+
+def finding_entry(main, finding: cfgmod.Finding) -> dict:
+    """One finding of ``check --json``: ``{level, message, subjects}``; ``main`` is the
+    main config file, to tell which subjects are in a drop-in."""
+    return {"level": finding.level, "message": finding.message,
+            "subjects": [subject_entry(main, s) for s in finding.subjects]}
+
+
 def file_entries(cfg: cfgmod.Config) -> list[dict]:
     """The files read, in order, with how many entries each defines."""
     out = []

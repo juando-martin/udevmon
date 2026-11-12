@@ -11,6 +11,7 @@ import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import NamedTuple
 
 from .events import KNOWN_KEYS, TRUSTED_PLACEHOLDERS, VALID_KINDS, VOLATILE_KEYS, is_raw, is_variable
 from .matching import STRONG, WEAK, has_wildcard, matches, strength
@@ -26,14 +27,59 @@ NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 VAR_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 
+@dataclass(frozen=True)
+class Subject:
+    """What a finding is about (``check --json``, spec 8.7)."""
+    kind: str                       #: ``device``, ``tag``, ``action``, ``daemon`` or ``file``
+    name: str | None = None         #: the entry's name; None for ``daemon`` and ``file``
+    file: Path | None = None        #: the file that defines it, when known
+
+
+class Finding(NamedTuple):
+    """One error, warning or note, with the entries it concerns."""
+    level: str                      #: ``error``, ``warning`` or ``note``
+    message: str                    #: the text, as in ``errors``, ``warnings``, ``notes``
+    subjects: tuple = ()            #: the :class:`Subject` objects; none for the whole config
+
+
+class _Context:
+    """The subjects that findings recorded without their own are about."""
+    subjects: tuple = ()
+
+
+class _Recorder(list):
+    """A list of messages that also records each one as a :class:`Finding` in ``sink``,
+    about the given subjects or else those of ``context``."""
+
+    def __init__(self, level: str, sink: list, context: _Context):
+        super().__init__()
+        self.level, self.sink, self.context = level, sink, context
+
+    def append(self, message: str, subjects=None) -> None:
+        """Add ``message``, and its finding about ``subjects`` (a sequence of
+        :class:`Subject`, ``()`` for the whole configuration) or the context's."""
+        super().append(message)
+        self.sink.append(Finding(self.level, message, tuple(
+            self.context.subjects if subjects is None else subjects)))
+
+
 class ConfigError(Exception):
     """An invalid configuration, or an edit that cannot be made.
 
-    ``problems`` holds each message; ``str()`` joins them with semicolons.
+    ``problems`` holds each message; ``str()`` joins them with semicolons. ``findings``
+    holds the same as :class:`Finding` objects, with what each is about when that is
+    known (else no subjects).
     """
-    def __init__(self, problems: list[str]):
-        self.problems = problems
-        super().__init__("; ".join(problems))
+    def __init__(self, problems: list[str], findings: list | None = None):
+        self.problems = list(problems)
+        self.findings = list(findings) if findings is not None else \
+            [Finding("error", p) for p in self.problems]
+        super().__init__("; ".join(self.problems))
+
+
+def _file_error(path: Path, message: str) -> ConfigError:
+    """A ConfigError about a whole file (unsafe, unreadable, missing)."""
+    return ConfigError([message], [Finding("error", message, (Subject("file", None, path),))])
 
 
 def default_config_path() -> Path:
@@ -130,6 +176,8 @@ class Config:
     actions: list[Action] = field(default_factory=list)     #: in the order they were read
     warnings: list[str] = field(default_factory=list)   #: problems that do not stop loading
     notes: list[str] = field(default_factory=list)      #: things worth knowing, not problems
+    #: ``warnings`` and ``notes`` as :class:`Finding` objects, in the order they were found
+    findings: list = field(default_factory=list)
     main: Path | None = None            #: the main config file (config.toml)
     files: list[Path] = field(default_factory=list)     #: the files read, in order
     #: ``("device" | "tag" | "action", name)`` -> the file that defines it
@@ -242,15 +290,30 @@ def _scalar_str(v) -> str | None:
     return str(v) if isinstance(v, (str, int)) and not isinstance(v, bool) else None
 
 
-def parse(data: dict, origins: dict | None = None) -> Config:
+def parse(data: dict, origins: dict | None = None, locate=None) -> Config:
     """Validate the configuration ``data`` (the main file and drop-ins already merged).
 
     ``origins`` labels the entries that come from a drop-in file, for the messages:
     ("device" | "tag", name) -> label, and ("action", index) -> (label, index in its file).
+    ``locate(kind, key)`` gives the file of an entry, for the findings' subjects: key a
+    name for ``device`` and ``tag``, the 1-based position for ``action``, None for
+    ``daemon`` and ``file`` (the main file); without it they have no file.
     """
-    problems: list[str] = []
-    cfg = Config()
+    found: list[Finding] = []          # every finding, in the order found
+    ctx = _Context()
+    problems = _Recorder("error", found, ctx)
+    cfg = Config(warnings=_Recorder("warning", found, ctx),
+                 notes=_Recorder("note", found, ctx), findings=found)
     origins = origins or {}
+    locate = locate or (lambda kind, key: None)
+    files_of: dict = {("daemon", None): locate("daemon", None),
+                      ("file", None): locate("file", None)}
+
+    def subject(kind: str, name: str | None = None) -> Subject:
+        return Subject(kind, name, files_of.get((kind, name)))
+
+    def about(*subjects: Subject) -> None:
+        ctx.subjects = subjects
 
     def at(kind: str, name: str) -> str:
         label = origins.get((kind, name))
@@ -261,8 +324,10 @@ def parse(data: dict, origins: dict | None = None) -> Config:
             if k not in allowed:
                 problems.append(f"{where}: unknown key {k!r}")
 
+    about(subject("file"))
     unknown("top level", data, _TOP)
 
+    about(subject("daemon"))
     d = data.get("daemon", {})
     unknown("[daemon]", d, _DAEMON)
     try:
@@ -283,6 +348,8 @@ def parse(data: dict, origins: dict | None = None) -> Config:
 
     # ---- devices
     for name, a in (data.get("devices") or {}).items():
+        files_of[("device", name)] = locate("device", name)
+        about(subject("device", name))
         where = f"{at('device', name)}[devices.{name}]"
         if not NAME_RE.match(name):
             problems.append(f"{where}: invalid name")
@@ -336,6 +403,8 @@ def parse(data: dict, origins: dict | None = None) -> Config:
 
     # ---- tags (rules)
     for name, t in (data.get("tags") or {}).items():
+        files_of[("tag", name)] = locate("tag", name)
+        about(subject("tag", name))
         where = f"{at('tag', name)}[tags.{name}]"
         if not NAME_RE.match(name):
             problems.append(f"{where}: invalid name")
@@ -370,6 +439,9 @@ def parse(data: dict, origins: dict | None = None) -> Config:
     # ---- actions
     seen: set[str] = set()
     for i, a in enumerate(data.get("actions") or [], 1):
+        file = locate("action", i)
+        given = a.get("name") if isinstance(a, dict) else None
+        about(Subject("action", given if isinstance(given, str) else None, file))
         label, local = origins.get(("action", i), ("", i))
         prefix = f"{label}: " if label else ""
         where = f"{prefix}[[actions]] #{local}"
@@ -394,6 +466,9 @@ def parse(data: dict, origins: dict | None = None) -> Config:
             if tags is None:
                 continue
         name = a.get("name") or f"{(devices or tags)[0]}-{i}"
+        if isinstance(name, str):
+            files_of[("action", name)] = file
+            about(Subject("action", name, file))
         where = f"{prefix}action {name!r}"
         if not isinstance(name, str) or not NAME_RE.match(name):
             problems.append(f"{where}: invalid name")
@@ -523,70 +598,79 @@ def parse(data: dict, origins: dict | None = None) -> Config:
                                   tag_mode, detach, lock, retries, float(retry_delay), order,
                                   notify, float(retry_backoff), env=dict(env), cwd=cwd))
 
+    about()
     if problems:
-        raise ConfigError(problems)
-    _advise(cfg, origins)
+        raise ConfigError(list(problems), [f for f in found if f.level == "error"])
+    _advise(cfg, origins, subject)
     return cfg
 
 
-def _advise(cfg: Config, origins: dict | None = None) -> None:
+def _advise(cfg: Config, origins: dict | None = None, subject=None) -> None:
     """Warnings and notes that do not stop the config from loading (spec 6.2).
 
-    ``origins`` is :func:`parse`'s: the drop-in label of each entry not in the main file.
+    ``origins`` is :func:`parse`'s: the drop-in label of each entry not in the main file;
+    ``subject(kind, name)`` makes the :class:`Subject` of an entry (with its file).
     """
     origins = origins or {}
+    S = subject or (lambda kind, name=None: Subject(kind, name))
     carried = {t for d in cfg.devices.values() for t in d.tags}
     used = {t for a in cfg.actions for t in a.tags}
     for d in cfg.devices.values():
         if d.status == "disabled":
             cfg.notes.append(f"device {d.name!r} is disabled: its own actions do not run "
-                             "(actions for its tags still do)")
+                             "(actions for its tags still do)", [S("device", d.name)])
         elif d.status == "ignored":
-            cfg.notes.append(f"device {d.name!r} is ignored: nothing runs for it")
+            cfg.notes.append(f"device {d.name!r} is ignored: nothing runs for it",
+                             [S("device", d.name)])
     for a in cfg.actions:
         if not a.enabled:
-            cfg.notes.append(f"action {a.name!r} is disabled and never runs")
+            cfg.notes.append(f"action {a.name!r} is disabled and never runs",
+                             [S("action", a.name)])
         elif a.devices and all(cfg.devices[n].status != "active" for n in a.devices):
             cfg.notes.append(f"action {a.name!r} only targets disabled or ignored devices, "
-                             "so it never runs")
+                             "so it never runs",
+                             [S("action", a.name), *(S("device", n) for n in a.devices)])
     for a in cfg.actions:
         if not a.tags:
             continue
         if a.tag_mode == "all" and len(a.tags) == 1:
             cfg.notes.append(f"action {a.name!r}: tag_mode = \"all\" with one tag is the same as "
-                             "the default")
+                             "the default", [S("action", a.name)])
         for t in a.tags:
             rule = cfg.tags[t].match if t in cfg.tags else {}
             if t not in carried and not rule:
                 cfg.warnings.append(f"action {a.name!r}: tag {t!r} is carried by no device and "
-                                    "has no rule, so the action never runs")
+                                    "has no rule, so the action never runs",
+                                    [S("action", a.name), S("tag", t)])
         rule_tags = [t for t in a.tags if t in cfg.tags and cfg.tags[t].match]
         names = {n for arg in a.templates for n in placeholders(arg)}
         if a.allow_unnamed is None and rule_tags:
             cfg.notes.append(f"action {a.name!r}: tag {', '.join(rule_tags)} has a rule, so "
                              "things you have not named can match it; this action runs only "
-                             "for named devices. Set allow_unnamed = true or false to choose.")
+                             "for named devices. Set allow_unnamed = true or false to choose.",
+                             [S("action", a.name), *(S("tag", t) for t in rule_tags)])
         used_vars = sorted(n[4:] for n in names if is_variable(n))
         unnamed_lack = sorted({v for t in a.tags for v in used_vars
                                if v not in (cfg.tags[t].vars if t in cfg.tags else {})})
         if unnamed_lack and a.allow_unnamed:
             cfg.warnings.append(f"action {a.name!r}: uses variable(s) {unnamed_lack}, which "
                                 "unnamed things do not have (no tag of the action sets them); "
-                                "it is skipped for them")
+                                "it is skipped for them", [S("action", a.name)])
         if a.allow_unnamed:
             if "device" in names:
                 cfg.warnings.append(f"action {a.name!r}: uses {{device}}, which does not exist "
-                                    "for unnamed things; it is skipped for them")
+                                    "for unnamed things; it is skipped for them",
+                                    [S("action", a.name)])
             hw = sorted(n for n in names - TRUSTED_PLACEHOLDERS if not is_variable(n))
             if hw:
                 cfg.warnings.append(f"action {a.name!r}: allow_unnamed is true and it uses "
                                     f"hardware-supplied value(s) {hw} that the maker of an "
-                                    "unvetted device controls")
+                                    "unvetted device controls", [S("action", a.name)])
             for t in rule_tags:
                 if strength(cfg.tags[t].match, wild=True) != STRONG:
                     cfg.notes.append(f"action {a.name!r}: tag {t!r} has a rule that is not "
                                      "strong; any hardware presenting these properties can "
-                                     "trigger this action")
+                                     "trigger this action", [S("action", a.name), S("tag", t)])
     for a in cfg.actions:
         used_vars = sorted({n[4:] for arg in a.templates for n in placeholders(arg)
                             if is_variable(n)})
@@ -602,7 +686,7 @@ def _advise(cfg: Config, origins: dict | None = None) -> None:
                 cfg.warnings.append(f"action {a.name!r} uses variable(s) {lacking} that device "
                                     f"{d.name!r} does not define (nor its tag"
                                     + (f" {tag!r}" if tag else "s") + "); it is skipped for "
-                                    "that device")
+                                    "that device", [S("action", a.name), S("device", d.name)])
     for d in cfg.devices.values():                # two of its tags disagree on a default
         seen: dict[str, tuple[str, str]] = {}
         for t in d.tags:
@@ -613,31 +697,35 @@ def _advise(cfg: Config, origins: dict | None = None) -> None:
                     cfg.notes.append(f"device {d.name!r}: tags {seen[k][0]!r} and {t!r} both "
                                      f"set variable {k!r}; its device actions get "
                                      f"{seen[k][0]!r}'s value (listed first), its tag actions "
-                                     "the value of the tag they run through")
+                                     "the value of the tag they run through",
+                                     [S("device", d.name), S("tag", seen[k][0]), S("tag", t)])
                 seen.setdefault(k, (t, v))
     for t in sorted(carried - used):
-        cfg.notes.append(f"tag {t!r} is set on devices but no action uses it")
+        cfg.notes.append(f"tag {t!r} is set on devices but no action uses it",
+                         [S("tag", t), *(S("device", d.name) for d in cfg.devices.values()
+                                         if t in d.tags)])
     for d in cfg.devices.values():
         if "port_path" in d.match:
             cfg.notes.append(f"device {d.name!r} matches by port_path: it only matches while "
                              "plugged into that USB port (another port or a hub stops it), and "
-                             "any device of the same model in that port matches")
+                             "any device of the same model in that port matches",
+                             [S("device", d.name)])
     for t in cfg.tags.values():
         if "port_path" in t.match:
             cfg.notes.append(f"tag rule {t.name!r} uses port_path: it only selects things in "
-                             "that USB port")
+                             "that USB port", [S("tag", t.name)])
     for d in cfg.devices.values():
         for t in d.exclude_tags:
             if t not in cfg.tags or not cfg.tags[t].match:
                 cfg.notes.append(f"device {d.name!r} excludes tag {t!r}, which has no rule, so "
                                  "there is nothing to opt out of (explicit tags are not "
-                                 "affected)")
+                                 "affected)", [S("device", d.name), S("tag", t)])
             elif not _rule_can_match(cfg.tags[t].match, d.match):
                 cfg.notes.append(f"device {d.name!r} excludes tag {t!r}, whose rule can never "
                                  "match it (they need different values), so there is nothing "
-                                 "to opt out of")
-    _overlap_notes(cfg, origins)
-    _lock_notes(cfg)
+                                 "to opt out of", [S("device", d.name), S("tag", t)])
+    _overlap_notes(cfg, origins, S)
+    _lock_notes(cfg, S)
 
 
 def _rule_can_match(rule: Mapping, match: Mapping[str, str]) -> bool:
@@ -678,12 +766,14 @@ def could_meet(a, b) -> str | None:
     return kind
 
 
-def _overlap_notes(cfg: Config, origins: dict) -> None:
+def _overlap_notes(cfg: Config, origins: dict, S) -> None:
     """Notes for two devices one of which matches everything the other does, and for two
-    whose matches use different keys but could select one thing (spec 6.2)."""
+    whose matches use different keys but could select one thing (spec 6.2). ``S`` makes
+    a :class:`Subject`, as in :func:`_advise`."""
     devices = list(cfg.devices.values())
     for i, a in enumerate(devices):
         for b in devices[i + 1:]:
+            pair = [S("device", a.name), S("device", b.name)]
             a_in_b = a.match.items() <= b.match.items()
             b_in_a = b.match.items() <= a.match.items()
             if not (a_in_b or b_in_a):
@@ -697,14 +787,15 @@ def _overlap_notes(cfg: Config, origins: dict) -> None:
                 ignored = [x.name for x in (a, b) if x.status == "ignored"]
                 if ignored:
                     cfg.notes.append(f"{what}; {ignored[0]!r} is ignored, so then nothing "
-                                     f"would run for {(b if ignored[0] == a.name else a).name!r}")
+                                     f"would run for {(b if ignored[0] == a.name else a).name!r}",
+                                     pair)
                     continue
                 note = f"{what}; tag actions would get {{device}} = {a.name!r}, the first in " \
                        "file order"
                 files = [origins.get(("device", x.name)) or "the main file" for x in (a, b)]
                 if files[0] != files[1]:
                     note += f" ({files[0]}, then {files[1]})"
-                cfg.notes.append(note)
+                cfg.notes.append(note, pair)
                 continue
             if a_in_b and b_in_a:
                 what = f"devices {a.name!r} and {b.name!r} have the same match, so they always " \
@@ -719,17 +810,18 @@ def _overlap_notes(cfg: Config, origins: dict) -> None:
                     continue                     # ignoring some of a broad device's things
             if ignored:
                 cfg.notes.append(f"{what}; {ignored[0]!r} is ignored, so nothing ever runs for "
-                                 f"{(b if ignored[0] == a.name else a).name!r}")
+                                 f"{(b if ignored[0] == a.name else a).name!r}", pair)
                 continue
             note = f"{what}; tag actions get {{device}} = {a.name!r}, the first in file order"
             files = [origins.get(("device", x.name)) or "the main file" for x in (a, b)]
             if files[0] != files[1]:
                 note += f" ({files[0]}, then {files[1]}: the drop-in file names decide it)"
-            cfg.notes.append(note)
+            cfg.notes.append(note, pair)
 
 
-def _lock_notes(cfg: Config) -> None:
-    """A note for a ``lock`` name only one action uses (spec 6.2), with a likely typo."""
+def _lock_notes(cfg: Config, S) -> None:
+    """A note for a ``lock`` name only one action uses (spec 6.2), with a likely typo.
+    ``S`` makes a :class:`Subject`, as in :func:`_advise`."""
     import difflib
     users: dict[str, list[str]] = {}
     for a in cfg.actions:
@@ -743,7 +835,7 @@ def _lock_notes(cfg: Config) -> None:
         close = difflib.get_close_matches(lock, [k for k in users if k != lock], n=1)
         if close:
             note += f" (a typo for {close[0]!r}?)"
-        cfg.notes.append(note)
+        cfg.notes.append(note, [S("action", names[0])])
 
 
 #: Folders searched for a command given by bare name, after ``script_dir``.
@@ -813,7 +905,15 @@ def _optional_missing(settings: Settings) -> list[str]:
 def command_notes(cfg: Config) -> list[str]:
     """Notes about the folders and programs found on this machine (``check`` prints them,
     the daemon logs them at the normal level)."""
-    return [f"script_dir {d!r} does not exist; it is skipped (another script_dir folder does)"
+    return [f.message for f in command_note_findings(cfg)]
+
+
+def command_note_findings(cfg: Config) -> list[Finding]:
+    """:func:`command_notes` as :class:`Finding` objects, about the main file's
+    ``[daemon]``."""
+    daemon = Subject("daemon", None, cfg.main if cfg.main and cfg.main.exists() else None)
+    return [Finding("note", f"script_dir {d!r} does not exist; it is skipped (another "
+                    "script_dir folder does)", (daemon,))
             for d in _optional_missing(cfg.settings)]
 
 
@@ -823,17 +923,29 @@ def command_problems(cfg: Config, path: str | None = None) -> list[str]:
     The daemon calls this with its own environment, which for a systemd service
     is often shorter than a login shell's PATH.
     """
-    problems = []
+    return [f.message for f in command_problem_findings(cfg, path)]
+
+
+def command_problem_findings(cfg: Config, path: str | None = None) -> list[Finding]:
+    """:func:`command_problems` as warning :class:`Finding` objects: about the
+    ``[daemon]`` whose ``script_dir`` is not a folder, or the action whose program is
+    missing."""
+    found: list[Finding] = []
+    problems = _Recorder("warning", found, _Context())
+    main = cfg.main if cfg.main and cfg.main.exists() else None
     quiet = set(_optional_missing(cfg.settings))
     for d in cfg.settings.script_dir:
         if d not in quiet and not os.path.isdir(os.path.expanduser(d)):
-            problems.append(f"script_dir {d!r} is not a folder")
+            problems.append(f"script_dir {d!r} is not a folder", [Subject("daemon", None, main)])
     for d in dict.fromkeys(d for a in cfg.actions for d in a.script_dir):
         if not os.path.isdir(os.path.expanduser(d)):
-            files = sorted({str(cfg.source("action", a.name)) for a in cfg.actions
-                            if d in a.script_dir})
-            problems.append(f"script_dir {d!r} (of {', '.join(files)}) is not a folder")
+            sources = sorted({cfg.source("action", a.name) for a in cfg.actions
+                              if d in a.script_dir}, key=str)
+            files = [str(f) for f in sources]
+            problems.append(f"script_dir {d!r} (of {', '.join(files)}) is not a folder",
+                            [Subject("daemon", None, f) for f in sources])
     for a in cfg.actions:
+        problems.context.subjects = (Subject("action", a.name, cfg.source("action", a.name)),)
         prog = os.path.expanduser(a.run[0])
         if "{" in prog:                          # decided at run time
             continue
@@ -854,17 +966,17 @@ def command_problems(cfg: Config, path: str | None = None) -> list[str]:
         else:
             continue
         problems.append(f"action {a.name!r}: command {what}")
-    return problems
+    return found
 
 
 def check_permissions(path: Path) -> None:
     """Raise :class:`ConfigError` unless ``path`` is the user's and not group or world writable."""
     st = path.stat()
     if st.st_uid != os.getuid():
-        raise ConfigError([f"{path} is not owned by you; refusing to load"])
+        raise _file_error(path, f"{path} is not owned by you; refusing to load")
     if st.st_mode & 0o022:
-        raise ConfigError([f"{path} is group/world-writable; refusing to load "
-                           "(run: chmod go-w on it)"])
+        raise _file_error(path, f"{path} is group/world-writable; refusing to load "
+                          "(run: chmod go-w on it)")
 
 
 # -- drop-in files -------------------------------------------------------------------
@@ -934,7 +1046,7 @@ def _read_toml(path: Path) -> dict:
         with open(path, "rb") as f:
             return tomllib.load(f)
     except tomllib.TOMLDecodeError as e:
-        raise ConfigError([f"{path}: {e}"]) from e
+        raise _file_error(path, f"{path}: {e}") from e
 
 
 def read_files(main: Path):
@@ -953,8 +1065,11 @@ def read_files(main: Path):
     sources: dict = {}
     action_files: list[Path] = []
     dropin_dirs: dict[Path, tuple[str, ...]] = {}
-    problems: list[str] = []
+    found: list[Finding] = []
+    ctx = _Context()
+    problems = _Recorder("error", found, ctx)
     for path in files:
+        ctx.subjects = (Subject("file", None, path),)
         raw = _read_toml(path)
         label = file_label(main, path)
         if path == main:
@@ -965,11 +1080,12 @@ def read_files(main: Path):
             dirs = [dirs] if isinstance(dirs, str) else dirs
             if not isinstance(daemon, dict) or set(daemon) - {"script_dir"}:
                 problems.append(f"{label}: a drop-in's [daemon] may only have script_dir "
-                                f"(the other settings are read from {main.name})")
+                                f"(the other settings are read from {main.name})",
+                                [Subject("daemon", None, path)])
             elif not (isinstance(dirs, list) and dirs
                       and all(isinstance(x, str) and x for x in dirs)):
                 problems.append(f"{label}: [daemon] script_dir must be a folder or a "
-                                "list of folders")
+                                "list of folders", [Subject("daemon", None, path)])
             else:
                 dropin_dirs[path] = tuple(dict.fromkeys(dirs))
         for key in raw:
@@ -986,7 +1102,9 @@ def read_files(main: Path):
             for name, table in tables.items():
                 if name in merged:
                     problems.append(f"{kind} {name!r} is defined in both "
-                                    f"{file_label(main, sources[(kind, name)])} and {label}")
+                                    f"{file_label(main, sources[(kind, name)])} and {label}",
+                                    [Subject(kind, name, sources[(kind, name)]),
+                                     Subject(kind, name, path)])
                     continue
                 merged[name] = table
                 sources[(kind, name)] = path
@@ -1003,7 +1121,9 @@ def read_files(main: Path):
             name = action.get("name") if isinstance(action, dict) else None
             if isinstance(name, str) and sources.get(("action", name), path) != path:
                 problems.append(f"action {name!r} is defined in both "
-                                f"{file_label(main, sources[('action', name)])} and {label}")
+                                f"{file_label(main, sources[('action', name)])} and {label}",
+                                [Subject("action", name, sources[("action", name)]),
+                                 Subject("action", name, path)])
                 continue
             merged.append(action)
             action_files.append(path)
@@ -1012,7 +1132,7 @@ def read_files(main: Path):
             if path != main:
                 origins[("action", len(merged))] = (label, local)
     if problems:
-        raise ConfigError(problems)
+        raise ConfigError(list(problems), found)
     sources = {k: v for k, v in sources.items() if k[0] != "action"}
     return data, origins, files, sources, action_files, dropin_dirs
 
@@ -1030,10 +1150,17 @@ def load(path: Path, *, must_exist: bool = False) -> Config:
     path = Path(path)
     if not path.exists() and not dropin_files(path):
         if must_exist:
-            raise ConfigError([f"{path} does not exist"])
+            raise _file_error(path, f"{path} does not exist")
         return Config(main=path)
     data, origins, files, sources, action_files, dropin_dirs = read_files(path)
-    cfg = parse(data, origins)
+
+    def locate(kind: str, key):
+        if kind in ("daemon", "file"):
+            return path if path.exists() else None
+        if kind == "action":
+            return action_files[key - 1] if 0 < key <= len(action_files) else None
+        return sources.get((kind, key))
+    cfg = parse(data, origins, locate)
     cfg.main, cfg.files, cfg.sources = path, files, sources
     for action, file in zip(cfg.actions, action_files):
         cfg.sources[("action", action.name)] = file

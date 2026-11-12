@@ -1151,9 +1151,23 @@ The interface of §11 in detail.
     `enabled`, `detach`, `lock`, `retries`, `retry_delay`, `retry_backoff`,
     `order`, `notify_on_failure`), `name`, `file`, `dropin`, `script_dir` (its
     drop-in's own folders), `program` and `program_lookup` (§7.1).
-  - `check`: `ok`, `errors`, `warnings`, `notes`, `files` (read order; each
-    `file`, `dropin` and its `devices`, `tags`, `actions` counts) and the
-    totals; exit 1 when `ok` is false.
+  - `check`: `ok`, `errors`, `warnings`, `notes`, `findings`, `files` (read
+    order; each `file`, `dropin` and its `devices`, `tags`, `actions` counts)
+    and the totals; exit 1 when `ok` is false. `findings` has every error,
+    warning and note once, in the same order as the three lists of messages
+    (errors; warnings; notes), each `{level, message, subjects}`: `level` is
+    `error`, `warning` or `note`, `message` the same text as in its list, and
+    `subjects` the entries it concerns, each `{kind, name, file, dropin}` with
+    `kind` `device`, `tag`, `action`, `daemon` (a `[daemon]` table, `name`
+    null) or `file` (a whole file: unreadable, unsafe, missing, or a key
+    outside any entry; `name` null). A finding about two entries (two devices
+    that overlap, a name defined in two files) has both, each with its own
+    file; `[]` means the configuration as a whole. `file` is null when it is
+    not known (an undeclared tag); `dropin` as for an entry. They are built
+    where each finding is made (`config.Finding`, `config.Subject`): in the
+    parser, every message is about the entry being checked unless it names
+    its own subjects (`_Recorder`), and `ConfigError.findings` carries them
+    for an invalid configuration. Feature name `check-json-findings`.
   - `explain`: `paused`, `simulated`, `not_shown`, `things`; each thing has
     `description`, `kind`, `props`, `devices`, `tags`, `excluded_tags`,
     `ignored` and `events` (kind → `runs`, `skips`). A run has `action`, `via`

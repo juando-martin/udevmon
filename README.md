@@ -1651,7 +1651,9 @@ change is in the changelog):
 - the `--json` output of `present`, `devices list|show|identify`,
   `tags list|show`, `actions list`, `check`, `explain`, `trigger` and
   `version`; every entry of the configuration says which `file` defines it
-  and, for a drop-in, its `dropin` name (what `--file` takes);
+  and, for a drop-in, its `dropin` name (what `--file` takes), and every
+  finding of `check --json` (in `findings`) the entries it concerns, so a
+  program can pick out the ones about its own drop-in;
 - `udevmon --version`: the version alone, on one line.
 
 Rather than compare version numbers, test for a feature:

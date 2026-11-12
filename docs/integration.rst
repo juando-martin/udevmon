@@ -71,7 +71,9 @@ Calling the CLI
   ``tags list`` and ``actions list --json`` the configuration, each entry
   with the ``file`` that defines it and its ``dropin`` name (what
   ``--file`` takes), so a program finds its own entries without reading
-  the TOML; ``check --json`` the problems; ``explain --json`` the
+  the TOML; ``check --json`` the problems, each finding with the entries
+  (and files) it concerns, so a program can show those about its own
+  drop-in; ``explain --json`` the
   expanded commands. ``actions list --json`` also gives each action's
   ``program``, the file the daemon will start (null when only the daemon's
   ``PATH`` decides, as ``program_lookup`` says), so a program can check
